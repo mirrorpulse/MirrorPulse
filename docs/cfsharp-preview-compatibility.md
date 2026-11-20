@@ -1,8 +1,109 @@
 # CfSharp Preview Compatibility Report
 
-MirrorPulse pins `CfSharp` and `CfSharp.Storage.Sqlite` to `0.1.0-preview.3` from
+MirrorPulse pins `CfSharp` and `CfSharp.Storage.Sqlite` to `0.1.0-preview.11` from
 NuGet.org. The integration project owns CfSharp types and lifecycle; Core exposes
 MirrorPulse contracts to Adapters and the product UI.
+
+The core, SQLite provider and native NuGet publications identify the same source
+commit, `c28895203e20d588aa3d0eb1bb4c0e55c25896fb`. Package and lock updates do
+not establish native acceptance. Earlier native evidence remains bound to its
+original preview and MirrorPulse source. Preview.11 requires its own clean Windows
+native, signed Worker, installed and ordinary-user acceptance.
+
+Preview.11 fixes offline placeholder reference construction by distinguishing
+Cloud Files reparse points from file-system links during physical containment
+validation. It retains link-escape and cycle checks and avoids probing beneath
+an absent ancestor. It also reconciles inaccessible notification paths instead
+of allowing an uncertain path observation to terminate the feed. These changes
+do not settle an accepted MirrorPulse conflict command or acknowledge its journal.
+See the pinned upstream [reference and inspection contract](https://github.com/mirrorpulse/cfsharp/blob/c28895203e20d588aa3d0eb1bb4c0e55c25896fb/src/CfSharp/Items/CloudItem.cs)
+and [local change feed contract](https://github.com/mirrorpulse/cfsharp/blob/c28895203e20d588aa3d0eb1bb4c0e55c25896fb/docs/local-change-feed.md).
+
+Retained product evidence still accepts its original preview.6 through preview.10
+publication pairs. Upgrading does not relabel old evidence or authorize native
+work from a historical receipt.
+
+Preview.10 reports security-only notifications as `MetadataUpdate`. It uses a
+separate Windows notification subscription and reconciles observations that
+cannot bind to the original native item. Existing journal rows keep their IDs
+and types. MirrorPulse settles new metadata through its existing metadata
+policy and preserves real content edits for upload or conflict handling.
+See the pinned upstream [local change feed contract](https://github.com/mirrorpulse/cfsharp/blob/cfd98515dcc03ac5767a6820aed046a178410a53/docs/local-change-feed.md).
+
+Preview.9 binds official-provider ownership to the physical main/WAL/SHM files.
+Pre-existing multiple-hard-link files are rejected with `InvalidPath`; retained
+exclusive file locks prevent a second owner through an alias added after opening.
+An active owner's path still fails with `AlreadyInUse`. This addresses the
+preview.8 alias-ownership defect reported separately. Valid single-link stores
+require no additional schema or data migration. Preserve an invalid store's full
+database and sidecar set for offline ownership reconciliation; do not delete its
+lock, WAL or SHM files to make opening succeed. Older providers do not participate
+in this locking protocol. The locks do not attest arbitrary database integrity or
+exclude unrelated direct writers. See the pinned upstream
+[ownership contract](https://github.com/mirrorpulse/cfsharp/blob/a252ea88439475986242691797bc3c1453d30118/docs/state-store-sqlite.md#choose-a-safe-location).
+
+Preview.8 addresses distinct births at retired paths (CF-009). Its official SQLite
+schema 9 retains original tombstones and paths, permits one live owner at each
+path and makes public path lookup prefer that live generation. A distinct explicit
+item and remote identity must remain distinct through preparation, native creation,
+projection, replay and reopening. MirrorPulse's unchanged SDK-only file and empty
+directory regressions check the requested successor against both native identity
+and public identity/path lookups. Passing those cases alone cannot close complete
+cross-instance or cross-package transfer acceptance.
+
+Back up the stopped Host's entire private data root before upgrading. The official
+provider owns the schema 9 migration; earlier runtimes reject the upgraded store.
+Reverting the executable does not downgrade it. Migration preserves existing
+accepted history and does not repair a preview.7 batch that already projected its
+successor onto the predecessor. Incompatible legacy creation preparations and
+accepted identity mismatches remain fenced with managed provenance errors.
+Retain the original immutable batches, native bindings, public SDK rows, journal
+and product ownership evidence for explicit reconciliation. Do not erase or rename
+tombstones, rewrite accepted fingerprints, create a replacement store implicitly,
+or infer repaired ownership from `AlreadyApplied`.
+See the pinned upstream [retired-path and reconciliation contract](https://github.com/mirrorpulse/cfsharp/blob/ee593578dba3c666cf59f4a922f0e220f115bf7f/docs/remote-change-application.md#distinct-births-at-retired-paths-cf-009)
+and [schema 9 migration](https://github.com/mirrorpulse/cfsharp/blob/ee593578dba3c666cf59f4a922f0e220f115bf7f/docs/state-store-sqlite.md#schema-9-retired-paths-and-distinct-generations).
+
+Preview.7 introduces authenticated original Delete preparation, sealed inventories,
+native acceptance and item-projection receipts, and atomic batch-outcome recovery.
+The official SQLite provider upgrades to schema 8 and fences older runtimes.
+This migration does not manufacture missing evidence for preview.6 deletion gaps:
+retain the original batch and reconcile unresolved legacy work explicitly.
+
+The default preservation policy now retains even clean files and empty directories
+as durable Delete conflicts. Only explicit `KeepRemote` or disabled preservation
+authorizes destructive deletion. MirrorPulse keeps its preservation policy and
+does not automatically force these conflicts. Product KeepRemote execution remains
+separate S06 work. Earlier product native tests that require automatic clean deletion
+are not acceptance evidence for preview.7. The isolated SDK-only lost-progress
+regressions explicitly authorize deletion of their disposable originals; additional
+native cases require default preservation to retain one conflict across store owners.
+See the [upstream Delete contract](https://github.com/mirrorpulse/cfsharp/blob/137d6e2a9c1b15f337e8e7ca3566d5e3f29fcdb9/docs/remote-change-application.md).
+
+New product birth, retirement and file-move admissions record preview.11 provenance.
+Historical preview.6 through preview.10 records keep their exact original version,
+source and policy. Readers accept the six audited version/source pairs and reject
+mixed or unknown publications;
+this compatibility does not confer native completion or reauthorize a Delete.
+Retained remote updates and sealed explicit Delete decisions can replay their
+unchanged original supported publication. New updates and new sealed Delete
+inventories require preview.11. Changing a retained command to the current
+publication is rejected; its original start, conflict, inventory and root fence
+remain intact. Preview.6 cannot acquire the sealed Delete recovery protocol
+introduced in preview.7.
+
+Manual ARM64 CI runs the four independent SDK Delete regressions before default
+Host integration and preserves their original TRX separately. This lets SDK
+acceptance be measured while the product's slow namespace startup remains open.
+The full x64 native and ARM64 namespace/ordinary-user requirements remain intact;
+the isolated SDK report cannot replace those product gates.
+
+Preview.6 introduced original file-move preparation and reconciles immutable-batch
+replay before stale-revision checks. Its official SQLite schema is 7. Directory
+remote-batch outcome recovery and legacy preview.5 gaps without original evidence
+remain conservative under the documented SDK contract. MirrorPulse separately
+retains [product protocol admission](remote-file-move-protocol-admission.md); that
+record alone does not prove SDK preparation, movement or outcome completion.
 
 ## Current boundary
 
@@ -28,6 +129,12 @@ the complete protocol/file-operation release matrix remains open.
 
 ## Validation
 
+The disposable installed Shell probe retains bounded fixed-stage progress separately
+from its required result. On a missing result, failure evidence distinguishes App
+initialization, custom and unified Shell registration/readback, and the minimal
+registration fallback. Unknown, linked or oversized progress is rejected. Progress
+never establishes registration success or extends the original result deadline.
+
 The default CI gate runs locked restore, formatting, platform checks, Release
 build and tests, and Host publishes for both architectures. On a Windows machine
 with Cloud Files support, run `pwsh ./eng/verify-native.ps1` after the Release
@@ -47,7 +154,7 @@ transaction rolled back and `PRAGMA integrity_check` returned `ok`.
 The earlier `CF-001`, `API-001`, and `API-002` gaps were retested after pinning
 preview.2. MirrorPulse uses the public CfSharp batch and conflict contracts and
 does not read or mutate CfSharp's private SQLite tables or conflict payload
-format. Preview.3 remains a prerelease dependency until CfSharp 1.0.0 is published
+format. Preview.11 remains a prerelease dependency until CfSharp 1.0.0 is published
 and validated for the release candidate.
 
 Preview.2 also exposes a confirmation limitation: coordination USNs can be zero,
@@ -64,3 +171,256 @@ the public managed confirmation contract. The package upgrade does
 not establish complete product recovery or close the conditional-USN limitation.
 See [protected content confirmation](protected-content-confirmation.md). Product
 code keeps the anti-corruption layer and does not own a native confirmation reader.
+
+Preview.4 packages identify source commit
+`d9e0d7f8948156b70d01934c0df326c5ed43a682`. The public release adds finite
+sequence scans through `CloudLocalChangeFeed.BeginScanAsync` and `ReadPageAsync`,
+and recoverable directory moves through `CloudDirectory.PrepareMoveAsync` and
+`ReconcileMoveAsync`. The official SQLite provider supplies the corresponding
+paging and directory projection contracts. Product integration and native
+acceptance of these capabilities remain separate from upgrading the dependency.
+
+The native preparation interruption probe requires three separate SDK and product
+catalog owners for both active and disabled roots. It interrupts after public SDK
+capture and after atomic product commit, then requires an original witnessed
+retry without another capture. The earlier unpublished SDK proof must remain
+authenticated after the later capture. A subsequent external move and recovery
+must preserve the original product proof, root and child identities, and root
+availability. This disposable permissive-provider boundary does not establish
+protected production rename approval or complete Host acceptance.
+
+The default Host rename callback retains the SDK's default denial except for an
+explicit current root rename whose original public proof, exact target and complete
+opaque root identity agree. It reads only the indexed current root and original
+operation, changes no progress and grants no journal acknowledgement. This approval
+does not replace guarded native binding checks, protected execution or complete
+subtree settlement.
+
+The managed root rename coordinator captures and validates the public move proof,
+then atomically retains a new product intent and that exact proof before external
+authorization. SDK rejection or a failed catalog transaction publishes neither
+half. The transaction rechecks the original source mapping and target reservation;
+an existing witnessed intent returns its original proof. The coordinator verifies
+its stable root binding on replay and uses the
+public reconciliation result before changing the product Label. Legacy records
+without the original encoded proof remain fenced; recovery cannot replace them
+with the identity currently found at a path. The native gate verifies external
+renames for active and disabled roots across an owner restart. Host polling and
+streamed remote changes use the router's current mapping within instance
+scheduling. Runtime startup replays original pending proofs before starting the
+upload pump; missing legacy proofs and recoverable per-root failures retain their
+namespace fences. Explicit recovery shares the same instance scheduler as uploads
+and remote application. `mp root recover OPERATION_ID` uses that same Host service
+and reports incomplete recovery as pending. `mp root prepare-rename ROOT_ID LABEL`
+retains the complete preparation without executing a native rename. Callback
+authorization, protected execution and the full native fault recovery matrix
+remain pending work. Legacy unwitnessed intents remain fenced; a preparation
+retry cannot capture the current object as their missing original proof.
+
+The product catalog admits a version 3 subtree move only when its operation ID,
+source and target, item and native binding, and complete opaque public proof match
+the original current root Label operation. Only this mode uses the original
+sync-root anchor as both parents; ordinary member moves keep their existing
+same-root child-path checks. Root native/projection/completion facts use version 2
+with a first-level path and require that linked operation. Admission seals the
+complete current product subtree. After a retained native start, original Label
+observation, public reconciliation and fresh protected member observations, one
+transaction settles all positions, the owned name, Label mapping, historical names
+and both fences. Any interrupted insert or Label update rolls back the whole
+settlement. Historical replay preserves later Label generations. This catalog
+boundary does not execute a protected native rename, refresh routing, establish
+public SDK provenance or acknowledge journals; those Host boundaries require
+separate implementation and clean native acceptance.
+
+Product catalog reads check that each retained rename payload belongs to its
+indexed root and operation. They also validate the stored binding and encoded
+proof envelope and require a retained native observation to match that proof,
+destination and chronology. Invalid records fail before proof reuse or replacement;
+reading them never repairs their bytes. Missing legacy proof remains readable so
+the existing root fence and migration behavior are preserved. These checks do not
+decode the public library's opaque proof or authorize a new native rename.
+
+## Strict tree protection status
+
+Preview.5 packages identify source commit
+`adad62f2eb232ec381e537cd5c4c9e45eccc1095`. The public protected local operation
+contract retains one native object and official store lifetime across awaited
+local work. It provides same-object conversion, inspection and Access-only
+descriptor operations, with distinct native, projection, application and drain
+receipts. Directory metadata mode does not freeze descendants. This package
+upgrade alone does not establish MirrorPulse permission or product acceptance.
+Local preparation identities use a null remote revision, retaining any existing
+official ItemId and RemoteId. An empty revision string is still a revision value
+and cannot introduce remote acceptance through this operation.
+
+`MirrorPulseWindowsNamespacePermissionLease.RunProtectedAsync` adapts the public
+scope to the existing permission coordinator contract. CfSharp performs
+same-object conversion, fresh Access descriptor reads and writes, inspection and
+draining. MirrorPulse retains ancestor names and reads the original object's owner
+through a separate read-only metadata reference, comparing its complete native
+volume/file ID with the scoped object before reading the owner. That reference
+cannot write a DACL or open file content. Callers must persist original evidence
+and hold product application admission before conversion or permission application. The Host does
+not yet enable strict protection through this component.
+
+The product catalog's `ReadNamespaceMemberProtectionLineageAsync` reads retained
+protection against committed current parent locations in one transaction. A
+completed file or entire-directory receipt links the retained object and its
+protection epoch to the new location without rewriting first membership, birth
+or permission capture. Later permission epochs need an explicit completed
+placement reference. Fenced roots, retired members, restored parent permissions
+and inconsistent current roles are rejected. These are product recovery facts;
+the execution coordinator must still inspect the actual child and parent through
+CfSharp public guards. This catalog boundary does not enable installed strict
+protection or directory move execution in the Host.
+
+Born protection version 3 retains a separate registered member placement and
+actual parent protection reference. It extends an earlier epoch while preserving
+the first birth, native binding, owner and original parent references. Historical
+validation follows earlier parent and predecessor epochs without adopting current
+names or roles; current admission checks the latest committed placement and parent
+lineage. A later completed move can retain the same epoch through its complete
+member receipt. Legacy payloads omit the new placement field. Fresh native
+verification uses `MirrorPulseNamespaceBirthProtectionVerifier.RecordRegisteredAsync`:
+under the shared namespace actor and actual parent's role, it checks both current
+public identities, retained native bindings, owner, type, actual paths and fresh
+inherited descriptors. It rechecks those facts before recording a located epoch.
+An exact replay retains its original observation time. Role application is a
+separate protected operation; verification performs no ACL write, conversion,
+hydration or journal acknowledgement. The dedicated native regression requires
+production creation, a move to a different parent, role rotation, rejected wrong
+parents and descriptors, and replay across two official-store owners. This
+component still requires native acceptance and Host activation before product
+delivery.
+
+Member registration version 2 retains the stable parent's completed position
+before the child's first birth admission. Historical reads validate that exact
+member's position and original birth chronology; they never substitute the
+parent's current path. New registration separately requires the parent's latest
+committed location and the complete current protection lineage. A later subtree
+move advances the child's current location without changing this first-parent
+reference. Version 1 payloads omit the optional field and remain unchanged. This
+catalog capability requires separate native creation and directory-move
+integration; it grants no filesystem authority or content acceptance.
+
+Controlled creation carries that retained parent-position reference into its
+first membership. Native registration inspects an already registered parent's
+current proved location while preserving its immutable first membership. Current
+protection readers retain a confirmed accepted public identity separately from
+the first birth or original identity. Fresh parent inspection checks that current
+identity through CfSharp's public identity decoder; it does not rewrite provenance.
+Native directory relocation and installed Host activation remain separate gates.
+
+The native component probe checks competing writes and hardlinks inside the
+scope, real descriptor application, cancellation and callback failure, and
+official-store reopen. It also checks cold-file metadata without hydration and
+directory metadata with the original binding. It retains the Windows overwrite regression after scope release:
+an edited placeholder can become an ordinary file, requiring fresh same-object
+preparation before subsequent permission work. No permanent ordinary-file alias
+freeze or whole-tree readiness is inferred from a completed scope.
+
+The product policy requires protection of every managed root and descendant,
+including ordinary files containing edits that have not been uploaded. Namespace
+changes will use Host-controlled operations; in-place content editing remains a
+requirement. Root delete callbacks alone do not provide recursive protection.
+
+A disposable native gate now combines inherited delete ACLs with actual demand
+hydration, public content confirmation and reopening the official store. This
+component gate does not establish production protection or controlled operations.
+Same-volume ordinary file moves can retain their previous ACL instead of the
+destination's inherited protection. Controlled creation and import, persistent
+permission ownership, concurrent access and crash recovery therefore also need
+acceptance before enabling strict protection in the product.
+
+`MirrorPulseNamespaceExecutionSession` provides an ephemeral execution role that
+retains the current local user and flows across asynchronous namespace work. Its
+owner drains active operations before disposal; source access and Worker RPC must
+remain outside that context. A disposable native probe combines the role with
+closed ACLs, hydration, content confirmation and store restart. Host permission
+application and controlled-operation recovery remain pending. Creating a
+session alone neither changes permissions nor enables product protection.
+
+The session captures the Host's normal Windows identity at construction.
+`RunNormalUserOperationAsync` explicitly uses that identity for a source boundary,
+including when called from an active local namespace role. Both contexts drain
+before their tokens are released. The owner must construct the session in its
+normal context and wrap every actual source operation; returning a lazy object
+does not authorize later reads outside that boundary. This API does not change
+Worker process identity or prove the identity of native provider callbacks.
+
+Native directory-population and cold-read acceptance uses a separate ordinary
+consumer process. The consumer verifies its actual user and architecture and
+rejects the namespace role. Provider-process directory enumeration returned no
+source callback in the recorded native regression; it cannot substitute for the
+external-consumer boundary.
+
+The production Host now owns this session and routes all demand, polling, rescan,
+upload, stat and mutation transports through `MirrorPulseNormalUserWorkerTransport`.
+The boundary reads and disposes lazy source ranges as the normal user, returning
+only a detached buffer bounded by the Worker range limit. The Host releases the
+identities after Cloud Files and Worker teardown. This source integration does
+not apply the strict namespace ACLs or deliver controlled local operations.
+
+The ARM64 CI job runs the dedicated namespace suite using the native ARM64 test
+process and disposable Cloud Files roots. Its report requires the execution
+lifecycle, role, strict ACL, permission ownership, alias and protected-operation
+probes, with no skips. Installed product
+permission ownership and operation recovery still require separate acceptance.
+
+Controlled local creation uses a different boundary from remote placeholder
+population. Its native fixture reserves an immutable product operation and
+projects the planned identity through the official item repository before the
+filesystem notification. An ordinary file is created atomically with content
+restricted to the namespace role and explicit owner metadata rights for recovery.
+After its original native binding is inspected,
+CfSharp performs content-preserving same-object conversion inside its public
+protected operation; ordinary content access is granted only after conversion.
+Directories inherit the already protected parent and use public conversion.
+The fixture requires actual local `Create` journal records with the planned IDs,
+unchanged native bindings, retained bytes, denied aliases and recovery across
+reopened CfSharp owners. No product-generated copy of the private journal payload is
+used. These component checks do not enable strict production Host protection or
+deliver the controlled CLI operations; durable conversion admission, current
+membership and complete operation recovery remain required before that activation.
+
+The birth-protection verifier independently reads the retained direct parent and
+child, checks the original owner, native binding and public logical identity,
+and derives the expected inherited descriptor through Windows' public API.
+It requires the current execution role and rechecks the parent before recording
+an immutable protection epoch. The native fixture also rotates both protected
+parents, verifies inherited protection under the new role and retains the first
+birth and epoch. This path performs no conversion, ACL write, hydration or
+journal acknowledgement. The caller must still retain the Host's shared actor
+and lifetime guards; recorded epochs alone do not authorize future mutations.
+
+For a born direct parent, verification also checks its original public directory
+identity against the current native binding and latest separate protection
+epoch. Original-parent and born-parent references remain distinct. The native
+birth fixture requires a further nested directory chain and resident file,
+followed by a third CfSharp owner: original identities, bytes, owned child names and
+local `Create` journal IDs must survive; ordinary creation, deletion and rename
+must remain denied. These checks still do not establish Host activation or the
+controlled CLI operation paths.
+
+The same fixture also stages a role-only ordinary file with its original native
+binding recorded before conversion. After both old-role CfSharp owners drain and
+the execution session is disposed, a new role must retain the original bytes and
+identity while completing public same-object conversion. A metadata-only owner
+handoff must grant no normal content access before placeholder preparation. The
+first placeholder observation is deferred until another official-store reopen;
+the historical conversion intent and original journal operations remain intact.
+The fixture invokes the production staged recovery coordinator, which persists
+the original action before the owner-metadata write and independently records
+native verification. It requires recovery after cancellation before writing,
+interruption after role handoff, a failed protected callback after conversion,
+and native success without a verification record. Repeated recovery must preserve
+the identity and bytes without another conversion or ACL write. First observation
+remains deferred across the next owner. The native member registrar must verify
+the original sync-root and managed-root members, then transfer protected born
+and nested objects' pending reservations to owned child names. Four owners must
+retain the same member provenance across role rotation; normal callers, wrong
+direct parents and substituted bindings must be refused. The staged object must
+remain unregistered until its first actual birth observation and protection are
+recorded. Shared Host namespace admission, live relocation/retirement, strict
+startup and controlled CLI integration remain separate work; these component
+assertions do not establish Host readiness.

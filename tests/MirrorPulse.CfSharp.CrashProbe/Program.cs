@@ -3,9 +3,96 @@ using MirrorPulse.CfSharp.CrashProbe;
 using MirrorPulse.CloudFiles.CfSharp;
 using MirrorPulse.Core.Configuration;
 
+if (args.Length == 2 && args[0] == "--inspect-placeholder-visibility")
+{
+    try { return await PlaceholderVisibilityProbe.RunAsync(args[1]); }
+    catch (Exception error)
+    {
+        Console.Error.WriteLine($"Placeholder inspection failed: {error.GetType().Name}, HRESULT {error.HResult:X8}.");
+        return 1;
+    }
+}
+
+if (args.Length == 3 && args[0] == "--resume-keep-remote")
+{
+    if (!OperatingSystem.IsWindowsVersionAtLeast(10, 0, 26100) ||
+        !Guid.TryParseExact(args[2], "D", out Guid commandId))
+        return 2;
+    try
+    {
+        return await KeepRemoteRestartProbe.RunAsync(args[1], commandId);
+    }
+    catch (Exception error)
+    {
+        Console.Error.WriteLine($"KeepRemote restart failed: {error.GetType().Name}, HRESULT {error.HResult:X8}.");
+        return 1;
+    }
+}
+
+if (args.Length == 2 && args[0] == "--serve-cli-transfer-webdav")
+{
+    return await CliTransferWebDavFixture.RunAsync(args[1]);
+}
+
+if (args.Length == 4 && args[0] == "--namespace-source-consumer")
+{
+    try
+    {
+        return await NamespaceSourceConsumerProbe.RunAsync(args[1], args[2], args[3]);
+    }
+    catch (Exception exception)
+    {
+        Console.Error.WriteLine($"Source consumer failure: hresult={exception.HResult:X8}; type={exception.GetType().Name}.");
+        return 1;
+    }
+}
+
+if (args.Length == 2 && args[0] is "--audit-cli-disabled-fixture" or "--cleanup-cli-disabled-fixture" or "--read-cli-fixture" or "--audit-cli-fixture" or "--inspect-cli-fixture" or "--cleanup-cli-fixture" or "--cleanup-cli-transfer-fixture" or "--audit-cli-transfer-fixture" or "--observe-cli-transfer-failure" or "--audit-cli-coalescing-pending" or "--audit-cli-coalescing-completed" or "--audit-cli-coalescing-keep-remote" or "--audit-cli-coalescing-edit" or "--observe-cli-coalescing-edit" or "--audit-cli-create-pending" or "--audit-cli-create-keep-remote" or "--audit-cli-move-pending" or "--audit-cli-move-keep-remote" or "--observe-cli-move-coalescing-edit" or "--observe-cli-intermediate-move" or "--audit-cli-move-only-pending" or "--audit-cli-move-only-keep-remote")
+{
+    try
+    {
+        if (args[0] == "--audit-cli-disabled-fixture") return await CliFixtureProbe.RunDisabledAuditAsync(args[1]);
+        if (args[0] == "--cleanup-cli-disabled-fixture") return await CliFixtureProbe.RunDisabledCleanupAsync(args[1]);
+        if (args[0] is "--audit-cli-create-pending" or "--audit-cli-create-keep-remote")
+            return await CliCoalescingFixtureProbe.RunAsync(args[1], args[0] == "--audit-cli-create-keep-remote", keepRemote: true, controlledCreate: true);
+        if (args[0] is "--audit-cli-move-pending" or "--audit-cli-move-keep-remote")
+            return await CliCoalescingFixtureProbe.RunAsync(args[1], args[0] == "--audit-cli-move-keep-remote", keepRemote: true, movedFile: true);
+        if (args[0] is "--audit-cli-move-only-pending" or "--audit-cli-move-only-keep-remote")
+            return await CliCoalescingFixtureProbe.RunAsync(args[1], args[0] == "--audit-cli-move-only-keep-remote", keepRemote: true, moveOnly: true);
+        if (args[0] == "--observe-cli-intermediate-move")
+            return await CliCoalescingFixtureProbe.ObserveEditAsync(args[1], inspectNative: true, intermediateMove: true);
+        if (args[0] == "--observe-cli-move-coalescing-edit")
+            return await CliCoalescingFixtureProbe.ObserveEditAsync(args[1], inspectNative: true, movedFile: true);
+        if (args[0] is "--audit-cli-coalescing-edit" or "--observe-cli-coalescing-edit")
+            return await CliCoalescingFixtureProbe.ObserveEditAsync(args[1], args[0] == "--observe-cli-coalescing-edit");
+        if (args[0] == "--cleanup-cli-transfer-fixture") return await CliFixtureProbe.RunTransferCleanupAsync(args[1]);
+        if (args[0] == "--audit-cli-transfer-fixture") return await CliFixtureProbe.RunTransferAuditAsync(args[1]);
+        if (args[0] == "--observe-cli-transfer-failure") return await CliFixtureProbe.RunTransferFailureObservationAsync(args[1]);
+        if (args[0] is "--audit-cli-coalescing-pending" or "--audit-cli-coalescing-completed")
+            return await CliCoalescingFixtureProbe.RunAsync(args[1], args[0] == "--audit-cli-coalescing-completed");
+        if (args[0] == "--audit-cli-coalescing-keep-remote")
+            return await CliCoalescingFixtureProbe.RunAsync(args[1], completed: true, keepRemote: true);
+        return await CliFixtureProbe.RunAsync(args[1], audit: args[0] == "--audit-cli-fixture",
+            inspect: args[0] == "--inspect-cli-fixture", cleanup: args[0] == "--cleanup-cli-fixture");
+    }
+    catch (Exception exception)
+    {
+        string? argument = (exception as ArgumentException)?.ParamName;
+        if (argument is not { Length: > 0 and <= 64 } || !argument.All(character => char.IsAsciiLetterOrDigit(character) || character == '_')) argument = null;
+        Console.Error.WriteLine($"Fixture consumer failure: hresult={exception.HResult:X8}; type={exception.GetType().Name}; " +
+            $"stage={exception.Data["CliFixtureCleanupStage"] ?? "NotAvailable"}; argument={argument ?? "NotAvailable"}.");
+        return 1;
+    }
+}
+
 if (args.Length == 3 && args[0] == "--protected-writer")
 {
     return await ProtectedConfirmationWriter.RunAsync(args[1], args[2]);
+}
+
+if (args.Length == 3 && args[0] == "--namespace-operation")
+{
+    return await NamespaceMutationProbe.RunAsync(args[1], args[2]);
 }
 
 if (args.Length == 4)

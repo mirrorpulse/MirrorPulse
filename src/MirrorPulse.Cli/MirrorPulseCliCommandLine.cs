@@ -31,17 +31,19 @@ public static class MirrorPulseCliCommandLine
         StringComparer.OrdinalIgnoreCase)
     {
         "adapter", "config", "conflict", "developer-mode", "diagnostics", "help",
-        "instance", "operation", "startup", "status", "sync", "version", "host"
+        "instance", "namespace", "operation", "startup", "status", "sync", "version", "host", "root"
     };
 
     private static readonly Dictionary<string, IReadOnlySet<string>> Subcommands =
         new(StringComparer.OrdinalIgnoreCase)
         {
             ["adapter"] = NewSet("list", "install", "remove", "update", "uninstall"),
-            ["conflict"] = NewSet("list", "show", "snooze", "resolve"),
+            ["conflict"] = NewSet("list", "show", "snooze", "resolve", "refresh-version"),
             ["host"] = NewSet("status", "start", "stop", "restart"),
             ["instance"] = NewSet("list", "create", "configure", "enable", "disable", "select-version"),
             ["operation"] = NewSet("get", "watch", "cancel"),
+            ["root"] = NewSet("list", "prepare-rename", "execute-rename", "cancel-rename", "recover"),
+            ["namespace"] = NewSet("member", "birth", "protection", "remote", "transfer"),
             ["sync"] = NewSet("status", "refresh")
         };
 
@@ -130,6 +132,33 @@ public static class MirrorPulseCliCommandLine
                 continue;
             }
 
+            if (commandPath.Count == 2 &&
+                commandPath[0].Equals("namespace", StringComparison.OrdinalIgnoreCase) &&
+                commandArguments.Count == 0)
+            {
+                bool allowed = commandPath[1].Equals("member", StringComparison.OrdinalIgnoreCase)
+                    ? token.Equals("inspect", StringComparison.OrdinalIgnoreCase) || token.Equals("tree", StringComparison.OrdinalIgnoreCase) || token.Equals("prepare-move", StringComparison.OrdinalIgnoreCase) || token.Equals("move", StringComparison.OrdinalIgnoreCase) || token.Equals("move-status", StringComparison.OrdinalIgnoreCase) || token.Equals("create", StringComparison.OrdinalIgnoreCase) || token.Equals("prepare-import", StringComparison.OrdinalIgnoreCase) || token.Equals("import", StringComparison.OrdinalIgnoreCase) || token.Equals("import-status", StringComparison.OrdinalIgnoreCase) || token.Equals("prepare-replace", StringComparison.OrdinalIgnoreCase) || token.Equals("replace", StringComparison.OrdinalIgnoreCase) || token.Equals("replace-recover", StringComparison.OrdinalIgnoreCase) || token.Equals("replacement-status", StringComparison.OrdinalIgnoreCase) || token.Equals("prepare-retire", StringComparison.OrdinalIgnoreCase) || token.Equals("retire", StringComparison.OrdinalIgnoreCase) || token.Equals("retirement-status", StringComparison.OrdinalIgnoreCase)
+                    : commandPath[1].Equals("protection", StringComparison.OrdinalIgnoreCase)
+                        ? token.Equals("captures", StringComparison.OrdinalIgnoreCase) || token.Equals("recover-tree", StringComparison.OrdinalIgnoreCase) ||
+                            token.Equals("initialize", StringComparison.OrdinalIgnoreCase) || token.Equals("recover-current", StringComparison.OrdinalIgnoreCase) ||
+                            token.Equals("recover-root", StringComparison.OrdinalIgnoreCase) || token.Equals("initialization-status", StringComparison.OrdinalIgnoreCase) ||
+                            token.Equals("initializations", StringComparison.OrdinalIgnoreCase)
+                        : commandPath[1].Equals("remote", StringComparison.OrdinalIgnoreCase)
+                            ? token.Equals("retirement-status", StringComparison.OrdinalIgnoreCase) || token.Equals("retirements", StringComparison.OrdinalIgnoreCase) ||
+                                token.Equals("delete-status", StringComparison.OrdinalIgnoreCase) || token.Equals("deletes", StringComparison.OrdinalIgnoreCase) ||
+                                token.Equals("recover-delete", StringComparison.OrdinalIgnoreCase) || token.Equals("update-status", StringComparison.OrdinalIgnoreCase) ||
+                                token.Equals("updates", StringComparison.OrdinalIgnoreCase) || token.Equals("recover-update", StringComparison.OrdinalIgnoreCase)
+                            : commandPath[1].Equals("transfer", StringComparison.OrdinalIgnoreCase)
+                                ? token.Equals("status", StringComparison.OrdinalIgnoreCase) || token.Equals("list", StringComparison.OrdinalIgnoreCase) ||
+                                    token.Equals("prepare", StringComparison.OrdinalIgnoreCase) || token.Equals("move", StringComparison.OrdinalIgnoreCase) ||
+                                    token.Equals("resume", StringComparison.OrdinalIgnoreCase)
+                                : token.Equals("recover", StringComparison.OrdinalIgnoreCase);
+                if (!allowed)
+                    return Failure($"Unknown subcommand '{token}' for 'namespace {commandPath[1]}'.", options);
+                commandPath.Add(token);
+                continue;
+            }
+
             commandArguments.Add(token);
         }
 
@@ -193,8 +222,83 @@ public static class MirrorPulseCliHelp
                                          Manage installed Adapters.
           instance list|create|configure|enable|disable|select-version
                                          Manage Adapter instances.
-          conflict list|show|snooze|resolve
-                                         Inspect and resolve conflicts.
+          root list                      Inspect managed roots and namespace recovery.
+          root prepare-rename ROOT_ID LABEL
+                                         Prepare a Label-only managed root rename.
+          root execute-rename OPERATION_ID
+                                         Execute an original protected root Label preparation.
+          root cancel-rename OPERATION_ID
+                                         Cancel an unstarted original Label and report current admission.
+          root recover OPERATION_ID      Retry an original managed root rename proof.
+          namespace member inspect RELATIVE_PATH [--directory]
+                                         Look up a registered native member and its parent.
+          namespace member tree MEMBER_ID
+                                         Read the validated current member subtree.
+          namespace member prepare-move MEMBER_ID PARENT_ID NAME [--operation-id GUID]
+                                         Prepare a file move within its managed root.
+          namespace member move OPERATION_ID
+                                         Execute or retry an admitted protected member move.
+          namespace member move-status OPERATION_ID
+                                         Read the durable move progress.
+          namespace member create PARENT_ID NAME [--directory] [--operation-id GUID]
+          namespace member prepare-import PARENT_ID NAME SOURCE_PATH [--operation-id GUID]
+          namespace member import OPERATION_ID
+          namespace member import-status OPERATION_ID
+          namespace member prepare-replace MEMBER_ID SOURCE_PATH [--operation-id GUID]
+          namespace member replace OPERATION_ID
+          namespace member replace-recover OPERATION_ID
+          namespace member replacement-status OPERATION_ID
+          namespace protection captures ROOT_ID [--after MANIFEST_ID]
+                                         Read a bounded page of retained original captures.
+          namespace protection recover-tree MANIFEST_ID
+                                         Recover and audit one sealed original inventory.
+          namespace protection initialize [--operation-id GUID]
+          namespace protection recover-current [--operation-id GUID]
+          namespace protection recover-root ROOT_ID [--operation-id GUID]
+                                         Initialize the admitted original root inventories.
+          namespace protection initialization-status OPERATION_ID
+                                         Read initialization admission and completion.
+          namespace protection initializations [--after OPERATION_ID]
+                                         Find a bounded page of retained initialization attempts.
+                                         Create an empty local file or directory under a protected member.
+          namespace member prepare-retire MEMBER_ID [--recursive] [--operation-id GUID]
+                                         Prepare a protected leaf or subtree deletion.
+          namespace member retire OPERATION_ID [--recursive]
+                                         Execute or retry an admitted protected deletion.
+          namespace member retirement-status OPERATION_ID [--recursive]
+                                         Read a protected deletion receipt.
+          namespace remote retirement-status OPERATION_ID
+                                         Read an original remote directory deletion status.
+          namespace remote retirements ROOT_ID [--after-operation-id OPERATION_ID] [--limit 1..64]
+                                         List original remote directory deletion statuses for one root.
+          namespace remote delete-status COMMAND_ID
+                                         Read an explicit KeepRemote deletion and its command progress.
+          namespace remote update-status OPERATION_ID
+                                         Show original remote update observations and product settlement.
+          namespace transfer status OPERATION_ID
+                                         Show transfer progress, journal acknowledgement, and retained fences.
+          namespace transfer list ROOT_ID
+                                         List the root's pending transfers, as source or destination.
+          namespace transfer prepare OPERATION_ID SOURCE_MEMBER_ID TARGET_PARENT_ID NAME
+                                         Reserve both roots and persist the original transfer. Use resume to execute it.
+          namespace transfer move OPERATION_ID SOURCE_MEMBER_ID TARGET_PARENT_ID NAME
+                                         Move a file or directory between enabled roots and retain its recovery identity.
+          namespace transfer resume OPERATION_ID
+                                         Resume the original transfer without repeating an ambiguous remote effect.
+          namespace remote updates ROOT_ID
+                                         List the root's pending original remote update.
+          namespace remote recover-update OPERATION_ID
+                                         Reconcile an original SDK outcome without invoking the update again.
+          namespace remote deletes ROOT_ID [--after-command-id COMMAND_ID] [--limit 1..64]
+                                         List pending explicit Delete commands for one root.
+          namespace remote recover-delete COMMAND_ID
+                                         Continue one admitted Delete page using its original command.
+          namespace birth recover RECOVERY_ID
+                                         Retry an already retained staged-file recovery.
+          conflict list [--limit 1..1000] [--cursor CURSOR]
+          conflict refresh-version --conflict-id GUID --operation-id GUID
+                                         Read a bounded pending-conflict page.
+          conflict show|snooze|resolve    Inspect or resolve a conflict by ID.
           operation get|watch|cancel      Inspect long-running operations.
           config                         Read or update settings.
           developer-mode                 Read or update developer mode.

@@ -19,6 +19,8 @@ public static class SafeDiagnosticPolicy
     private static readonly Dictionary<string, string> Messages = new(StringComparer.Ordinal)
     {
         ["HostStartupFailed"] = "The Host could not start.",
+        ["NamespaceAnchorOwnerMismatch"] = "The sync-root anchor owner does not match the current Host user.",
+        ["NamespaceAnchorBindingMismatch"] = "The sync-root anchor does not satisfy the required native binding policy.",
         ["WorkerSessionFailed"] = "The Adapter Worker session ended after a failure.",
         ["ShellRootPolicyMismatch"] = "The actual Shell root policy does not match content synchronization.",
         ["CloudRootMetadataMismatch"] = "The actual Cloud Files registration does not match the product root.",
@@ -27,13 +29,36 @@ public static class SafeDiagnosticPolicy
         ["ShellRootPathMismatch"] = "The existing Shell registration belongs to another sync root.",
         ["ShellRootRegistrationFailed"] = "Windows rejected the Shell root registration.",
         ["JournalReadFailed"] = "The local journal could not be read.",
+        ["JournalDirectoryMoveRecoveryFailed"] = "An original directory Move remains pending at a recovery boundary.",
+        ["RootLabelJournalRecoveryFailed"] = "An accepted root notification requires another metadata recovery attempt.",
+        ["RootLabelJournalReadmissionFailed"] = "A root remains closed until its current Host namespace audit succeeds.",
+        ["RootLabelJournalAdmissionFailed"] = "A root notification remains pending until its current Host admission succeeds.",
+        ["RootLabelExecutionFailed"] = "The original root Label execution stopped at a protected namespace boundary.",
+        ["RootLabelExecutionProgress"] = "The original root Label execution reached a protected namespace boundary.",
+        ["RootLabelCancellationFailed"] = "The original root Label cancellation stopped at a protected namespace boundary.",
+        ["RootLabelCancellationProgress"] = "The original root Label cancellation reached a protected namespace boundary.",
+        ["RootLabelCancellationBornProgress"] = "The original born permission recovery reached an observed boundary.",
+        ["RootLabelCancellationBornProgressLimit"] = "The bounded born permission recovery observation is incomplete.",
+        ["RootLabelPreparationFailed"] = "The root Label preparation stopped at a protected namespace boundary.",
+        ["CloudProviderRequestFailed"] = "A Windows Cloud Files request failed.",
+        ["CloudFilesStartupProgress"] = "The Host reached a Cloud Files initialization boundary.",
         ["JournalCommandFailed"] = "A local journal command failed.",
+        ["AtomicDirectoryJournalAcknowledgementFailed"] = "The original atomic directory operation requires another settlement attempt.",
+        ["JournalGroupRecoveryFailed"] = "A retained journal group requires recovery before its user command can complete.",
+        ["JournalContentObservation"] = "A retained journal group was checked against previously accepted content.",
+        ["JournalAcceptedContentObservation"] = "An original journal notification observed owned, previously accepted current content before its public acknowledgement.",
+        ["JournalAcceptedContentAcknowledged"] = "The public journal acknowledgement returned successfully for that original accepted-content observation.",
+        ["ConflictDeletionRecoveryFailed"] = "A retained conflict deletion requires recovery before its original journal can be acknowledged.",
+        ["ConflictKeepBothRecoveryFailed"] = "A retained preservation decision requires recovery before its original journal can be retried.",
+        ["ConflictKeepRemotePreparationRecoveryFailed"] = "An accepted KeepRemote decision stopped before completing its original journal.",
         ["JournalDispatchBoundary"] = "A local content command reached a deferred dispatch boundary.",
         ["JournalAcknowledgementFailed"] = "An accepted Worker result could not be acknowledged.",
         ["MutationOutcomeAmbiguous"] = "A remote outcome requires reconciliation before retry.",
         ["RemoteBatchRetry"] = "The remote batch requires another attempt.",
         ["RemotePollFailed"] = "Remote polling failed.",
         ["TransferComplete"] = "The transfer completed.",
+        ["TransferCommandFailed"] = "A transfer command stopped at a retained execution boundary.",
+        ["ConflictCommandFailed"] = "A conflict command stopped at a retained execution boundary.",
         ["sync.failed"] = "Synchronization failed.",
     };
 
@@ -91,7 +116,7 @@ public static class SafeDiagnosticPolicy
             Source(Read("Category")), code, Message(code), Fields(fields));
     }
 
-    private static string Source(string? value) => value is "host" or "worker" or "sync" or "CloudFiles.Upload" or "diagnostics" ? value : "unknown";
+    private static string Source(string? value) => value is "host" or "worker" or "sync" or "CloudFiles.Upload" or "CloudFiles.Provider" or "CloudFiles.Startup" or "diagnostics" ? value : "unknown";
     private static string Code(string? value) => value == "Transfer complete" ? "TransferComplete" :
         value is not null && Messages.ContainsKey(value) ? value : "UnclassifiedDiagnostic";
     private static string Message(string code) => Messages.GetValueOrDefault(code, LogFieldPolicy.RedactedValue);
@@ -104,21 +129,91 @@ public static class SafeDiagnosticPolicy
         {
             string? accepted = name switch
             {
-                "operationId" or "instanceId" or "diagnosticId" or "correlationId" =>
+                "operationId" or "instanceId" or "rootId" or "diagnosticId" or "correlationId" or "workerSessionId" or "planId" or "commandId" =>
                     Guid.TryParse(value, out Guid id) ? id.ToString("D") : null,
                 "hresult" => value.Length == 8 && uint.TryParse(value, NumberStyles.HexNumber, CultureInfo.InvariantCulture, out uint number)
                     ? number.ToString("X8", CultureInfo.InvariantCulture) : null,
+                "journalSequence" => long.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out long sequence) && sequence >= 0
+                    ? sequence.ToString(CultureInfo.InvariantCulture) : null,
+                "journalPayloadSha256" or "nativeIdentitySha256" or "nativeBindingSha256" or "acknowledgedRevisionSha256" =>
+                    value.Length == 64 && value.All(char.IsAsciiHexDigit) ? value.ToUpperInvariant() : null,
+                "transferCommandPhase" => Enum.TryParse(value, out MirrorPulseTransferCommandPhase transferPhase) && Enum.IsDefined(transferPhase) && value == transferPhase.ToString() ? value : null,
+                "conflictCommandStage" => Enum.TryParse(value, out MirrorPulseConflictCommandStage conflictStage) && Enum.IsDefined(conflictStage) && value == conflictStage.ToString() ? value : null,
+                "conflictCommandBoundary" => Enum.TryParse(value, out MirrorPulseConflictCommandBoundary conflictBoundary) && Enum.IsDefined(conflictBoundary) && value == conflictBoundary.ToString() ? value : null,
+                "transferFailureBoundary" => Enum.TryParse(value, out MirrorPulseTransferFailureBoundary transferBoundary) && Enum.IsDefined(transferBoundary) && value == transferBoundary.ToString() ? value : null,
+                "transferTreeRecoveryStage" => value is "CurrentTreeAnchorRecovery" or "CurrentTreeMemberRecovery" or "CurrentTreeInitializationAudit" ? value : null,
+                "transferMemberRecoveryStep" => Enum.TryParse(value, out MirrorPulseTransferMemberRecoveryStep memberStep) &&
+                    Enum.IsDefined(memberStep) && value == memberStep.ToString() ? value : null,
+                "transferFailureKind" => value is "Native" or "Disposed" or "InvalidData" or "InvalidOperation" or "Authorization" or "Cancelled" or "IO" or "Argument" or "Other" ? value : null,
+                "journalReadStage" => Enum.TryParse(value, out MirrorPulseJournalReadStage journalStage) && Enum.IsDefined(journalStage) && value == journalStage.ToString() ? value : null,
+                "journalReadFailureKind" => value is "Native" or "Disposed" or "InvalidData" or "InvalidOperation" or "Authorization" or "Cancelled" or "IO" or "Argument" or "Other" ? value : null,
+                "rootLabelFailureBoundary" => Enum.TryParse(value, out MirrorPulseRootLabelFailureBoundary rootLabelBoundary) && Enum.IsDefined(rootLabelBoundary) && value == rootLabelBoundary.ToString() ? value : null,
+                "rootLabelExecutionStage" => Enum.TryParse(value, out MirrorPulseRootLabelExecutionStage executionStage) && Enum.IsDefined(executionStage) && value == executionStage.ToString() ? value : null,
+                "rootLabelCancellationStage" => Enum.TryParse(value, out MirrorPulseRootLabelCancellationStage cancellationStage) && Enum.IsDefined(cancellationStage) && value == cancellationStage.ToString() ? value : null,
+                "rootLabelCancellationObjectScope" => Enum.TryParse(value, out MirrorPulseCancellationObjectScope objectScope) && Enum.IsDefined(objectScope) && value == objectScope.ToString() ? value : null,
+                "rootLabelCancellationObjectOrigin" => Enum.TryParse(value, out MirrorPulseCancellationObjectOrigin objectOrigin) && Enum.IsDefined(objectOrigin) && value == objectOrigin.ToString() ? value : null,
+                "rootLabelCancellationDescriptorDifference" => Enum.TryParse(value, out MirrorPulseCancellationDescriptorDifference descriptorDifference) && Enum.IsDefined(descriptorDifference) && value == descriptorDifference.ToString() ? value : null,
+                "rootLabelCancellationCurrentRoleReference" => Enum.TryParse(value, out MirrorPulseCancellationRoleReference roleReference) && Enum.IsDefined(roleReference) && value == roleReference.ToString() ? value : null,
+                "rootLabelPreparationStage" => Enum.TryParse(value, out MirrorPulseRootLabelPreparationStage rootLabelStage) && Enum.IsDefined(rootLabelStage) && value == rootLabelStage.ToString() ? value : null,
+                "nativeErrorCode" => int.TryParse(value, NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out int nativeCode) ? nativeCode.ToString(CultureInfo.InvariantCulture) : null,
                 "attempt" or "bytesTransferred" or "totalBytes" or "pendingCount" =>
                     long.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out long count) && count >= 0
                         ? count.ToString(CultureInfo.InvariantCulture) : null,
                 "failureCategory" => value is "IO" or "InvalidData" or "Authorization" or "Cancelled" or "Internal" or "MutationAmbiguous" or "WorkerOffline" or "WorkerDisconnected" or "WorkerRejected" ? value : null,
-                "workerFailureCode" => value is "Offline" or "Disconnected" or "InvalidRequest" or "AccessDenied" or "SourceUnavailable" or "CapabilityUnavailable" or "LocalIoFailure" or "RetryableTransferFailure" or "RemoteConflict" or "UncorrelatedResponse" or "InvalidConfiguration" or "WorkerFailure" or "Unknown" ? value : null,
+                "failureSite" => Enum.TryParse(value, out MirrorPulseStartupFailureSite site) && Enum.IsDefined(site) && value == site.ToString() ? value : null,
+                "remoteFailureBoundary" => Enum.TryParse(value, out MirrorPulseRemoteFailureBoundary boundary) && Enum.IsDefined(boundary) && value == boundary.ToString() ? value : null,
+                "remotePollStage" => Enum.TryParse(value, out MirrorPulseRemotePollStage pollStage) && Enum.IsDefined(pollStage) && value == pollStage.ToString() ? value : null,
+                "failureKind" => value is "FileNotFound" or "DirectoryNotFound" or "DllNotFound" or "Native" or "Other" ? value : null,
+                "failureAssemblyNameSha256" => value.Length == 64 && value.All(char.IsAsciiHexDigit) ? value.ToUpperInvariant() : null,
+                "failureRuntimeInformationVersion" => value.Length <= 23 ? MirrorPulseStartupFailureTrace.ParseAssemblyVersion(value.AsSpan())?.ToString() : null,
+                "failureResource" => Enum.TryParse(value, out MirrorPulseStartupMissingResource resource) &&
+                    Enum.IsDefined(resource) && value == resource.ToString() ? value : null,
+                "contentObservation" => value is "Unavailable" or "NoAcceptedProof" or "ContentChanged" or "IdentityChanged" or "Selected" ? value : null,
+                "cloudRequestKind" => value is "FetchData" or "FetchPlaceholders" or "ValidateData" or "Dehydrate" or "Delete" or "Rename" or "CompletionNotification" or "Other" ? value : null,
+                "providerReadStage" => value is "Routing" or "WorkAdmission" or "IdentityValidation" or "StreamCreation" or "RangeTransport" or "RangeContent" ? value : null,
+                "providerReadFailureKind" => value is "Disposed" or "InvalidOperation" or "InvalidData" or "IO" or "Authorization" or "Cancelled" or "Argument" or "Other" ? value : null,
+                "workerFailureCode" => value is "Offline" or "Disconnected" or "InvalidRequest" or "AccessDenied" or "SourceUnavailable" or "CapabilityUnavailable" or "LocalIoFailure" or "RetryableTransferFailure" or "RemoteConflict" or "DirectoryNotEmpty" or "UncorrelatedResponse" or "InvalidConfiguration" or "WorkerFailure" or "Unknown" ||
+                    AdapterWorkerOperationException.IsDirectoryFailureCode(value) ? value : null,
+                "workerDirectoryPhase" => value is "Admission" or "Delete" ? value : null,
+                "workerStage" => value is "ResolvePayload" or "CreatePipe" or "CreateJob" or "StartProcess" or "AttachJob" or "AwaitPipe" or "ValidatePeer" or "AwaitHello" or "Negotiate" or "SendReady" or "ReceiveFrames" or "StopWorker" ? value : null,
+                "workerElapsedMs" or "workerStageElapsedMs" =>
+                    int.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out int elapsed) && elapsed >= 0
+                        ? elapsed.ToString(CultureInfo.InvariantCulture) : null,
+                "cancellationProgressPhase" or "executionProgressPhase" => value is "Begin" or "Completed" or "Failed" ? value : null,
+                "cancellationBornStep" => Enum.TryParse(value, out MirrorPulseCancellationBornStep bornStep) && Enum.IsDefined(bornStep) && value == bornStep.ToString() ? value : null,
+                "cancellationBornTruncated" => value == "true" ? value : null,
+                "cancellationElapsedMs" or "cancellationSequence" or "startupElapsedMs" or "startupSequence" or "cancellationBornElapsedMs" or "cancellationBornSequence" or "executionElapsedMs" or "executionSequence" =>
+                    long.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out long startupCount) && startupCount >= 0
+                        ? startupCount.ToString(CultureInfo.InvariantCulture) : null,
+                "startupStage" => value is "LibraryStartBegin" or "LibraryStartCompleted" or "LibraryServicesBegin" or "LibraryServicesCompleted" or
+                    "NamespaceStartupBegin" or "NamespaceStartupCompleted" or "NamespaceAnchorBegin" or "NamespaceAnchorCompleted" or
+                    "NamespaceAnchorEntryGuardBegin" or "NamespaceAnchorEntryGuardCompleted" or "NamespaceAnchorDiscoveryBegin" or "NamespaceAnchorDiscoveryCompleted" or
+                    "NamespaceAnchorInitializationBegin" or "NamespaceAnchorInitializationCompleted" or "NamespaceAnchorProtectionBegin" or "NamespaceAnchorProtectionCompleted" or
+                    "NamespaceAnchorRegistrationBegin" or "NamespaceAnchorRegistrationCompleted" or "NamespaceEmptyInventoryRecoveryBegin" or "NamespaceEmptyInventoryRecoveryCompleted" or
+                    "NamespaceRootBegin" or "NamespaceRootCompleted" or "NamespaceOriginalMemberBegin" or "NamespaceOriginalMemberCompleted" or
+                    "NamespaceBornRecoveryHistoryBegin" or "NamespaceBornRecoveryHistoryCompleted" or
+                    "NamespaceBornRecoveryContextBegin" or "NamespaceBornRecoveryContextCompleted" or
+                    "NamespaceBornRecoveryContextHistoryCompleted" or "NamespaceBornRecoveryContextLineageBegin" or "NamespaceBornRecoveryContextLineageCompleted" or
+                    "NamespaceBornRecoveryContextParentBegin" or "NamespaceBornRecoveryContextParentCompleted" or
+                    "NamespaceBornRecoveryContextInheritanceBegin" or "NamespaceBornRecoveryContextInheritanceCompleted" or
+                    "NamespaceBornRecoveryGuardsBegin" or "NamespaceBornRecoveryGuardsCompleted" or
+                    "NamespaceBornRecoveryActionBegin" or "NamespaceBornRecoveryActionCompleted" or
+                    "NamespaceBornRecoveryScopeBegin" or "NamespaceBornRecoveryScopeCompleted" or
+                    "NamespaceBornRecoveryReadbackBegin" or "NamespaceBornRecoveryReadbackCompleted" or
+                    "NamespaceBornRecoveryCommitBegin" or "NamespaceBornRecoveryCommitCompleted" or
+                    "NamespaceBornMemberBegin" or "NamespaceBornMemberCompleted" or "NamespaceAuditBegin" or "NamespaceAuditCompleted" or
+                    "RetainedRemoteRecoveryBegin" or "RetainedRemoteRecoveryCompleted" or "Started" ? value : null,
+                "workerProcessExitCode" or "workerNativeErrorCode" => int.TryParse(value, NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out int exitCode)
+                    ? exitCode.ToString(CultureInfo.InvariantCulture) : null,
+                "workerProcessStarted" or "workerProcessStateObserved" or "workerProcessHasExited" or "workerPipeConnected" or "workerDeadlineExpired" =>
+                    bool.TryParse(value, out bool workerFlag) ? workerFlag.ToString() : null,
+                "uploadConflictBoundary" => value is "RemoteRevisionMismatch" or "AcknowledgedItemTombstone" or "WorkerRejected" ? value : null,
                 "kind" => Enum.TryParse(value, out MirrorPulseWorkerChangeKind kind) && Enum.IsDefined(kind) ? kind.ToString() : null,
                 "confirmationOutcome" => Enum.TryParse(value, out MirrorPulseContentConfirmationOutcome outcome) && Enum.IsDefined(outcome) ? outcome.ToString() : null,
                 "confirmationStage" => Enum.TryParse(value, out MirrorPulseContentConfirmationStage stage) && Enum.IsDefined(stage) ? stage.ToString() : null,
                 "mutationState" => Enum.TryParse(value, out MirrorPulseMutationState state) && Enum.IsDefined(state) ? state.ToString() : null,
                 "acknowledgementPhase" => value is "ReadIntent" or "ReadMetadata" or "ValidateMetadata" or "SaveProof" or "ConfirmContent" or "SaveReceipt" or "AcknowledgeFeed" or "ProjectProduct" ? value : null,
-                "dispatchPhase" => value is "ResolvePath" or "RecoverIntent" or "ResolveRevision" or "OpenContent" or "InspectBinding" or "HashContent" or "ExecuteRemote" or "MissingLocalContent" or "AcknowledgeObservedContent" ? value : null,
+                "dispatchPhase" => value is "CoalescedExecution" or "ResolvePath" or "RecoverIntent" or "ResolveRevision" or "OpenContent" or "InspectBinding" or "HashContent" or "ExecuteRemote" or "MissingLocalContent" or "AcknowledgeObservedContent" ? value : null,
                 "nativeApplied" or "nativeVerified" or "projectionCommitted" or "proofPresent" or "hasItemReference" => bool.TryParse(value, out bool flag) ? flag.ToString() : null,
                 "redacted" => value == LogFieldPolicy.RedactedValue ? value : null,
                 "omittedFieldCount" => int.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out int count) && count >= 0

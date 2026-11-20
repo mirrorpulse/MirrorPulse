@@ -51,6 +51,30 @@ identified by its `adapterId`, `installId`, `instanceId`, and
 Root registrations carry an Adapter-provided uniqueness key so MirrorPulse can
 reject a first-level directory collision without renaming the directory.
 
+### Persistent backend state grant
+
+The production Host supplies `MP_WORKER_STATE_DIR` as a separate per-instance
+directory below `<DataRoot>/state/workers/<instance-id-N>`. Its identity is
+independent of the Worker session, package installation and display label. The
+Host prepares it only for enabled instances and retains it when a Worker stops.
+File and transfer caches are disposable; cache paths overlapping the reserved
+Worker state root are refused before launch.
+
+A backend stores its durable admissions and effect receipts within this grant.
+The Host continues to own the product catalog, official CfSharp store,
+credentials and Worker lifecycle. Backend state formats and original root
+bindings must be validated across process or package changes before replay.
+Workers must validate the native directory binding and authorized active root
+before using this storage for a source effect. The grant itself enables no new
+mutation capability.
+
+The Host rejects an existing file or reparse-point ancestor in the state path.
+Real process tests retain the same instance evidence across catalog reopen and
+cache removal, isolate two enabled instances, leave a disabled instance's grant
+absent, and recover the exact typed directory receipt after losing its reply.
+Those fixture receipts exercise Host persistence and transport, separately from
+the Local backend's native effect/receipt transaction qualification.
+
 ## Handshake
 
 The expected sequence is:
@@ -65,6 +89,18 @@ The expected sequence is:
 
 `Hello` and `Ready` use the same instance and Worker session context. A failed
 selection never becomes a healthy Worker session.
+
+The Host retains a safe `WorkerSessionFailed` observation when startup or a
+session fails. It records the Worker session ID, a closed stage name, bounded
+elapsed milliseconds, pipe connection state, and whether the launched process
+was observed to have exited. An exit code is included only after an observed
+exit; a missing code does not imply success. A Win32 failure retains its numeric
+native error separately from the exception HRESULT. Process facts are captured before
+the stop request or Job Object teardown can change them. Connection and Hello
+deadline expiry are distinguished from requested Host shutdown, which does not
+emit a failure observation. These fields contain no executable paths, command
+arguments, environment values, credentials, or arbitrary exception messages.
+The connection and Hello limits remain 15 and 5 seconds respectively.
 
 ## Control frames
 

@@ -1,0 +1,331 @@
+using System.Diagnostics;
+using System.Security.Cryptography;
+using System.Security.Principal;
+using CfSharp;
+using MirrorPulse.CloudFiles.CfSharp;
+using MirrorPulse.Core.Caching;
+using MirrorPulse.Core.CloudFiles;
+using MirrorPulse.Core.Configuration;
+using MirrorPulse.Core.Contracts;
+using MirrorPulse.Core.State;
+using MirrorPulse.Core.Sync;
+
+namespace MirrorPulse.CloudFiles.CfSharp.Tests;
+
+public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
+{
+    [TestMethod]
+    [DoNotParallelize]
+    [TestCategory("NativeCloudFiles")]
+    [DataRow(0)]
+    [DataRow(1)]
+    [DataRow(2)]
+    [DataRow(3)]
+    public async Task NativeReplacementContentWriterRetainsFirstBackupAndDirtyCopyAcrossBothObjectStarts(int attempt)
+    {
+        if (!OperatingSystem.IsWindows() || Environment.GetEnvironmentVariable("MIRRORPULSE_NATIVE_TEST") != "1")
+            Assert.Inconclusive("Requires the disposable NativeCloudFiles verification environment.");
+        MirrorPulseNamespaceExecutionSessionTests.AssertExpectedArchitecture();
+        string directory = Path.Combine(Path.GetTempPath(), "MirrorPulse-native-tests", Guid.NewGuid().ToString("N"));
+        var paths = new MirrorPulseStoragePaths(Path.Combine(directory, "sync"), Path.Combine(directory, "data"));
+        var registry = new CfSharpMirrorPulseCloudRootRegistry();
+        var root = AdapterRootRegistrationMapper.Map(AdapterId.Parse("example.replacement-copy"), InstanceId.New(),
+            new AdapterRootDefinition("docs", "Docs", "Docs", false), RootRegistrationState.Active, identityScope: RootIdentityScope.InstanceRoot);
+        var router = new MirrorPulseRootRouter(paths.SyncRootPath, [root]);
+        using WindowsIdentity caller = WindowsIdentity.GetCurrent();
+        await using var role = new MirrorPulseNamespaceExecutionSession();
+        await using var recoveryRole = new MirrorPulseNamespaceExecutionSession();
+        var activeRole = role;
+        var ownerWindow = TimeSpan.FromSeconds(45);
+        using var initialDeadline = new CancellationTokenSource(ownerWindow);
+        using var successorDeadline = new CancellationTokenSource();
+        var deadline = initialDeadline;
+        var ownerElapsed = Stopwatch.StartNew();
+        var source = new ProtectedPermissionNoSourceProvider();
+        var originals = new List<MirrorPulseNamespacePermissionPreparation>();
+        var members = new Dictionary<Guid, MirrorPulseNamespaceMemberRegistration>();
+        byte[] oldBytes = attempt == 3 ? [] : [0, 255, 8]; byte[] latestOldBytes = attempt == 1 ? [255, 0, 7, 6, 5, 4] : oldBytes;
+        byte[] newBytes = attempt >= 2 ? [] : new byte[2_097_409]; new Random(411).NextBytes(newBytes);
+        try
+        {
+            registry.Register(new(paths.SyncRootPath, "0.1.0", Guid.NewGuid(), [7, 4, 4]));
+            await File.WriteAllTextAsync(Path.Combine(directory, ".mp-permission-fixture"), string.Empty, deadline.Token);
+            await using var actor = new MirrorPulseNamespaceActor();
+            var state = new MirrorPulseCfSharpStateSession(paths);
+            await using var fileSystem = new MirrorPulseCloudFileSystemBuilder(paths).WithStateStore(state).WithContentProvider(source).Build();
+            await role.RunNamespaceOperationAsync(async () => await fileSystem.StartAsync(deadline.Token));
+            await using var catalog = await MirrorPulseProductCatalog.OpenAsync(paths, deadline.Token);
+            Directory.CreateDirectory(fileSystem.GetDirectory("Docs").FullPath);
+            var file = fileSystem.GetFile("Docs/original.bin"); var parent = fileSystem.GetDirectory("Docs");
+            await File.WriteAllBytesAsync(file.FullPath, oldBytes, deadline.Token);
+            await PrepareAcceptedIdentityOriginalsAsync(fileSystem, catalog, router, role, caller.User!, originals, deadline.Token);
+            await SaveAcceptedIdentityFixtureTopologyAsync(catalog, root, deadline.Token);
+            await RegisterNativeOriginalMembersAsync(fileSystem, catalog, router, role, originals, members, actor, deadline.Token);
+            var member = members.Values.Single(value => !value.IsDirectory);
+            var originalNative = await file.InspectAsync(deadline.Token);
+            Assert.IsTrue(CloudPlaceholderIdentity.TryDecode(originalNative.PlaceholderIdentity.Span, out var identity)); Assert.IsNotNull(identity);
+            if (attempt == 1)
+            {
+                await File.WriteAllBytesAsync(file.FullPath, latestOldBytes, deadline.Token);
+                Assert.IsFalse((await file.InspectAsync(deadline.Token)).IsPlaceholder);
+            }
+            string inputPath = Path.Combine(directory, "new-input.bin"); await File.WriteAllBytesAsync(inputPath, newBytes, deadline.Token);
+            Guid operationId = Guid.NewGuid(); var inputs = new MirrorPulseLocalImportStagingStore(paths);
+            if (attempt == 3)
+            {
+                // Reopen through the production runtime with the same live Host identity.
+                // This exercises its atomic preparation, shared executor and status APIs.
+                await fileSystem.DisposeAsync();
+                await using var scheduler = new MirrorPulseInstanceScheduler();
+                var factory = new CfSharpMirrorPulseCloudRuntimeFactory(router: router, catalog: catalog,
+                    mayDispatch: _ => true, scheduler: scheduler, namespaceExecution: activeRole, namespaceActor: actor);
+                await using var runtime = factory.Create(paths);
+                await runtime.StartAsync(deadline.Token);
+                var prepared = await runtime.PrepareNamespaceReplacementAsync(operationId, member.MemberId, inputPath, deadline.Token);
+                Assert.IsNotNull(prepared.Action); Assert.IsNotNull(prepared.Start); Assert.IsNull(prepared.Backup);
+                File.Delete(inputPath);
+                var completion = await runtime.ExecuteNamespaceReplacementAsync(operationId, deadline.Token);
+                var status = await runtime.ReadNamespaceReplacementStatusAsync(operationId, deadline.Token);
+                Assert.IsTrue(status.Completed && status.BackupRecorded && status.ContentRecorded && status.ProtectionRestored);
+                Assert.IsFalse(status.RequiresRecovery);
+                CollectionAssert.AreEqual(newBytes, await File.ReadAllBytesAsync(file.FullPath, deadline.Token));
+                byte[] newer = [4, 0, 9]; await File.WriteAllBytesAsync(file.FullPath, newer, deadline.Token);
+                Assert.AreEqual(completion, await runtime.ExecuteNamespaceReplacementAsync(operationId, deadline.Token));
+                Assert.AreEqual(prepared.Intent, (await runtime.PrepareNamespaceReplacementAsync(operationId, member.MemberId, inputPath, deadline.Token)).Intent);
+                CollectionAssert.AreEqual(newer, await File.ReadAllBytesAsync(file.FullPath, deadline.Token));
+                Assert.IsEmpty(await catalog.ReadNamespaceRecoveryRootsAsync(deadline.Token));
+                Assert.AreEqual(completion.RescanGeneration, (await catalog.ReadRootRescanRequestsAsync(deadline.Token)).Single().Generation);
+                Assert.IsNull(await catalog.ReadMutationAsync(operationId, deadline.Token)); Assert.AreEqual(0, source.Reads);
+                TestContext.WriteLine("ReplacementRuntime: atomicPreparation=True; privateInputBeforeScheduling=True; sourceRemoved=True; firstBackup=True; completeInitialExecution=True; unchangedEmpty=True; completedReplayPreservesLaterEdit=True; preparationReplayWithoutSource=True; historicalStatus=True; rescanRequested=True; noRemoteAcceptance=True; noSourceAccess=True; productionExecutor=True; hostRuntimeIntegrated=True; hostCliIntegrated=False.");
+                return;
+            }
+            var content = await inputs.StageAsync(operationId, inputPath, deadline.Token); File.Delete(inputPath);
+            await using var input = await inputs.OpenLeaseAsync(operationId, content, deadline.Token);
+            var original = (await catalog.ReadNamespaceMemberProtectionSnapshotAsync(member.MemberId, deadline.Token))!;
+            var intent = new MirrorPulseNamespaceReplacementIntent(1, operationId, original,
+                Convert.ToBase64String(identity.Encode()), content, DateTimeOffset.UtcNow);
+            await catalog.PrepareNamespaceReplacementAsync(intent, deadline.Token);
+            await catalog.RecordNamespaceReplacementStartAsync(new(1, operationId, DateTimeOffset.UtcNow), deadline.Token);
+            var action = new MirrorPulseNamespaceReplacementAction(1, operationId, Guid.NewGuid(), member.LocalObject, member.OwnerSid,
+                role.RoleSid.Value, MirrorPulseNamespacePermissionPolicy.CreateOrdinaryFileBirthDacl(role), original.ExpectedDacl, DateTimeOffset.UtcNow);
+            await catalog.PrepareNamespaceReplacementActionAsync(action, deadline.Token);
+            var backups = new MirrorPulseLocalReplacementBackupStore(paths);
+            var writer = new MirrorPulseNamespaceReplacementContentWriter(catalog, backups, router, role, actor)
+            {
+                Checkpoint = (point, _) => attempt == 1 && point == MirrorPulseNamespaceReplacementContentCheckpoint.AfterBackupRecorded
+                    ? throw new IOException("Old role stopped after retaining the first old-content backup.") : ValueTask.CompletedTask
+            };
+            await actor.RunAsync(async token =>
+            {
+                await role.RunNamespaceOperationAsync(async () =>
+                {
+                    var tightened = await MirrorPulseWindowsNamespacePermissionLease.RunProtectedAsync(file, router, member.LocalObject, identity,
+                        async (lease, stop) =>
+                        {
+                            RequireObject(await lease.InspectAsync(stop), action.RestoreDacl);
+                            await lease.ApplyDaclAsync(action.RoleOnlyDacl, stop);
+                            RequireObject(await lease.InspectAsync(stop), action.RoleOnlyDacl);
+                        }, token);
+                    Assert.AreEqual(CloudProtectedLocalOperationOutcome.Completed, tightened.Outcome);
+                    Assert.IsTrue(tightened.CallbackCompleted && tightened.Drained && tightened.NativeIdentityPrepared && tightened.DurableProjectionCommitted);
+                    if (attempt == 1)
+                    {
+                        await Assert.ThrowsExactlyAsync<IOException>(() => writer.CopyAsync(operationId, file, parent, input, CancellationToken.None));
+                        return;
+                    }
+                    var receipt = await writer.CopyAsync(operationId, file, parent, input, CancellationToken.None);
+                    Assert.AreEqual(content, receipt.Content); Assert.AreEqual(member.LocalObject, receipt.Verification.LocalObject);
+                    if (attempt != 3) Assert.IsFalse(receipt.IsInSync);
+                    Assert.IsTrue(receipt.IsPlaceholder); Assert.AreEqual(intent.OriginalPlaceholderIdentity, receipt.PlaceholderIdentity);
+                });
+                return true;
+            }, deadline.Token);
+            MirrorPulseNamespaceReplacementBackup? firstBackup = null;
+            if (attempt == 1)
+            {
+                var interrupted = (await catalog.ReadNamespaceReplacementExecutionAsync(operationId, deadline.Token))!;
+                firstBackup = interrupted.Backup; Assert.IsNotNull(firstBackup); Assert.IsNull(interrupted.WriteStart); Assert.IsNull(interrupted.ContentCompletion);
+                // Stop the real old token before handing the original file to another role.
+                await role.DisposeAsync(); activeRole = recoveryRole;
+                int interruptHandoff = 1;
+                var recovery = new MirrorPulseNamespaceReplacementRoleRecovery(catalog, router, recoveryRole, actor)
+                {
+                    Checkpoint = (point, _) => point == MirrorPulseNamespaceReplacementRoleCheckpoint.AfterMetadataApplied &&
+                        Interlocked.Exchange(ref interruptHandoff, 0) == 1 ? throw new IOException("Metadata handoff completed before its receipt.") : ValueTask.CompletedTask
+                };
+                writer = new(catalog, backups, router, recoveryRole, actor);
+                await actor.RunAsync(async token =>
+                {
+                    await recoveryRole.RunNamespaceOperationAsync(async () =>
+                    {
+                        await Assert.ThrowsExactlyAsync<IOException>(() => recovery.RecoverAsync(operationId, file, parent, token));
+                        Assert.IsNull((await catalog.ReadNamespaceReplacementExecutionAsync(operationId, token))!.RoleHandoff);
+                        var handoff = await recovery.RecoverAsync(operationId, file, parent, token);
+                        var receipt = await writer.CopyAsync(operationId, file, parent, input, token);
+                        Assert.AreEqual(handoff.RecoveryId, receipt.AuthorityRecoveryId); Assert.AreEqual(action.ActionId, receipt.ActionId);
+                        Assert.AreEqual(content, receipt.Content); Assert.IsFalse(receipt.IsInSync);
+                    });
+                    return true;
+                }, deadline.Token);
+            }
+            var copied = (await catalog.ReadNamespaceReplacementExecutionAsync(operationId, deadline.Token))!;
+            Assert.IsNotNull(copied.Backup); Assert.IsNotNull(copied.WriteStart); Assert.IsNotNull(copied.ContentCompletion);
+            Assert.AreEqual(Convert.ToHexString(SHA256.HashData(latestOldBytes)), copied.Backup.Content.Sha256);
+            if (firstBackup is not null) Assert.AreEqual(firstBackup, copied.Backup);
+            var currentAction = MirrorPulseNamespaceReplacementContentWriter.RequireCurrentAction(copied);
+            await using (var backup = await backups.OpenLeaseAsync(operationId, copied.Backup.Content, deadline.Token))
+                Assert.AreEqual(copied.Backup.Content.Sha256, Convert.ToHexString(await SHA256.HashDataAsync(backup.Data, deadline.Token)));
+            await Assert.ThrowsAsync<UnauthorizedAccessException>(() => File.ReadAllBytesAsync(file.FullPath, deadline.Token));
+            int interruptAfterScope = attempt == 0 ? 1 : 0;
+            var restorer = new MirrorPulseNamespaceReplacementAccessRestorer(catalog, router, activeRole, actor)
+            {
+                Checkpoint = (point, _) =>
+                {
+                    if (point == MirrorPulseNamespaceReplacementRestorationCheckpoint.AfterScope && Interlocked.Exchange(ref interruptAfterScope, 0) == 1)
+                        throw new IOException("Interrupted after the drained public scope and before its product result.");
+                    return ValueTask.CompletedTask;
+                }
+            };
+            await actor.RunAsync(async token =>
+            {
+                await activeRole.RunNamespaceOperationAsync(async () =>
+                {
+                    if (attempt == 0)
+                    {
+                        await Assert.ThrowsExactlyAsync<IOException>(() => restorer.RestoreAsync(operationId, file, parent, token));
+                        Assert.IsNull((await catalog.ReadNamespaceReplacementExecutionAsync(operationId, token))!.RestorationResult);
+                    }
+                    var restored = await restorer.RestoreAsync(operationId, file, parent, token);
+                    Assert.AreEqual("Completed", restored.NativeOutcome);
+                    Assert.IsTrue(restored.CallbackCompleted && restored.Drained && restored.NativeIdentityPrepared && restored.DurableProjectionCommitted);
+                    Assert.IsTrue(restored.AccessDescriptorApplied && restored.AccessDescriptorReadBack && restored.ProductVerified);
+                    Assert.AreEqual(member.LocalObject, restored.Verification!.LocalObject);
+                    Assert.IsTrue(MirrorPulseNamespacePermissionDescriptor.MatchesNativeReadback(currentAction.RestoreDacl, restored.Verification.Dacl));
+                });
+                return true;
+            }, deadline.Token);
+            var restoredExecution = (await catalog.ReadNamespaceReplacementExecutionAsync(operationId, deadline.Token))!;
+            Assert.AreEqual(copied.Action, restoredExecution.Action); Assert.AreEqual(copied.Backup, restoredExecution.Backup);
+            Assert.AreEqual(copied.ContentCompletion, restoredExecution.ContentCompletion);
+            CollectionAssert.AreEqual(newBytes, await File.ReadAllBytesAsync(file.FullPath, deadline.Token));
+            var after = await file.InspectAsync(deadline.Token);
+            Assert.AreEqual(originalNative.LocalBinding, after.LocalBinding);
+            if (attempt != 3) Assert.AreEqual(CloudSynchronizationState.NotInSync, after.SynchronizationState);
+            CollectionAssert.AreEqual(originalNative.PlaceholderIdentity.ToArray(), after.PlaceholderIdentity.ToArray());
+            byte[] laterEdit = [7, 7, 0]; await File.WriteAllBytesAsync(file.FullPath, laterEdit, deadline.Token);
+            Assert.AreEqual(copied.ContentCompletion, await actor.RunAsync(async token => await writer.CopyAsync(operationId, file, parent, null, token), deadline.Token));
+            Assert.AreEqual(restoredExecution.RestorationResult, await actor.RunAsync(async token => await restorer.RestoreAsync(operationId, file, parent, token), deadline.Token));
+            CollectionAssert.AreEqual(laterEdit, await File.ReadAllBytesAsync(file.FullPath, deadline.Token));
+            if (attempt == 0)
+            {
+                // The first owner has finished all its assertions. Give its successor the same
+                // bounded window for the separate metadata handoff and access restoration.
+                deadline.Token.ThrowIfCancellationRequested();
+                TestContext.WriteLine($"ReplacementContentFirstOwner: elapsedMs={ownerElapsed.ElapsedMilliseconds}.");
+                deadline = successorDeadline;
+                deadline.CancelAfter(ownerWindow);
+                ownerElapsed.Restart();
+                await role.DisposeAsync();
+                var recovery = new MirrorPulseNamespaceReplacementRoleRecovery(catalog, router, recoveryRole, actor);
+                var nextWriter = new MirrorPulseNamespaceReplacementContentWriter(catalog, backups, router, recoveryRole, actor);
+                var nextRestorer = new MirrorPulseNamespaceReplacementAccessRestorer(catalog, router, recoveryRole, actor);
+                await actor.RunAsync(async token =>
+                {
+                    await recoveryRole.RunNamespaceOperationAsync(async () =>
+                    {
+                        await recovery.RecoverAsync(operationId, file, parent, token);
+                        Assert.AreEqual(copied.ContentCompletion, await nextWriter.CopyAsync(operationId, file, parent, null, token));
+                        var current = await nextRestorer.RestoreAsync(operationId, file, parent, token);
+                        Assert.IsTrue(current.ProductVerified && current.Drained,
+                            $"Successor restoration: outcome={current.NativeOutcome}; stage={current.NativeStage}; " +
+                            $"verified={current.ProductVerified}; drained={current.Drained}; callbackCompleted={current.CallbackCompleted}; " +
+                            $"descriptorApplied={current.AccessDescriptorApplied}; descriptorReadBack={current.AccessDescriptorReadBack}; " +
+                            $"preparationHResult={current.PreparationHResult:X8}; errorHResult={current.ErrorHResult:X8}; " +
+                            $"cancelled={token.IsCancellationRequested}; elapsedMs={ownerElapsed.ElapsedMilliseconds}.");
+                        Assert.AreNotEqual(restoredExecution.Restoration!.ActionId,
+                            (await catalog.ReadNamespaceReplacementExecutionAsync(operationId, token))!.Restoration!.ActionId);
+                    });
+                    return true;
+                }, deadline.Token);
+                CollectionAssert.AreEqual(laterEdit, await File.ReadAllBytesAsync(file.FullPath, deadline.Token));
+                CollectionAssert.AreEqual(originalNative.PlaceholderIdentity.ToArray(), (await file.InspectAsync(deadline.Token)).PlaceholderIdentity.ToArray());
+                var recovered = (await catalog.ReadNamespaceReplacementExecutionAsync(operationId, deadline.Token))!;
+                Assert.AreEqual(copied.Backup, recovered.Backup); Assert.AreEqual(copied.ContentCompletion, recovered.ContentCompletion);
+                Assert.AreEqual(restoredExecution.RestorationResult, await catalog.RecordNamespaceReplacementRestorationResultAsync(restoredExecution.RestorationResult!, deadline.Token));
+                TestContext.WriteLine($"ReplacementContentSuccessor: elapsedMs={ownerElapsed.ElapsedMilliseconds}.");
+            }
+            Assert.AreEqual(member, await catalog.ReadNamespaceMemberAsync(member.MemberId, deadline.Token));
+            CollectionAssert.AreEqual(new[] { root.RootId }, (await catalog.ReadNamespaceRecoveryRootsAsync(deadline.Token)).ToArray());
+            Assert.IsNull(await catalog.ReadMutationAsync(operationId, deadline.Token)); Assert.AreEqual(0, source.Reads);
+            if (attempt == 2)
+            {
+                Assert.IsFalse((await file.InspectAsync(deadline.Token)).IsPlaceholder);
+                await actor.RunAsync(async token =>
+                {
+                    await activeRole.RunNamespaceOperationAsync(async () =>
+                    {
+                        var refreshed = await restorer.RestoreForCompletionAsync(operationId, file, parent, token);
+                        Assert.IsTrue(refreshed.ProductVerified && refreshed.Drained);
+                        Assert.AreNotEqual(restoredExecution.Restoration!.RestorationId, refreshed.RestorationId);
+                        var current = (await catalog.ReadNamespaceReplacementExecutionAsync(operationId, token))!;
+                        Assert.IsTrue(current.Restoration!.RevalidateForCompletion);
+                        Assert.AreEqual(copied.Backup, current.Backup); Assert.AreEqual(copied.ContentCompletion, current.ContentCompletion);
+                        await using var parentGuard = await MirrorPulseWindowsNamespacePermissionLease.OpenMetadataAsync(parent, router, token);
+                        await using var objectGuard = await MirrorPulseWindowsNamespacePermissionLease.OpenMetadataAsync(file, router, token);
+                        // This short guard prevents another ordinary save during the product
+                        // observation/commit boundary; fully resident bytes need no source recall.
+                        await using var dataGuard = new FileStream(file.FullPath, FileMode.Open, FileAccess.Read, FileShare.Read, 4096, FileOptions.Asynchronous);
+                        var child = await objectGuard.InspectAsync(token); var parentNow = await parentGuard.InspectAsync(token);
+                        var snapshot = await file.InspectAsync(token);
+                        var parentProof = (await catalog.ReadNamespaceMemberProtectionSnapshotAsync(original.Context.Location.ParentMemberId!.Value, token))!;
+                        var completion = await catalog.CompleteNamespaceReplacementAsync(new(1, operationId, member.MemberId, current.Restoration.ActionId,
+                            refreshed.RestorationId, Guid.NewGuid(), Guid.Empty, parentProof,
+                            new(child.LocalObject, child.OwnerSid, child.Dacl, child.ObservedAt),
+                            new(parentNow.LocalObject, parentNow.OwnerSid, parentNow.Dacl, parentNow.ObservedAt),
+                            child.LinkCount ?? throw new InvalidDataException("Completion requires an observed original link count."),
+                            snapshot.IsPlaceholder, snapshot.SynchronizationState == CloudSynchronizationState.InSync,
+                            Convert.ToBase64String(snapshot.PlaceholderIdentity.Span), DateTimeOffset.UtcNow), token);
+                        Assert.AreEqual(completion, await catalog.ReadNamespaceReplacementCompletionAsync(operationId, token));
+                        Assert.AreEqual(completion.ProtectionId, (await catalog.ReadNamespaceMemberProtectionEpochAsync(member.MemberId, token)).ProtectionId);
+                        Assert.AreEqual(completion.RescanGeneration, (await catalog.ReadRootRescanRequestsAsync(token)).Single().Generation);
+                        Assert.IsEmpty(await catalog.ReadNamespaceRecoveryRootsAsync(token));
+                    });
+                    return true;
+                }, deadline.Token);
+                CollectionAssert.AreEqual(laterEdit, await File.ReadAllBytesAsync(file.FullPath, deadline.Token));
+                Assert.AreEqual(0, source.Reads); Assert.IsNull(await catalog.ReadMutationAsync(operationId, deadline.Token));
+            }
+            if (attempt == 3)
+            {
+                await using var scheduler = new MirrorPulseInstanceScheduler();
+                var executor = new MirrorPulseNamespaceReplacementExecutor(fileSystem, catalog, router, activeRole, actor, scheduler, inputs, backups);
+                var completion = await executor.ExecuteAsync(operationId, deadline.Token);
+                Assert.AreEqual(completion, await executor.ExecuteAsync(operationId, deadline.Token));
+                CollectionAssert.AreEqual(laterEdit, await File.ReadAllBytesAsync(file.FullPath, deadline.Token));
+                Assert.IsEmpty(await catalog.ReadNamespaceRecoveryRootsAsync(deadline.Token));
+                Assert.AreEqual(completion.RescanGeneration, (await catalog.ReadRootRescanRequestsAsync(deadline.Token)).Single().Generation);
+                Assert.AreEqual(0, source.Reads); Assert.IsNull(await catalog.ReadMutationAsync(operationId, deadline.Token));
+            }
+            TestContext.WriteLine($"ReplacementContent: ordinaryStart={attempt == 1}; emptyInput={attempt >= 2}; unchangedEmpty={attempt == 3}; admittedOriginal=True; firstBackup=True; durableWriteStart=True; actualBinary=True; sameBinding=True; publicIdentity=True; changedContentDirty=True; replayPreservesLaterEdit=True; rootRequiredCompletionBeforeCommit=True; durableCompletion={attempt >= 2}; latestOrdinaryEditReconverted={attempt >= 2}; completionQueuesRescan={attempt >= 2}; noSourceAccess=True; productionCopy=True; productionAccessRestoration=True; interruptedAfterScope={attempt == 0}; sameRoleRecovery={attempt != 1}; newRoleCopyRecovery={attempt == 1}; originalBackupRetained=True; metadataHandoffInterruption={attempt == 1}; verifiedOldScopeNewRolePreservesLaterEdit={attempt == 0}; productionExecutor={attempt == 3}; hostIntegrated=False.");
+
+            void RequireObject(MirrorPulseNamespacePermissionObject facts, string dacl)
+            {
+                Assert.AreEqual(member.LocalObject, facts.LocalObject); Assert.AreEqual(member.OwnerSid, facts.OwnerSid); Assert.AreEqual(1u, facts.LinkCount);
+                Assert.IsTrue(MirrorPulseNamespacePermissionDescriptor.MatchesNativeReadback(dacl, facts.Dacl));
+            }
+        }
+        catch (Exception error)
+        {
+            TestContext.WriteLine($"ReplacementContentFailure: attempt={attempt}; cancelled={deadline.IsCancellationRequested}; ownerElapsedMs={ownerElapsed.ElapsedMilliseconds}.");
+            TestContext.WriteLine(error.ToString());
+            throw;
+        }
+        finally
+        {
+            registry.Unregister(paths.SyncRootPath);
+            RestoreSourceContextFixtureForCleanup(directory, paths.SyncRootPath, caller.User!);
+            RestoreImportContentFixtureForCleanup(paths.SyncRootPath, caller.User!);
+            DeleteFixture(directory);
+        }
+    }
+}

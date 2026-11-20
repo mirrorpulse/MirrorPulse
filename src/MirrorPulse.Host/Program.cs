@@ -2,6 +2,7 @@ using MirrorPulse.Core;
 using MirrorPulse.Core.Configuration;
 using MirrorPulse.Core.Contracts;
 using MirrorPulse.Core.Diagnostics;
+using MirrorPulse.Core.Host;
 using MirrorPulse.Host;
 
 if (!MirrorPulsePlatform.IsCurrentSupported())
@@ -26,7 +27,7 @@ var paths = new MirrorPulseStoragePaths(syncRoot, dataRoot);
 
 try
 {
-    await using var application = await MirrorPulseHostApplication.CreateAsync(paths);
+    var application = await MirrorPulseHostApplication.CreateAsync(paths);
     using var shutdown = new CancellationTokenSource();
     ConsoleCancelEventHandler cancel = (_, eventArgs) =>
     {
@@ -34,31 +35,36 @@ try
         shutdown.Cancel();
     };
     Console.CancelKeyPress += cancel;
+    Exception? failure = null;
     try
     {
-        await application.StartAsync(shutdown.Token);
-        Console.WriteLine($"{ProductInfo.Name} Cloud Files session started at {paths.SyncRootPath}.");
         if (args.Length == 0)
         {
-            await application.ServeAsync(shutdown.Token);
+            await application.RunAsync(shutdown.Token);
         }
-
-        return 0;
+        else
+        {
+            await application.StartAsync(shutdown.Token);
+            Console.WriteLine($"{ProductInfo.Name} Cloud Files session started at {paths.SyncRootPath}.");
+        }
     }
-    catch (OperationCanceledException) when (shutdown.IsCancellationRequested)
+    catch (OperationCanceledException) when (shutdown.IsCancellationRequested || application.ShutdownRequested)
     {
-        return 0;
     }
+    catch (Exception original) { failure = original; }
     finally
     {
         Console.CancelKeyPress -= cancel;
     }
+    await MirrorPulseHostResourceCleanup.RunAsync([application.DisposeAsync], failure);
+    return 0;
 }
 catch (Exception exception)
 {
     try
     {
         using var log = new LocalRollingLogWriter(Path.Combine(paths.DataRootPath, "logs"));
+        Exception originalStartupFailure = MirrorPulseStartupFailureTrace.ReadOriginalException(exception);
         string code = exception.Message switch
         {
             "The actual Shell root policy does not match content synchronization." => "ShellRootPolicyMismatch",
@@ -66,12 +72,19 @@ catch (Exception exception)
             "The existing Cloud Files registration belongs to another root identity." => "CloudRootIdentityMismatch",
             "The existing Shell registration belongs to another provider." => "ShellRootOwnershipMismatch",
             "The MirrorPulse Shell registration belongs to another sync root." => "ShellRootPathMismatch",
+            "Anchor protection requires the actual single-link current-user sync-root directory." => "NamespaceAnchorBindingMismatch",
+            "The sync-root anchor owner does not match the current Host user." => "NamespaceAnchorOwnerMismatch",
             _ when exception.Message.StartsWith("Shell sync-root registration failed with HRESULT", StringComparison.Ordinal) => "ShellRootRegistrationFailed",
             _ => "HostStartupFailed",
         };
         await log.WriteAsync(new LogEntry(LogLevel.Error, "host", code, DateTimeOffset.UtcNow,
-            [new("failureCategory", SafeDiagnosticPolicy.ClassifyFailure(exception)),
-                new("hresult", exception.GetBaseException().HResult.ToString("X8", System.Globalization.CultureInfo.InvariantCulture))]));
+            [new("failureCategory", SafeDiagnosticPolicy.ClassifyFailure(originalStartupFailure)),
+                new("failureSite", MirrorPulseStartupFailureTrace.ReadSite(exception).ToString()),
+                new("failureKind", MirrorPulseStartupFailureTrace.ReadKind(exception)),
+                new("failureResource", MirrorPulseStartupFailureTrace.ReadMissingResource(exception).ToString()),
+                new("failureAssemblyNameSha256", MirrorPulseStartupFailureTrace.ReadMissingAssemblyNameSha256(exception) ?? string.Empty),
+                new("failureRuntimeInformationVersion", MirrorPulseStartupFailureTrace.ReadRuntimeInformationBindingVersion(exception) ?? string.Empty),
+                new("hresult", originalStartupFailure.HResult.ToString("X8", System.Globalization.CultureInfo.InvariantCulture))]));
     }
     catch (Exception logFailure) when (logFailure is not OutOfMemoryException)
     {

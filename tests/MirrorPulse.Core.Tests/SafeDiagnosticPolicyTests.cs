@@ -10,6 +10,112 @@ namespace MirrorPulse.Core.Tests;
 public sealed class SafeDiagnosticPolicyTests
 {
     [TestMethod]
+    public void StartupFailureSitesAcceptOnlyDefinedNamesAndNeverNumericAliasesOrPrivateValues()
+    {
+        foreach (var site in Enum.GetValues<MirrorPulseStartupFailureSite>())
+        {
+            var safe = SafeDiagnosticPolicy.Sanitize(new LogEntry(LogLevel.Error, "host", "HostStartupFailed", DateTimeOffset.UtcNow,
+                [new("failureSite", site.ToString()), new("failureKind", "FileNotFound"), new("path", "PRIVATE_PATH")]));
+            Assert.AreEqual(site.ToString(), safe.Fields["failureSite"]); Assert.AreEqual("FileNotFound", safe.Fields["failureKind"]);
+            Assert.IsFalse(JsonSerializer.Serialize(safe).Contains("PRIVATE", StringComparison.Ordinal));
+        }
+        foreach (string value in new[] { "1", "InitializationRead, AnchorGuard", "PRIVATE_PATH", "AnchorProtectedPermission/private" })
+        {
+            var rejected = SafeDiagnosticPolicy.Sanitize(new LogEntry(LogLevel.Error, "host", "HostStartupFailed", DateTimeOffset.UtcNow,
+                [new("failureSite", value), new("failureKind", "PRIVATE_TYPE")]));
+            Assert.IsFalse(rejected.Fields.ContainsKey("failureSite")); Assert.IsFalse(rejected.Fields.ContainsKey("failureKind"));
+            Assert.IsFalse(JsonSerializer.Serialize(rejected).Contains("PRIVATE", StringComparison.Ordinal));
+        }
+    }
+
+    [TestMethod]
+    public void AnchorStartupSubBoundariesRetainOnlyClosedProgressWithoutPathsOrIdentity()
+    {
+        string[] stages = ["NamespaceAnchorEntryGuardBegin", "NamespaceAnchorEntryGuardCompleted",
+            "NamespaceAnchorDiscoveryBegin", "NamespaceAnchorDiscoveryCompleted", "NamespaceAnchorInitializationBegin", "NamespaceAnchorInitializationCompleted",
+            "NamespaceAnchorProtectionBegin", "NamespaceAnchorProtectionCompleted", "NamespaceAnchorRegistrationBegin", "NamespaceAnchorRegistrationCompleted",
+            "NamespaceEmptyInventoryRecoveryBegin", "NamespaceEmptyInventoryRecoveryCompleted"];
+        foreach (string stage in stages)
+        {
+            var safe = SafeDiagnosticPolicy.Sanitize(new LogEntry(LogLevel.Information, "CloudFiles.Startup", "CloudFilesStartupProgress", DateTimeOffset.UtcNow,
+                [new("startupStage", stage), new("startupSequence", "7"), new("startupElapsedMs", "42"),
+                 new("ownerSid", "identity-private-needle"), new("path", "path-private-needle")]));
+            Assert.AreEqual(stage, safe.Fields["startupStage"]);
+            Assert.IsFalse(JsonSerializer.Serialize(safe).Contains("needle", StringComparison.Ordinal));
+        }
+        var rejected = SafeDiagnosticPolicy.Sanitize(new LogEntry(LogLevel.Information, "CloudFiles.Startup", "CloudFilesStartupProgress", DateTimeOffset.UtcNow,
+            [new("startupStage", "path-private-needle"), new("startupSequence", "token-private-needle")]));
+        Assert.IsFalse(rejected.Fields.ContainsKey("startupStage")); Assert.IsFalse(rejected.Fields.ContainsKey("startupSequence"));
+        Assert.IsFalse(JsonSerializer.Serialize(rejected).Contains("needle", StringComparison.Ordinal));
+    }
+
+    [TestMethod]
+    [DataRow("NamespaceAnchorOwnerMismatch")]
+    [DataRow("NamespaceAnchorBindingMismatch")]
+    public async Task AnchorStartupFailuresPersistRegisteredReasonsWithoutNativeIdentityOrUserData(string code)
+    {
+        string directory = Path.Combine(Path.GetTempPath(), "MirrorPulse-safe-diagnostics", Guid.NewGuid().ToString("N"));
+        try
+        {
+            using var writer = new LocalRollingLogWriter(directory);
+            await writer.WriteAsync(new(LogLevel.Error, "host", code, DateTimeOffset.UtcNow,
+                [new("failureCategory", "InvalidData"), new("hresult", "80131501"),
+                 new("ownerSid", "private-owner-needle"), new("path", "private-path-needle")]));
+            string json = await File.ReadAllTextAsync(writer.FilePath);
+            using var stored = JsonDocument.Parse(json);
+            Assert.AreEqual(code, stored.RootElement.GetProperty("Code").GetString());
+            Assert.AreEqual("InvalidData", stored.RootElement.GetProperty("Fields").GetProperty("failureCategory").GetString());
+            Assert.IsFalse(json.Contains("needle", StringComparison.Ordinal));
+        }
+        finally { if (Directory.Exists(directory)) Directory.Delete(directory, recursive: true); }
+    }
+
+    [TestMethod]
+    public void ContentObservationDiagnosticUsesAClosedDecisionAndDoesNotExposeArbitraryData()
+    {
+        var safe = SafeDiagnosticPolicy.Sanitize(new LogEntry(LogLevel.Information, "CloudFiles.Upload", "JournalContentObservation", DateTimeOffset.UtcNow,
+            [new("planId", Guid.NewGuid().ToString("D")), new("contentObservation", "Selected"), new("path", "private-needle")]));
+        Assert.AreEqual("JournalContentObservation", safe.Code); Assert.AreEqual("Selected", safe.Fields["contentObservation"]);
+        Assert.IsFalse(JsonSerializer.Serialize(safe).Contains("needle", StringComparison.Ordinal));
+        var invalid = SafeDiagnosticPolicy.Sanitize(new LogEntry(LogLevel.Information, "CloudFiles.Upload", "JournalContentObservation", DateTimeOffset.UtcNow,
+            [new("contentObservation", "private-token-needle")]));
+        Assert.IsFalse(invalid.Fields.ContainsKey("contentObservation")); Assert.IsFalse(JsonSerializer.Serialize(invalid).Contains("needle", StringComparison.Ordinal));
+    }
+
+    [TestMethod]
+    public void DeletionRecoveryRetainsOnlyATypedCommandIdentityAndRegisteredFailureFacts()
+    {
+        Guid command = Guid.NewGuid();
+        var safe = SafeDiagnosticPolicy.Sanitize(new LogEntry(LogLevel.Warning, "CloudFiles.Upload", "ConflictDeletionRecoveryFailed", DateTimeOffset.UtcNow,
+            [new("commandId", command.ToString("D")), new("failureCategory", "InvalidData"), new("hresult", "8007000D"),
+             new("path", "private-path-needle"), new("exception", "private-credential-needle")]));
+        Assert.AreEqual("ConflictDeletionRecoveryFailed", safe.Code);
+        Assert.AreEqual(command.ToString("D"), safe.Fields["commandId"]);
+        Assert.IsFalse(JsonSerializer.Serialize(safe).Contains("needle", StringComparison.Ordinal));
+        var rejected = SafeDiagnosticPolicy.Sanitize(new LogEntry(LogLevel.Warning, "CloudFiles.Upload", "ConflictDeletionRecoveryFailed", DateTimeOffset.UtcNow,
+            [new("commandId", "private-token-needle")]));
+        Assert.IsFalse(rejected.Fields.ContainsKey("commandId"));
+        Assert.IsFalse(JsonSerializer.Serialize(rejected).Contains("needle", StringComparison.Ordinal));
+    }
+
+    [TestMethod]
+    public void GroupRecoveryDiagnosticRetainsOnlyTheRegisteredPlanIdentityAndFailureFacts()
+    {
+        Guid plan = Guid.NewGuid();
+        var safe = SafeDiagnosticPolicy.Sanitize(new LogEntry(LogLevel.Warning, "CloudFiles.Upload", "JournalGroupRecoveryFailed", DateTimeOffset.UtcNow,
+            [new("planId", plan.ToString("D")), new("hresult", "8007000D"), new("failureCategory", "InvalidData"),
+             new("exception", "private-password-needle"), new("path", "private-path-needle")]));
+        Assert.AreEqual("JournalGroupRecoveryFailed", safe.Code);
+        Assert.AreEqual(plan.ToString("D"), safe.Fields["planId"]);
+        Assert.AreEqual("8007000D", safe.Fields["hresult"]);
+        Assert.IsFalse(JsonSerializer.Serialize(safe).Contains("needle", StringComparison.Ordinal));
+        var invalid = SafeDiagnosticPolicy.Sanitize(new LogEntry(LogLevel.Warning, "CloudFiles.Upload", "JournalGroupRecoveryFailed", DateTimeOffset.UtcNow,
+            [new("planId", "secret-needle")]));
+        Assert.IsFalse(invalid.Fields.ContainsKey("planId"));
+        Assert.IsFalse(JsonSerializer.Serialize(invalid).Contains("needle", StringComparison.Ordinal));
+    }
+
+    [TestMethod]
     public async Task ArbitrarySecretsInEveryInputSurfaceAreAbsentFromLogsAndExportedZip()
     {
         string fixture = Path.Combine(Path.GetTempPath(), "MirrorPulse-safe-diagnostics", Guid.NewGuid().ToString("N"));
@@ -22,7 +128,11 @@ public sealed class SafeDiagnosticPolicyTests
             using var writer = new LocalRollingLogWriter(fixture);
             await writer.WriteAsync(new LogEntry(LogLevel.Error, hostile, hostile, DateTimeOffset.UtcNow,
                 [new("description", hostile), new(hostile, hostile), new("Authorization", hostile), new("Cookie", hostile),
-                 new("hresult", "80070005"), new("operationId", operationId.ToString("D")), new("kind", hostile)]));
+                 new("hresult", "80070005"), new("operationId", operationId.ToString("D")), new("kind", hostile),
+                 new("workerSessionId", hostile), new("workerStage", hostile), new("workerElapsedMs", hostile),
+                 new("workerStageElapsedMs", hostile), new("workerProcessStarted", hostile), new("workerProcessStateObserved", hostile),
+                 new("workerProcessHasExited", hostile), new("workerProcessExitCode", hostile), new("workerNativeErrorCode", hostile),
+                 new("workerPipeConnected", hostile), new("workerDeadlineExpired", hostile)]));
             string log = await File.ReadAllTextAsync(writer.FilePath);
             Assert.IsFalse(log.Contains("needle", StringComparison.Ordinal));
             using JsonDocument stored = JsonDocument.Parse(log);
@@ -87,6 +197,29 @@ public sealed class SafeDiagnosticPolicyTests
     }
 
     [TestMethod]
+    [DataRow("-2147483648")]
+    [DataRow("2147483647")]
+    public void WorkerStartupFactsPreserveSignedExitCodesAndRejectUntypedOrUnboundedValues(string exitCode)
+    {
+        var safe = SafeDiagnosticPolicy.Sanitize(new LogEntry(LogLevel.Warning, "worker", "WorkerSessionFailed", DateTimeOffset.UtcNow,
+            [new("workerStage", "AwaitPipe"), new("workerElapsedMs", "15000"), new("workerStageElapsedMs", "14999"),
+             new("workerProcessStarted", "true"), new("workerProcessStateObserved", "true"), new("workerProcessHasExited", "true"),
+             new("workerProcessExitCode", exitCode), new("workerNativeErrorCode", "193"), new("workerDeadlineExpired", "true"), new("workerPipeConnected", "false"),
+             new("workerStage", "token-secret-needle"), new("workerElapsedMs", "-1"), new("workerStageElapsedMs", "2147483648"),
+             new("workerProcessExitCode", "2147483648"), new("workerNativeErrorCode", "error-secret-needle"),
+             new("workerProcessStarted", "yes"), new("arguments", "password-secret-needle")]));
+        Assert.AreEqual("AwaitPipe", safe.Fields["workerStage"]);
+        Assert.AreEqual("15000", safe.Fields["workerElapsedMs"]);
+        Assert.AreEqual("14999", safe.Fields["workerStageElapsedMs"]);
+        Assert.AreEqual(exitCode, safe.Fields["workerProcessExitCode"]);
+        Assert.AreEqual("193", safe.Fields["workerNativeErrorCode"]);
+        Assert.AreEqual("True", safe.Fields["workerProcessStarted"]);
+        Assert.AreEqual("False", safe.Fields["workerPipeConnected"]);
+        Assert.AreEqual("7", safe.Fields["omittedFieldCount"]);
+        Assert.IsFalse(JsonSerializer.Serialize(safe).Contains("needle", StringComparison.Ordinal));
+    }
+
+    [TestMethod]
     public void ContentConfirmationDiagnosticsAcceptOnlyTypedReceiptFacts()
     {
         var safe = SafeDiagnosticPolicy.Sanitize(new LogEntry(LogLevel.Warning, "CloudFiles.Upload", "MutationOutcomeAmbiguous", DateTimeOffset.UtcNow,
@@ -100,6 +233,49 @@ public sealed class SafeDiagnosticPolicyTests
         Assert.AreEqual("False", safe.Fields["nativeApplied"]);
         Assert.AreEqual("True", safe.Fields["projectionCommitted"]);
         Assert.AreEqual("ReadMetadata", safe.Fields["acknowledgementPhase"]);
+        Assert.IsFalse(JsonSerializer.Serialize(safe).Contains("needle", StringComparison.Ordinal));
+    }
+
+    [TestMethod]
+    [DataRow("RemoteRevisionMismatch")]
+    [DataRow("AcknowledgedItemTombstone")]
+    [DataRow("WorkerRejected")]
+    public void UploadConflictOriginPreservesOnlyBoundedFactsWithoutRevisionOrPathValues(string boundary)
+    {
+        var safe = SafeDiagnosticPolicy.Sanitize(new LogEntry(LogLevel.Warning, "CloudFiles.Upload", "JournalDispatchBoundary", DateTimeOffset.UtcNow,
+            [new("uploadConflictBoundary", boundary), new("dispatchPhase", "CoalescedExecution"),
+             new("uploadConflictBoundary", "token-secret-needle"), new("expectedRevision", "revision-secret-needle"),
+             new("actualRevision", "revision-secret-needle"), new("path", "path-secret-needle")]));
+        Assert.AreEqual(boundary, safe.Fields["uploadConflictBoundary"]);
+        Assert.AreEqual("CoalescedExecution", safe.Fields["dispatchPhase"]);
+        Assert.IsFalse(JsonSerializer.Serialize(safe).Contains("needle", StringComparison.Ordinal));
+    }
+
+    [TestMethod]
+    public void RootMetadataRecoveryFailureHasARegisteredDescriptionWithoutAnExceptionMessage()
+    {
+        Guid original = Guid.NewGuid();
+        var safe = SafeDiagnosticPolicy.Sanitize(new LogEntry(LogLevel.Warning, "CloudFiles.Upload", "RootLabelJournalRecoveryFailed", DateTimeOffset.UtcNow,
+            [new("operationId", original.ToString("D")), new("failureCategory", "InvalidData"),
+             new("hresult", "80131501"), new("message", "token-secret-needle")]));
+        Assert.AreEqual("RootLabelJournalRecoveryFailed", safe.Code);
+        Assert.AreEqual(original.ToString("D"), safe.Fields["operationId"]);
+        Assert.AreEqual("An accepted root notification requires another metadata recovery attempt.", safe.Message);
+        Assert.IsFalse(JsonSerializer.Serialize(safe).Contains("needle", StringComparison.Ordinal));
+    }
+
+    [TestMethod]
+    [DataRow("RootLabelJournalReadmissionFailed", "A root remains closed until its current Host namespace audit succeeds.")]
+    [DataRow("RootLabelJournalAdmissionFailed", "A root notification remains pending until its current Host admission succeeds.")]
+    public void RootReadmissionDiagnosticsKeepOnlyAnActualStableRootIdAndBoundedFailureFacts(string code, string description)
+    {
+        Guid root = Guid.NewGuid();
+        var safe = SafeDiagnosticPolicy.Sanitize(new LogEntry(LogLevel.Warning, "CloudFiles.Upload", code, DateTimeOffset.UtcNow,
+            [new("rootId", root.ToString("D")), new("rootId", "path-secret-needle"),
+             new("failureCategory", "InvalidData"), new("hresult", "80131501"), new("message", "token-secret-needle")]));
+        Assert.AreEqual(code, safe.Code);
+        Assert.AreEqual(root.ToString("D"), safe.Fields["rootId"]);
+        Assert.AreEqual(description, safe.Message);
         Assert.IsFalse(JsonSerializer.Serialize(safe).Contains("needle", StringComparison.Ordinal));
     }
 }

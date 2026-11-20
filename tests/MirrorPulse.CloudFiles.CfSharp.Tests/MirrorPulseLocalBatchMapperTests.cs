@@ -15,6 +15,74 @@ namespace MirrorPulse.CloudFiles.CfSharp.Tests;
 public sealed class MirrorPulseLocalBatchMapperTests
 {
     [TestMethod]
+    public void CompletePlanningWindowRetainsBlockedRootAndMetadataDependencies()
+    {
+        InstanceId instance = InstanceId.New();
+        var registration = AdapterRootRegistrationMapper.Map(AdapterId.Parse("example.window"), instance,
+            new("docs", "Documents", "Documents", false), RootRegistrationState.Active);
+        var router = new MirrorPulseRootRouter(Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N")), [registration]);
+        Guid item = Guid.NewGuid(); DateTimeOffset now = DateTimeOffset.UtcNow;
+        MirrorPulseLocalChangeObservation[] observations =
+        [
+            new(Guid.NewGuid(), 1, CloudLocalChangeKind.Delete, Guid.NewGuid(), "Documents", null, true, now),
+            new(Guid.NewGuid(), 2, CloudLocalChangeKind.ContentUpdate, item, "Documents/file.txt", null, false, now),
+            new(Guid.NewGuid(), 3, CloudLocalChangeKind.ContentUpdate, item, "Documents/file.txt", null, false, now),
+            new(Guid.NewGuid(), 4, CloudLocalChangeKind.MetadataUpdate, item, "Documents/file.txt", null, false, now),
+        ];
+        var plan = MirrorPulseLocalBatchMapper.MapObservations(observations, router);
+        Assert.HasCount(2, plan.Commands); Assert.HasCount(4, plan.CompleteWindow!);
+        Assert.IsNull(MirrorPulseJournalCoalescingPlanner.TryPlan(plan.CompleteWindow!, item, 4, new HashSet<Guid>()));
+        Assert.IsTrue(MirrorPulseJournalOrderPolicy.DependsOn(plan.Commands[0], plan.CompleteWindow![0]));
+        var unknown = observations.Append(new(Guid.NewGuid(), 5, CloudLocalChangeKind.Create, Guid.NewGuid(),
+            "Unregistered/file.txt", null, false, now));
+        Assert.IsNull(MirrorPulseLocalBatchMapper.MapObservations(unknown, router).CompleteWindow,
+            "An incomplete routing window must never authorize a coalescing decision.");
+    }
+
+    [TestMethod]
+    public async Task UnfilteredMetadataRetainsItsUnsupportedResultWithoutAcknowledgingDirectoriesOrBlockingChildren()
+    {
+        string fixture = Path.Combine(Path.GetTempPath(), "MirrorPulse-metadata-tests", Guid.NewGuid().ToString("N"));
+        var paths = new MirrorPulseStoragePaths(Path.Combine(fixture, "sync"), Path.Combine(fixture, "data"));
+        InstanceId instance = InstanceId.New();
+        RootRegistration root = AdapterRootRegistrationMapper.Map(AdapterId.Parse("example.metadata"), instance,
+            new AdapterRootDefinition("docs", "Docs", "Docs", false), RootRegistrationState.Active);
+        var router = new MirrorPulseRootRouter(paths.SyncRootPath, [root]);
+        MirrorPulseLocalChangeObservation Change(string path, bool directory, CloudLocalChangeKind kind) =>
+            new(Guid.NewGuid(), 1, kind, null, path, null, directory, DateTimeOffset.UtcNow);
+        try
+        {
+            string directory = Path.Combine(paths.SyncRootPath, "Docs", "folder");
+            Directory.CreateDirectory(directory);
+            string file = Path.Combine(directory, "content.txt");
+            await File.WriteAllTextAsync(file, "unchanged content");
+            File.SetLastWriteTimeUtc(file, DateTime.UtcNow.AddDays(-1));
+            File.SetAttributes(file, File.GetAttributes(file) | FileAttributes.Archive);
+            Directory.SetLastWriteTimeUtc(directory, DateTime.UtcNow.AddDays(-2));
+            MirrorPulseLocalChangeObservation[] metadata = [Change("Docs", true, CloudLocalChangeKind.MetadataUpdate),
+                Change("Docs/folder", true, CloudLocalChangeKind.MetadataUpdate),
+                Change("Docs/folder/content.txt", false, CloudLocalChangeKind.MetadataUpdate)];
+            MirrorPulseLocalChangeObservation child = Change("Docs/folder/content.txt", false, CloudLocalChangeKind.ContentUpdate);
+            MirrorPulseLocalBatchPlan plan = MirrorPulseLocalBatchMapper.MapObservations([.. metadata, child], router);
+            Assert.AreEqual(child.OperationId, plan.Commands.Single().OperationId);
+            Assert.IsEmpty(plan.DirectoryMetadataOperationIds);
+            Assert.HasCount(3, plan.BlockedOperations!);
+            Assert.IsTrue(plan.BlockedOperations!.All(operation => operation.Reason == MirrorPulseLocalOperationBlockReason.UnsupportedMetadataChange));
+            await using (MirrorPulseProductCatalog catalog = await MirrorPulseProductCatalog.OpenAsync(paths))
+                foreach (MirrorPulseBlockedLocalOperation operation in plan.BlockedOperations!)
+                    await catalog.SaveBlockedLocalOperationAsync(operation);
+            await using (MirrorPulseProductCatalog catalog = await MirrorPulseProductCatalog.OpenAsync(paths))
+            {
+                var status = new MirrorPulseAppStatusResponse(1, 0, [], [], BlockedLocalOperations: await catalog.ReadBlockedLocalOperationsAsync());
+                CollectionAssert.AreEquivalent(metadata.Select(change => change.OperationId).ToArray(),
+                    status.BlockedLocalOperations!.Select(operation => operation.OperationId).ToArray());
+                Assert.AreEqual("unchanged content", await File.ReadAllTextAsync(file));
+            }
+        }
+        finally { Directory.Delete(fixture, true); }
+    }
+
+    [TestMethod]
     public async Task BlockedRootsAndUnknownPathsDoNotPoisonValidCommandsAndRemainQueryableAfterRestart()
     {
         string fixture = Path.Combine(Path.GetTempPath(), "MirrorPulse-mapper-tests", Guid.NewGuid().ToString("N"));
@@ -32,13 +100,14 @@ public sealed class MirrorPulseLocalBatchMapperTests
             Change("Unknown/file.txt", CloudLocalChangeKind.Create),
             Change("Documents/moved.txt", CloudLocalChangeKind.Move, previous: "Other/file.txt"),
             Change("Documents/new-folder", CloudLocalChangeKind.Create, true), valid], router);
-        Assert.HasCount(1, plan.Commands);
-        Assert.AreEqual(valid.OperationId, plan.Commands[0].OperationId);
-        Assert.HasCount(4, plan.BlockedOperations!);
+        Assert.HasCount(2, plan.Commands);
+        Assert.AreEqual(valid.OperationId, plan.Commands[1].OperationId);
+        Assert.IsTrue(plan.Commands[0].IsDirectory);
+        Assert.AreEqual(MirrorPulseWorkerChangeKind.Create, plan.Commands[0].Kind);
+        Assert.HasCount(3, plan.BlockedOperations!);
         Assert.IsEmpty(plan.DirectoryMetadataOperationIds);
         CollectionAssert.AreEqual(new[] { MirrorPulseLocalOperationBlockReason.RootReconciliationRequired,
-            MirrorPulseLocalOperationBlockReason.UnregisteredPath, MirrorPulseLocalOperationBlockReason.CrossRootMove,
-            MirrorPulseLocalOperationBlockReason.UnsupportedDirectoryCreate }, plan.BlockedOperations!.Select(item => item.Reason).ToArray());
+            MirrorPulseLocalOperationBlockReason.UnregisteredPath, MirrorPulseLocalOperationBlockReason.CrossRootMove }, plan.BlockedOperations!.Select(item => item.Reason).ToArray());
         try
         {
             await using (MirrorPulseProductCatalog catalog = await MirrorPulseProductCatalog.OpenAsync(paths))
@@ -50,12 +119,12 @@ public sealed class MirrorPulseLocalBatchMapperTests
             await using (MirrorPulseProductCatalog catalog = await MirrorPulseProductCatalog.OpenAsync(paths))
             {
                 IReadOnlyList<MirrorPulseBlockedLocalOperation> blocked = await catalog.ReadBlockedLocalOperationsAsync();
-                Assert.HasCount(4, blocked);
+                Assert.HasCount(3, blocked);
                 CollectionAssert.AreEquivalent(plan.BlockedOperations!.Select(item => item.OperationId).ToArray(), blocked.Select(item => item.OperationId).ToArray());
                 var status = new MirrorPulseAppStatusResponse(5, 0, [], [], BlockedLocalOperations: blocked);
-                Assert.HasCount(4, status.BlockedLocalOperations!);
+                Assert.HasCount(3, status.BlockedLocalOperations!);
                 await catalog.ClearBlockedLocalOperationAsync(blocked[0].OperationId);
-                Assert.HasCount(3, await catalog.ReadBlockedLocalOperationsAsync());
+                Assert.HasCount(2, await catalog.ReadBlockedLocalOperationsAsync());
             }
         }
         finally { Directory.Delete(fixture, true); }

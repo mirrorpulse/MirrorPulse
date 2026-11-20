@@ -1,0 +1,305 @@
+using System.Security.Cryptography;
+using System.Text;
+using System.Text.Json;
+using System.Text.Json.Serialization;
+using CfSharp;
+using Microsoft.Data.Sqlite;
+using MirrorPulse.CloudFiles.CfSharp;
+using MirrorPulse.Core.Configuration;
+using MirrorPulse.Core.Conflicts;
+using MirrorPulse.Core.Contracts;
+using MirrorPulse.Core.State;
+using MirrorPulse.Core.Sync;
+
+namespace MirrorPulse.CfSharp.CrashProbe;
+
+public sealed record CliCoalescingFixtureAudit(int SchemaVersion, bool ExclusiveCatalogOwner, string RawEffect,
+    Guid PlanId, IReadOnlyList<Guid> OriginalOperationIds, int OriginalCount, int PendingOriginalCount,
+    int AcknowledgedOriginalCount, bool OriginalExpectedRevisionPresent, string OriginalEffectState,
+    Guid RejectedEffectId, Guid? CommandId, Guid? AuthorizedEffectId, string? LocalSha256,
+    string? PreservedRemoteSha256, bool ActualNativeConfirmation)
+{
+    public CliCoalescingObservedVersionAudit? SelectedRemoteObservation { get; init; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? PreservedLocalSha256 { get; init; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public Guid? AcknowledgementId { get; init; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public Guid? OriginalBirthOperationId { get; init; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? OriginalBirthOrigin { get; init; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? OriginalBirthSha256 { get; init; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public bool? BackendAddressDiffersFromOriginalBirth { get; init; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? CurrentNativeIdentitySha256 { get; init; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public bool? CurrentNativeOriginalBindingVerified { get; init; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public IReadOnlyList<Guid>? PendingMoveOriginalOperationIds { get; init; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public IReadOnlyList<string>? OriginalExecutionStepKinds { get; init; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? MoveOnlyExpectedRevisionSha256 { get; init; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public Guid? UnchangedContentAcceptanceOperationId { get; init; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? UnchangedContentSha256 { get; init; }
+}
+
+public sealed record CliCoalescingObservedVersionAudit(int Version, Guid ObservationId, Guid RejectedEffectId,
+    Guid? PreviousObservationId, Guid? RefreshCommandId, IReadOnlyList<Guid> OriginalOperationIds,
+    IReadOnlyList<Guid> PreviousConflictIds, IReadOnlyList<Guid> SelectedConflictIds,
+    string? OriginalRequestExpectedRevisionSha256, bool OriginalErrorExpectedRevisionPresent,
+    string? OriginalErrorExpectedRevisionSha256, bool OriginalErrorActualRevisionPresent,
+    string? OriginalErrorActualRevisionSha256, string SelectedRemoteRevisionSha256,
+    DateTimeOffset StartedAt, DateTimeOffset ObservedAt);
+
+/// <summary>Reads actual retained coalescing facts only in an authenticated stopped synthetic Host fixture.</summary>
+public static partial class CliCoalescingFixtureProbe
+{
+    private sealed record Marker(int SchemaVersion, string InstanceId, string RootId, string RootKey, string DirectoryName);
+    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
+
+    public static async Task<int> RunAsync(string directory, bool completed, bool keepRemote = false, bool controlledCreate = false,
+        bool movedFile = false, bool moveOnly = false)
+    {
+        bool moving = movedFile || moveOnly;
+        if (moving && (!keepRemote || controlledCreate || movedFile && moveOnly)) return 2;
+        string root = Path.TrimEndingDirectorySeparator(Path.GetFullPath(directory));
+        const string prefix = "MirrorPulse-cli-integration-";
+        string name = Path.GetFileName(root);
+        if (!string.Equals(Path.GetDirectoryName(root), Path.TrimEndingDirectorySeparator(Path.GetTempPath()), StringComparison.OrdinalIgnoreCase) ||
+            !name.StartsWith(prefix, StringComparison.Ordinal) || !Guid.TryParseExact(name[prefix.Length..], "N", out _)) return 2;
+        RequireExistingUnredirected(root);
+        string markerPath = Path.Combine(root, ".mp-cli-fixture.json"); RequireExistingUnredirected(markerPath);
+        if (new FileInfo(markerPath).Length > 4096) return 2;
+        var marker = JsonSerializer.Deserialize<Marker>(await File.ReadAllTextAsync(markerPath), JsonOptions)
+            ?? throw new InvalidDataException("The synthetic coalescing marker is missing.");
+        if (marker.SchemaVersion != 1 || !Guid.TryParse(marker.InstanceId, out Guid instanceGuid) || instanceGuid == Guid.Empty ||
+            !Guid.TryParse(marker.RootId, out Guid rootGuid) || rootGuid == Guid.Empty || string.IsNullOrWhiteSpace(marker.RootKey) ||
+            string.IsNullOrWhiteSpace(marker.DirectoryName) || marker.DirectoryName is "." or ".." ||
+            marker.DirectoryName.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0) return 2;
+        var paths = new MirrorPulseStoragePaths(Path.Combine(root, "sync"), Path.Combine(root, "data"));
+        foreach (string path in new[] { paths.SyncRootPath, paths.DataRootPath, Path.GetDirectoryName(paths.ProductCatalogDatabasePath)!, paths.ProductCatalogDatabasePath })
+            RequireExistingUnredirected(path);
+        // Acquire the Host's real exclusive lease before any catalog or official-store evidence.
+        await using var catalog = await MirrorPulseProductCatalog.OpenAsync(paths);
+        var topology = await catalog.ReadAdapterTopologyAsync();
+        var route = topology.Roots.Single();
+        if (topology.Instances.Count != 1 || topology.Instances[0].InstanceId.Value != instanceGuid || route.InstanceId.Value != instanceGuid ||
+            route.RootId.Value != rootGuid || route.UniquenessKey != marker.RootKey || route.DirectoryName != marker.DirectoryName ||
+            route.State != RootRegistrationState.Active) throw new InvalidDataException("The fixture route changed.");
+        var plans = await catalog.ReadJournalCoalescingPlansAsync();
+        if (plans.Count > 64) throw new InvalidDataException("The isolated fixture exceeds its plan bound.");
+        string finalPath = moving ? "cli-roundtrip-moved.txt" : "cli-roundtrip.txt";
+        var selected = plans.Where(plan => plan.InstanceId == route.InstanceId && plan.RootKey == route.UniquenessKey &&
+            plan.OriginalPath == "cli-roundtrip.txt" && plan.FinalPath == finalPath).ToArray();
+        var expectedEffect = moving ? MirrorPulseCoalescedEffect.MoveAndUpdateFile :
+            controlledCreate ? MirrorPulseCoalescedEffect.CreateFile : MirrorPulseCoalescedEffect.UpdateFile;
+        if (selected.Length != 1 || selected[0].Effect != expectedEffect && !(moveOnly && selected[0].Effect == MirrorPulseCoalescedEffect.MoveFile) ||
+            selected[0].Members.Count is < 2 or > 64 || controlledCreate && !keepRemote)
+            throw new InvalidDataException("The fixture requires one actual original coalescing group of its selected kind.");
+        var plan = selected[0];
+        var execution = await catalog.ReadJournalCoalescingExecutionAsync(plan.PlanId)
+            ?? throw new InvalidDataException("The original execution is missing.");
+        bool expectedSteps = moving
+            ? execution.Steps.Count == (moveOnly ? 1 : 2) && execution.Steps[0].Kind == MirrorPulseCoalescingStepKind.Move &&
+              execution.Steps[0].PreviousRelativePath == plan.OriginalPath && execution.Steps[0].RelativePath == plan.FinalPath &&
+              (moveOnly || execution.Steps[1].Kind == MirrorPulseCoalescingStepKind.Upload && execution.Steps[1].RelativePath == plan.FinalPath)
+            : execution.Steps.Count == 1 && execution.Steps[0].Kind == MirrorPulseCoalescingStepKind.Upload;
+        if ((controlledCreate ? execution.ExpectedRevision is not null : string.IsNullOrEmpty(execution.ExpectedRevision)) ||
+            (execution.Content is null) != moveOnly || !expectedSteps ||
+            moveOnly && (plan.Effect == MirrorPulseCoalescedEffect.MoveFile) != (plan.Members.Count == 2))
+            throw new InvalidDataException("The original ordered effects, baseline or content proof do not match the selected fixture.");
+        if (moveOnly && plan.Effect == MirrorPulseCoalescedEffect.MoveAndUpdateFile)
+        {
+            var observed = execution.ObservedContent
+                ?? throw new InvalidDataException("The single Move must retain its unchanged accepted content observation.");
+            var proof = await catalog.ReadContentAcceptanceProofAsync(observed.AcceptanceOperationId);
+            if (proof is null || proof.AcceptedItemId != plan.ItemId || proof.AcceptedRevision != execution.ExpectedRevision ||
+                proof.AcceptedRevision != observed.RemoteRevision || proof.RemoteId != observed.RemoteId ||
+                proof.Length != observed.Content.Length || !string.Equals(proof.Sha256, observed.Content.Sha256, StringComparison.OrdinalIgnoreCase) ||
+                proof.UploadBinding.LocalObject != observed.Content.UploadBinding.LocalObject ||
+                plan.Members.Any(member => member.OperationId == proof.OperationId))
+                throw new InvalidDataException("The single Move lost its separate prior accepted bytes or native binding.");
+        }
+        if (movedFile && await catalog.ReadMutationAsync(execution.Steps[1].OperationId) is { } laterUpload &&
+            (laterUpload.ExecutionEvidence != MirrorPulseMutationExecutionEvidence.NeverStarted ||
+             laterUpload.State is not (MirrorPulseMutationState.Prepared or MirrorPulseMutationState.Superseded)))
+            throw new InvalidDataException("The upload cannot have executed past the original rejected Move.");
+        Guid[] originalIds = plan.Members.Select(member => member.OperationId).ToArray();
+        Guid rejectedId = execution.Steps[0].OperationId;
+        var rejected = await catalog.ReadMutationAsync(rejectedId);
+        if (originalIds.Contains(rejectedId) || rejected is not { State: MirrorPulseMutationState.Conflict } ||
+            rejected.Intent.Origin != MirrorPulseMutationOrigin.CoalescedJournal || rejected.Intent.ExpectedRevision != execution.ExpectedRevision ||
+            rejected.Intent.Kind != (moving ? MirrorPulseWorkerChangeKind.Move :
+                controlledCreate ? MirrorPulseWorkerChangeKind.Create : MirrorPulseWorkerChangeKind.ContentUpdate))
+            throw new InvalidDataException("The original rejected effect must remain distinct and unchanged.");
+        if (moving && (rejected.Intent.RelativePath != plan.FinalPath || rejected.Intent.PreviousRelativePath != plan.OriginalPath))
+            throw new InvalidDataException("The rejected Move lost its exact original and final addresses.");
+        var selectedObservation = await catalog.ReadCoalescedConflictRemoteObservationAsync(rejectedId);
+        if (selectedObservation is not null && (selectedObservation.PlanId != plan.PlanId ||
+            selectedObservation.RejectedEffect != rejected.Intent || !selectedObservation.OriginalOperationIds.SequenceEqual(originalIds)))
+            throw new InvalidDataException("The separate observed version must retain the exact rejected effect and original group.");
+        RequireExistingUnredirected(paths.CfSharpStateDatabasePath);
+        await using var store = await MirrorPulseCfSharpStateStoreFactory.Create(paths).OpenAsync(new(paths.SyncRootPath));
+        int pending = 0; var moveOriginals = new List<Guid>();
+        await using (var transaction = await store.BeginTransactionAsync())
+        {
+            foreach (var member in plan.Members)
+                if (await transaction.Operations.GetAsync(member.OperationId) is { } original)
+                {
+                    pending++;
+                    if (moveOnly && (original.Kind is not (CloudStateOperationKind.Move or CloudStateOperationKind.ContentUpdate) ||
+                        original.ItemId != plan.ItemId || original.Sequence != member.Sequence))
+                        throw new InvalidDataException("The pure rename original is not the expected typed SDK journal row.");
+                    if (original.Kind == CloudStateOperationKind.Move) moveOriginals.Add(member.OperationId);
+                }
+            await transaction.RollbackAsync();
+        }
+        Guid? commandId = null, acceptedId = null;
+        string? localHash = null, preservedHash = null, preservedLocalHash = null;
+        Guid? acknowledgementId = null;
+        MirrorPulseNamespaceBirthPlan? originalBirth = null;
+        string? originalBirthOrigin = null;
+        bool? backendAddressDiffers = null;
+        string? currentNativeIdentity = null;
+        if (!completed)
+        {
+            if (moving && moveOriginals.Count == 0) throw new InvalidDataException("The selected group has no actual original SDK Move.");
+            if (moveOnly && moveOriginals.Count != 2) throw new InvalidDataException("The selected single Move must own both original SDK renames.");
+            if (pending != originalIds.Length || (await catalog.ReadCurrentCoalescingKeepBothCommandsAsync(plan.PlanId)).Count != 0)
+                throw new InvalidDataException("Every original must still be pending before the choice.");
+            var conflicts = await catalog.ReadUploadConflictsAsync();
+            foreach (Guid id in originalIds)
+                if (!conflicts.Any(conflict => conflict.InstanceId == route.InstanceId && conflict.ChangeId == id.ToString("D") &&
+                    conflict.RelativePath == route.DirectoryName + "/" + finalPath && conflict.Reason == MirrorPulseConflictReason.StaleRemoteRevision))
+                    throw new InvalidDataException("Each pending original must retain its real conditional conflict.");
+        }
+        else if (keepRemote)
+        {
+            if (pending != 0) throw new InvalidDataException("An original KeepRemote journal row remains pending.");
+            var settled = await ReadKeepRemoteSettlementAsync(paths, catalog, store, plan, rejected, originalIds, selectedObservation);
+            commandId = settled.CommandId;
+            acknowledgementId = settled.AcknowledgementId;
+            localHash = preservedHash = settled.SelectedSha256;
+            preservedLocalHash = settled.PreservedLocalSha256;
+            if (controlledCreate)
+            {
+                originalBirth = await catalog.ReadConflictKeepRemoteOriginalBirthAsync(settled.CommandId)
+                    ?? throw new InvalidDataException("The actual Create choice lost its original local birth.");
+                var birthIntent = await catalog.ReadNamespaceBirthAsync(originalBirth.OperationId)
+                    ?? throw new InvalidDataException("The actual Create choice lost its original birth origin.");
+                originalBirthOrigin = birthIntent.Origin.ToString();
+                var decision = (await catalog.ReadConflictKeepRemoteAsync(settled.CommandId))!;
+                var first = (await catalog.ReadConflictKeepRemoteFileStartAsync(settled.CommandId))!;
+                if (originalBirth.ItemId != plan.ItemId || originalBirth.ItemId != first.Original.Identity.ItemId ||
+                    originalBirth.RemoteRevision is not null || originalBirth.RemoteId != first.Original.Identity.RemoteId ||
+                    originalBirth.RemoteId == decision.Intent.RemoteSource.RemoteId)
+                    throw new InvalidDataException("The original public birth and separately selected backend source differ.");
+                backendAddressDiffers = true;
+                currentNativeIdentity = await ReadCurrentCreateNativeIdentityAsync(root, paths, first,
+                    originalBirth, decision.Intent.RemoteSource.RemoteRevision);
+            }
+        }
+        else
+        {
+            if (pending != 0) throw new InvalidDataException("The complete choice cannot hide an unacknowledged original.");
+            var commands = await catalog.ReadCurrentCoalescingKeepBothCommandsAsync(plan.PlanId);
+            if (commands.Count != 1) throw new InvalidDataException("The original program requires one retained KeepBoth authorization.");
+            commandId = commands[0];
+            var decision = await catalog.ReadConflictKeepBothAsync(commandId.Value)
+                ?? throw new InvalidDataException("The original decision is missing.");
+            var command = await catalog.ReadUserCommandAsync(commandId.Value);
+            if (command is not { Action: "keepboth", State: "resolved" } || command.TargetId != decision.Intent.ConflictId.ToString("D") ||
+                !decision.RetryAuthorized || !decision.OriginalRetriesPrepared || decision.Copy is null || decision.Intent.PlanId != plan.PlanId ||
+                !originalIds.SequenceEqual(decision.Intent.OriginalOperationIds) || decision.Intent.RejectedEffect != rejected.Intent)
+                throw new InvalidDataException("The resolved command must retain its complete original decision and copy proof.");
+            if (selectedObservation is not null && (!selectedObservation.SelectedConflictIds.Contains(decision.Intent.ConflictId) ||
+                selectedObservation.RemoteRevision != decision.Intent.RemoteSource.RemoteRevision))
+                throw new InvalidDataException("The actual choice cannot replace the separately selected remote version.");
+            var conflict = await catalog.ReadUploadConflictAsync(decision.Intent.ConflictId)
+                ?? throw new InvalidDataException("The selected remote conflict disappeared.");
+            await using var copy = await new MirrorPulseConflictCopyStore(paths).OpenRemoteDecisionAsync(commandId.Value, conflict, decision.Intent.RemoteSource);
+            preservedHash = Convert.ToHexString(await SHA256.HashDataAsync(copy.Data));
+            if (copy.Proof != decision.Copy || preservedHash != decision.Copy.Sha256) throw new InvalidDataException("The actual private bytes no longer match their immutable proof.");
+            // Enumerate only MP-owned retry IDs through a read-only connection, then use public records.
+            await using var connection = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = paths.ProductCatalogDatabasePath, Mode = SqliteOpenMode.ReadOnly, Pooling = false }.ToString());
+            await connection.OpenAsync(); await using var query = connection.CreateCommand();
+            query.CommandText = "SELECT operation_id FROM journal_coalescing_retries WHERE plan_id=$plan AND command_id=$command ORDER BY ordinal LIMIT 3;";
+            query.Parameters.AddWithValue("$plan", plan.PlanId.ToString("D")); query.Parameters.AddWithValue("$command", commandId.Value.ToString("D"));
+            var ids = new List<Guid>();
+            await using (var reader = await query.ExecuteReaderAsync()) while (await reader.ReadAsync()) ids.Add(Guid.Parse(reader.GetString(0)));
+            if (ids.Count != 1 || ids[0] == rejectedId || originalIds.Contains(ids[0])) throw new InvalidDataException("The authorized effect must have its own immutable ID.");
+            acceptedId = ids[0];
+            var accepted = await catalog.ReadMutationAsync(acceptedId.Value);
+            var proof = await catalog.ReadContentAcceptanceProofAsync(acceptedId.Value);
+            var receipt = await catalog.ReadContentConfirmationReceiptAsync(acceptedId.Value);
+            if (accepted is not { State: MirrorPulseMutationState.Acknowledged } || accepted.Intent.Origin != MirrorPulseMutationOrigin.CoalescedJournal ||
+                accepted.Intent.Kind != MirrorPulseWorkerChangeKind.ContentUpdate || accepted.Intent.InstanceId != route.InstanceId || accepted.Intent.RootKey != route.UniquenessKey ||
+                accepted.Intent.RelativePath != "cli-roundtrip.txt" || accepted.Intent.ExpectedRevision != decision.Intent.RemoteSource.RemoteRevision ||
+                proof is null || receipt is not { MayAcknowledge: true, Stage: MirrorPulseContentConfirmationStage.Complete } ||
+                receipt.BytesVerified < proof.Length || proof.UploadBinding != accepted.Intent.UploadBinding ||
+                proof.AcceptedRevision != accepted.AcceptedRevision || proof.Sha256 != accepted.Intent.ContentSha256 || proof.Length != accepted.Intent.ContentLength)
+                throw new InvalidDataException("The authorized effect requires actual accepted bytes and native confirmation before original acknowledgments.");
+            byte[] encoded = Convert.FromBase64String(receipt.ObservedPlaceholderIdentity ?? string.Empty);
+            if (encoded.Length is 0 or > 4096 || Convert.ToBase64String(encoded) != receipt.ObservedPlaceholderIdentity)
+                throw new InvalidDataException("The confirmation requires its exact public native identity.");
+            var observed = CloudPlaceholderIdentity.Decode(encoded);
+            if (observed.ItemId != proof.AcceptedItemId || observed.RemoteId != proof.RemoteId ||
+                observed.RemoteRevision != (proof.AcceptedRevision ?? string.Empty))
+                throw new InvalidDataException("The confirmed native identity does not match the accepted effect.");
+            localHash = proof.Sha256;
+        }
+        var result = new CliCoalescingFixtureAudit(1, true, plan.Effect.ToString(), plan.PlanId, originalIds, originalIds.Length,
+            pending, originalIds.Length - pending, execution.ExpectedRevision is not null, rejected.State.ToString(), rejectedId, commandId, acceptedId,
+            localHash, preservedHash, completed)
+        {
+            PendingMoveOriginalOperationIds = moving && !completed ? moveOriginals : null,
+            OriginalExecutionStepKinds = moveOnly ? execution.Steps.Select(step => step.Kind.ToString()).ToArray() : null,
+            MoveOnlyExpectedRevisionSha256 = moveOnly ? HashRevision(execution.ExpectedRevision) : null,
+            UnchangedContentAcceptanceOperationId = moveOnly ? execution.ObservedContent?.AcceptanceOperationId : null,
+            UnchangedContentSha256 = moveOnly ? execution.ObservedContent?.Content.Sha256 : null,
+            PreservedLocalSha256 = preservedLocalHash,
+            AcknowledgementId = acknowledgementId,
+            OriginalBirthOperationId = originalBirth?.OperationId,
+            OriginalBirthOrigin = originalBirthOrigin,
+            OriginalBirthSha256 = originalBirth is null ? null : Convert.ToHexString(SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(originalBirth, JsonOptions))),
+            BackendAddressDiffersFromOriginalBirth = backendAddressDiffers,
+            CurrentNativeIdentitySha256 = currentNativeIdentity,
+            CurrentNativeOriginalBindingVerified = currentNativeIdentity is null ? null : true,
+            SelectedRemoteObservation = selectedObservation is null ? null : new(selectedObservation.Version, selectedObservation.ObservationId,
+                selectedObservation.RejectedEffect.OperationId, selectedObservation.PreviousObservationId, selectedObservation.RefreshCommandId,
+                selectedObservation.OriginalOperationIds, selectedObservation.PreviousConflictIds, selectedObservation.SelectedConflictIds,
+                HashRevision(selectedObservation.RejectedEffect.ExpectedRevision), selectedObservation.OriginalErrorExpectedRevision is not null,
+                HashRevision(selectedObservation.OriginalErrorExpectedRevision), selectedObservation.OriginalErrorActualRevision is not null,
+                HashRevision(selectedObservation.OriginalErrorActualRevision), HashRevision(selectedObservation.RemoteRevision)!,
+                selectedObservation.StartedAt, selectedObservation.ObservedAt)
+        };
+        Console.WriteLine(JsonSerializer.Serialize(result, JsonOptions));
+        return 0;
+    }
+
+    private static string? HashRevision(string? revision) => revision is null ? null : Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(revision)));
+
+    private static void RequireExistingUnredirected(string path)
+    {
+        if (!Path.Exists(path) || (File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0)
+            throw new InvalidDataException("The stopped synthetic oracle requires existing unredirected fixture paths.");
+    }
+}

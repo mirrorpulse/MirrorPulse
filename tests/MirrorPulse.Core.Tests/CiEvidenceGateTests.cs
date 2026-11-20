@@ -18,6 +18,7 @@ public sealed class CiEvidenceGateTests
     [DataRow("installed-old-build", false)]
     [DataRow("native-valid", true)]
     [DataRow("native-missing", false)]
+    [DataRow("native-replaced", false)]
     [DataRow("candidate-valid", true)]
     [DataRow("candidate-source-mismatch", false)]
     [DataRow("candidate-invalid-inventory", false)]
@@ -128,18 +129,9 @@ public sealed class CiEvidenceGateTests
             if (scenario.StartsWith("native-", StringComparison.Ordinal))
             {
                 using JsonDocument catalog = JsonDocument.Parse(await File.ReadAllTextAsync(Path.Combine(repository, "eng", "test-suites.json")));
-                int required = catalog.RootElement.GetProperty("required").GetProperty("native").GetArrayLength();
-                int executed = scenario == "native-valid" ? required : required - 1;
                 string native = Path.Combine(root, "native.json");
-                await File.WriteAllTextAsync(native, JsonSerializer.Serialize(new
-                {
-                    schemaVersion = 1,
-                    suite = "native",
-                    selected = executed,
-                    executed,
-                    skipped = 0,
-                    categories = new[] { new { category = "native", selected = executed, executed, skipped = 0 } },
-                }));
+                await File.WriteAllTextAsync(native, JsonSerializer.Serialize(CiNamespaceEvidenceFixture.CreateNative(
+                    catalog.RootElement, scenario == "native-missing", scenario == "native-replaced")));
                 static string Quote(string value) => "'" + value.Replace("'", "''", StringComparison.Ordinal) + "'";
                 string wrapper = Path.Combine(root, "collect.ps1");
                 await File.WriteAllTextAsync(wrapper,
@@ -162,6 +154,11 @@ public sealed class CiEvidenceGateTests
                 Assert.AreEqual(scenario == "candidate-valid" ? 3 : 2, json.RootElement.GetProperty("artifacts").GetArrayLength());
                 if (scenario == "candidate-valid")
                     Assert.AreEqual(64, json.RootElement.GetProperty("officialAdapterCandidateSha256").GetString()!.Length);
+                if (scenario == "native-valid")
+                {
+                    var suite = json.RootElement.GetProperty("tests").EnumerateArray().Single(item => item.GetProperty("suite").GetString() == "native");
+                    Assert.AreEqual(suite.GetProperty("executed").GetInt32(), suite.GetProperty("results").GetArrayLength());
+                }
                 Assert.AreEqual(40, json.RootElement.GetProperty("sourceSha").GetString()!.Length);
             }
         }

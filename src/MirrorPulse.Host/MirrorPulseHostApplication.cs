@@ -23,7 +23,7 @@ namespace MirrorPulse.Host;
 /// <summary>
 /// Owns the complete non-UI Host composition for one current user.
 /// </summary>
-public sealed class MirrorPulseHostApplication : IAsyncDisposable
+public sealed partial class MirrorPulseHostApplication : IAsyncDisposable
 {
     private readonly MirrorPulseStoragePaths _paths;
     private readonly MirrorPulseConfigurationStore _configurationStore;
@@ -33,6 +33,9 @@ public sealed class MirrorPulseHostApplication : IAsyncDisposable
     private readonly MirrorPulseConflictCenter _conflictCenter;
     private readonly MirrorPulseSystemNotificationPublisher _systemNotifications;
     private readonly AdapterInstanceProcessSupervisor _workers;
+    private readonly MirrorPulseNamespaceExecutionSession _namespaceExecution;
+    private readonly MirrorPulseNamespaceActor _namespaceActor;
+    private readonly MirrorPulseNamespaceWorkAdmission _namespaceWork;
     private readonly MirrorPulseCloudHostSession _session;
     private readonly MirrorPulseActiveRemotePoller _remotePoller;
     private readonly MirrorPulseInstanceScheduler _remoteScheduler;
@@ -44,6 +47,9 @@ public sealed class MirrorPulseHostApplication : IAsyncDisposable
     private MirrorPulseLifecycleState _state = MirrorPulseLifecycleState.Created;
     private DateTimeOffset _startedAt;
     private string? _requestedAction;
+    private string? _startupPhase;
+    private readonly TaskCompletionSource _startupReady = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private bool _lifetimeDrained;
     private bool _disposed;
 
     private MirrorPulseHostApplication(
@@ -55,6 +61,9 @@ public sealed class MirrorPulseHostApplication : IAsyncDisposable
         MirrorPulseConflictCenter conflictCenter,
         MirrorPulseSystemNotificationPublisher systemNotifications,
         AdapterInstanceProcessSupervisor workers,
+        MirrorPulseNamespaceExecutionSession namespaceExecution,
+        MirrorPulseNamespaceActor namespaceActor,
+        MirrorPulseNamespaceWorkAdmission namespaceWork,
         MirrorPulseCloudHostSession session,
         MirrorPulseActiveRemotePoller remotePoller,
         MirrorPulseInstanceScheduler remoteScheduler,
@@ -68,6 +77,9 @@ public sealed class MirrorPulseHostApplication : IAsyncDisposable
         _conflictCenter = conflictCenter;
         _systemNotifications = systemNotifications;
         _workers = workers;
+        _namespaceExecution = namespaceExecution;
+        _namespaceActor = namespaceActor;
+        _namespaceWork = namespaceWork;
         _session = session;
         _remotePoller = remotePoller;
         _remoteScheduler = remoteScheduler;
@@ -80,15 +92,21 @@ public sealed class MirrorPulseHostApplication : IAsyncDisposable
 
     public bool IsRunning => _state is MirrorPulseLifecycleState.Running or MirrorPulseLifecycleState.Degraded;
 
+    public bool ShutdownRequested => _shutdown.IsCancellationRequested;
+
     public MirrorPulseHostStatus GetHostStatus() => new(
-        (_state == MirrorPulseLifecycleState.Running && _session.JournalHealth is { Healthy: false }
+        (_state == MirrorPulseLifecycleState.Running && (_session.JournalHealth is { Healthy: false } ||
+            _topology.Roots.Any(root => !_namespaceWork.IsAdmitted(root.RootId) &&
+                (root.State == RootRegistrationState.Active || root.State == RootRegistrationState.Disabled &&
+                    _session.NamespaceStartupResults.Any(result => result.RootId == root.RootId && result.RecoveryCode is not null))))
             ? MirrorPulseLifecycleState.Degraded : _state).ToString(),
         Environment.ProcessId,
         MirrorPulseControlPipeNames.CurrentUserV1(),
         _startedAt,
-        IsRunning,
-        IsRunning,
-        _requestedAction);
+        IsRunning || _state == MirrorPulseLifecycleState.Starting,
+        IsRunning || _state == MirrorPulseLifecycleState.Starting,
+        _requestedAction,
+        _startupPhase);
 
     public static async Task<MirrorPulseHostApplication> CreateAsync(
         MirrorPulseStoragePaths paths,
@@ -107,6 +125,9 @@ public sealed class MirrorPulseHostApplication : IAsyncDisposable
         MirrorPulseProductCatalog? catalog = null;
         MirrorPulseSystemNotificationPublisher? systemNotifications = null;
         AdapterInstanceProcessSupervisor? workers = null;
+        MirrorPulseNamespaceExecutionSession? namespaceExecution = null;
+        MirrorPulseNamespaceActor? namespaceActor = null;
+        MirrorPulseNamespaceWorkAdmission? namespaceWork = null;
         MirrorPulseCloudHostSession? session = null;
         MirrorPulseActiveRemotePoller? remotePoller = null;
         var remoteScheduler = new MirrorPulseInstanceScheduler();
@@ -122,6 +143,10 @@ public sealed class MirrorPulseHostApplication : IAsyncDisposable
                 .ConfigureAwait(false);
             MirrorPulseAdapterTopology topology = await catalog.ReadAdapterTopologyAsync(cancellationToken)
                 .ConfigureAwait(false);
+            var identityResolver = new MirrorPulseRemoteIdentityResolver(catalog);
+            var rootRouter = new MirrorPulseRootRouter(paths.SyncRootPath, topology.Roots,
+                await catalog.ReadManagedRootNamesAsync(cancellationToken).ConfigureAwait(false), identityResolver);
+            var namespaceFence = new MirrorPulseRemoteNamespaceFence(rootRouter, catalog);
             var conflictCenter = new MirrorPulseConflictCenter();
             systemNotifications = new MirrorPulseSystemNotificationPublisher();
             var conflictNotifications = new MirrorPulseConflictNotificationBridge(
@@ -134,12 +159,19 @@ public sealed class MirrorPulseHostApplication : IAsyncDisposable
                 InstanceId instanceId,
                 CloudRemoteChangeBatch batch,
                 CancellationToken batchCancellationToken)
+                => await ApplyAdmittedCloudRemoteBatchAsync(instanceId, batch, null, batchCancellationToken).ConfigureAwait(false);
+
+            async ValueTask<MirrorPulseRemotePollApplyOutcome> ApplyAdmittedCloudRemoteBatchAsync(
+                InstanceId instanceId, CloudRemoteChangeBatch batch, MirrorPulseNamespaceWorkAdmission.WorkLease? admission,
+                CancellationToken batchCancellationToken)
             {
-                CloudRemoteApplyResult result = await (currentSession ??
-                    throw new InvalidOperationException("The Cloud Files session has not started."))
-                    .ApplyRemoteBatchAsync(
-                        instanceId, batch, catalog, conflictCenter, conflictNotifications,
-                        cancellationToken: batchCancellationToken).ConfigureAwait(false);
+                await namespaceFence.EnsureApplyAllowedAsync(instanceId, batch, batchCancellationToken).ConfigureAwait(false);
+                var current = currentSession ?? throw new InvalidOperationException("The Cloud Files session has not started.");
+                MirrorPulseRemoteBatchResult result = admission is null
+                    ? await current.ApplyRemoteBatchAsync(instanceId, batch, catalog, conflictCenter, conflictNotifications,
+                        cancellationToken: batchCancellationToken).ConfigureAwait(false)
+                    : await current.ApplyAdmittedRemoteBatchAsync(instanceId, batch, catalog, conflictCenter, conflictNotifications,
+                        admission, cancellationToken: batchCancellationToken).ConfigureAwait(false);
                 if (result.RequiresRetry)
                 {
                     await catalog.SaveInstanceRuntimeStateAsync(
@@ -156,89 +188,124 @@ public sealed class MirrorPulseHostApplication : IAsyncDisposable
             {
                 AdapterRemoteChangeBatch adapterBatch = payload.Deserialize<AdapterRemoteChangeBatch>()
                     ?? throw new InvalidDataException("The Adapter remote batch payload is empty.");
-                CloudRemoteChangeBatch batch = MirrorPulseAdapterRemoteBatchMapper.Map(
-                    instanceId, topology.Roots, adapterBatch);
                 await remoteScheduler.RunAsync(instanceId, async token =>
                 {
                     // A streamed batch must not overtake the immutable polling intent.
                     if (await catalog.ReadPendingRemoteBatchAsync(instanceId, token).ConfigureAwait(false) is not null)
                         throw new InvalidOperationException("A remote polling batch must converge before streamed changes apply.");
-                    return await ApplyCloudRemoteBatchAsync(instanceId, batch, token).ConfigureAwait(false);
+                    MirrorPulseRemoteBatchResult result = await (currentSession ??
+                        throw new InvalidOperationException("The Cloud Files session has not started."))
+                        .ApplyAdapterRemoteBatchAsync(instanceId, adapterBatch, catalog, conflictCenter, conflictNotifications,
+                            cancellationToken: token).ConfigureAwait(false);
+                    if (result.RequiresRetry)
+                        await catalog.SaveInstanceRuntimeStateAsync(new(instanceId, "Remote retry", false, null, "RemoteBatchRetry"), token).ConfigureAwait(false);
+                    return MirrorPulseRemotePollApplyOutcome.FromResult(result);
                 }, batchCancellationToken).ConfigureAwait(false);
             }
 
             workers = new AdapterInstanceProcessSupervisor(catalog, credentialStore, ApplyRemoteBatchAsync,
                 Path.Combine(paths.DataRootPath, "logs", "workers"));
-            var rootRouter = new MirrorPulseRootRouter(paths.SyncRootPath, topology.Roots);
-            var directorySource = new MirrorPulseAdapterDirectoryPageSource(workers);
-            var provider = new MirrorPulseDemandProvider(rootRouter, workers, directorySource);
+            // Capture the normal Host user before local namespace work can impersonate its role.
+            // All source RPC and lazy range bodies share this boundary, including polling and rescan.
+            namespaceExecution = new MirrorPulseNamespaceExecutionSession();
+            namespaceActor = new MirrorPulseNamespaceActor();
+            namespaceWork = new MirrorPulseNamespaceWorkAdmission(rootRouter.Registrations.Select(root => root.RootId));
+            var source = new MirrorPulseNormalUserWorkerTransport(namespaceExecution,
+                workers, workers, workers, workers, workers);
+            var directorySource = new MirrorPulseAdapterDirectoryPageSource(source);
+            var provider = new MirrorPulseDemandProvider(rootRouter, source, directorySource, namespaceWork, catalog);
             session = MirrorPulseCloudHostSession.CreateDefault(
-                paths, topology.Instances, topology.Roots, provider, workers, workers,
+                paths, topology.Instances, topology.Roots, provider, source, source,
                 rootRouter, catalog, instanceId => topology.Instances.Any(instance =>
                     instance.InstanceId == instanceId && instance.Enabled),
-                conflictCenter, conflictNotifications, workers, remoteScheduler);
+                conflictCenter, conflictNotifications, source, remoteScheduler, namespaceExecution, namespaceActor,
+                namespaceWork, initializeNamespaceOnStart: true,
+                transfers: new(source, source, source, source, workers.GetConnectedProtocolVersion, source));
             currentSession = session;
             var remoteSnapshotStore = new MirrorPulseFileRemotePollSnapshotStore(paths.DataRootPath);
             remotePoller = new MirrorPulseActiveRemotePoller(
                 directorySource, topology.Instances, topology.Roots, ApplyCloudRemoteBatchAsync,
                 snapshotStore: remoteSnapshotStore,
-                pendingStore: new MirrorPulseCatalogRemotePollPendingStore(catalog), scheduler: remoteScheduler);
+                pendingStore: new MirrorPulseCatalogRemotePollPendingStore(catalog), scheduler: remoteScheduler,
+                mayPoll: namespaceFence.CanPollAsync, currentRoots: () => rootRouter.Registrations, namespaceWork: namespaceWork,
+                diagnosticsDirectory: Path.Combine(paths.DataRootPath, "logs", "remote-poll"), identityResolver: identityResolver,
+                applyAdmitted: ApplyAdmittedCloudRemoteBatchAsync);
 
             var application = new MirrorPulseHostApplication(
                 paths, configurationStore, configuration, hostLease, catalog, conflictCenter, systemNotifications,
-                workers, session, remotePoller, remoteScheduler, topology);
+                workers, namespaceExecution, namespaceActor, namespaceWork, session, remotePoller, remoteScheduler, topology);
             application.InitializeControlPlane(credentialStore);
             return application;
         }
-        catch
+        catch (Exception startupFailure)
         {
-            if (remotePoller is not null)
-            {
-                await remotePoller.DisposeAsync().ConfigureAwait(false);
-            }
-
-            await remoteScheduler.DisposeAsync().ConfigureAwait(false);
-
-            if (session is not null)
-            {
-                await session.DisposeAsync().ConfigureAwait(false);
-            }
-
-            if (workers is not null)
-            {
-                await workers.DisposeAsync().ConfigureAwait(false);
-            }
-
-            if (catalog is not null)
-            {
-                await catalog.DisposeAsync().ConfigureAwait(false);
-            }
-
-            systemNotifications?.Dispose();
-            hostLease.Dispose();
+            await MirrorPulseHostResourceCleanup.RunAsync([
+                () => remotePoller?.DisposeAsync() ?? ValueTask.CompletedTask,
+                remoteScheduler.DisposeAsync,
+                () => namespaceActor?.DisposeAsync() ?? ValueTask.CompletedTask,
+                () => session?.DisposeAsync() ?? ValueTask.CompletedTask,
+                () => namespaceWork?.DisposeAsync() ?? ValueTask.CompletedTask,
+                () => workers?.DisposeAsync() ?? ValueTask.CompletedTask,
+                () => namespaceExecution?.DisposeAsync() ?? ValueTask.CompletedTask,
+                () => catalog?.DisposeAsync() ?? ValueTask.CompletedTask,
+                () => { systemNotifications?.Dispose(); return ValueTask.CompletedTask; },
+                () => { hostLease.Dispose(); return ValueTask.CompletedTask; }
+            ], startupFailure).ConfigureAwait(false);
             throw;
         }
     }
 
-    public async Task StartAsync(CancellationToken cancellationToken = default)
+    public Task StartAsync(CancellationToken cancellationToken = default)
+    {
+        BeginStartup();
+        return StartCoreAsync(cancellationToken);
+    }
+
+    /// <summary>Serves lifecycle control throughout initialization without admitting SDK-dependent requests early.</summary>
+    public async Task RunAsync(CancellationToken cancellationToken = default)
+    {
+        BeginStartup();
+        using var stop = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _shutdown.Token);
+        try { await MirrorPulseHostStartupLifetime.RunAsync(ServeAsync, StartCoreAsync, stop.Token).ConfigureAwait(false); }
+        finally { _lifetimeDrained = true; }
+    }
+
+    private void BeginStartup()
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
-        if (_state is MirrorPulseLifecycleState.Starting or MirrorPulseLifecycleState.Running)
+        if (_state != MirrorPulseLifecycleState.Created)
         {
             throw new InvalidOperationException("The MirrorPulse Host is already running.");
         }
 
         _hostLease.EnsureHeld();
         _state = MirrorPulseLifecycleState.Starting;
+        _startedAt = DateTimeOffset.UtcNow;
+        _requestedAction = null;
+        _startupPhase = "CloudFiles";
+    }
+
+    private async Task StartCoreAsync(CancellationToken cancellationToken)
+    {
+        using var stop = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _shutdown.Token);
         try
         {
-            await _session.StartAsync(cancellationToken).ConfigureAwait(false);
+            await _session.StartAsync(stop.Token).ConfigureAwait(false);
+            stop.Token.ThrowIfCancellationRequested();
+            if (_state == MirrorPulseLifecycleState.Stopping) return;
+            _startupPhase = "Adapters";
             await _workers.StartAsync(_topology).ConfigureAwait(false);
-            await _remotePoller.StartAsync(cancellationToken).ConfigureAwait(false);
-            _startedAt = DateTimeOffset.UtcNow;
-            _requestedAction = null;
+            stop.Token.ThrowIfCancellationRequested();
+            if (_state == MirrorPulseLifecycleState.Stopping) return;
+            _startupPhase = "RemotePolling";
+            await _remotePoller.StartAsync(stop.Token).ConfigureAwait(false);
+            stop.Token.ThrowIfCancellationRequested();
+            if (_state == MirrorPulseLifecycleState.Stopping) return;
+            _startupPhase = null;
             _state = MirrorPulseLifecycleState.Running;
+            _startupReady.TrySetResult();
         }
+        catch (OperationCanceledException) when (stop.IsCancellationRequested) { _state = MirrorPulseLifecycleState.Stopping; throw; }
         catch
         {
             _state = MirrorPulseLifecycleState.Failed;
@@ -249,7 +316,7 @@ public sealed class MirrorPulseHostApplication : IAsyncDisposable
     public async Task ServeAsync(CancellationToken cancellationToken = default)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
-        if (!IsRunning)
+        if (!IsRunning && _state != MirrorPulseLifecycleState.Starting)
         {
             throw new InvalidOperationException("The MirrorPulse Host must be running before serving control pipes.");
         }
@@ -265,10 +332,20 @@ public sealed class MirrorPulseHostApplication : IAsyncDisposable
         }
 
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _shutdown.Token);
-        _serveTask = Task.WhenAll(
-            _statusPipe.ServeAsync(linked.Token),
-            _controlPipe.ServeAsync(linked.Token));
+        _serveTask = Task.WhenAll(ServeOwnedAsync(ServeLegacyAsync), ServeOwnedAsync(_controlPipe.ServeAsync));
         await _serveTask.ConfigureAwait(false);
+
+        async Task ServeLegacyAsync(CancellationToken token)
+        {
+            await _startupReady.Task.WaitAsync(token).ConfigureAwait(false);
+            await _statusPipe.ServeAsync(token).ConfigureAwait(false);
+        }
+
+        async Task ServeOwnedAsync(Func<CancellationToken, Task> serve)
+        {
+            try { await serve(linked.Token).ConfigureAwait(false); }
+            catch { await linked.CancelAsync().ConfigureAwait(false); throw; }
+        }
     }
 
     public async Task<MirrorPulseAppStatusResponse> ReadStatusAsync(
@@ -290,7 +367,8 @@ public sealed class MirrorPulseHostApplication : IAsyncDisposable
                 instance.DisplayName, instance.Enabled,
                 instance.Enabled ? runtime?.Phase ?? "Not running" : "Offline",
                 cursor?.CursorFingerprint, cursor?.UpdatedAt, runtime?.LastSuccessfulSync,
-                runtime?.LastErrorCode, runtime?.TransferProgress));
+                runtime?.LastErrorCode, runtime?.TransferProgress)
+            { WorkerConnected = instance.Enabled && _workers.IsConnected(instance.InstanceId) });
         }
 
         IReadOnlySet<Guid> snoozed = await _catalog.ReadSnoozedConflictIdsAsync(cancellationToken)
@@ -381,6 +459,26 @@ public sealed class MirrorPulseHostApplication : IAsyncDisposable
         return Task.FromResult(ToControlSettings(_configuration));
     }
 
+    public async Task<IReadOnlyList<MirrorPulseControlRootStatus>> ReadRootsAsync(CancellationToken cancellationToken = default)
+    {
+        MirrorPulseControlTopology topology = await ReadTopologyAsync(cancellationToken).ConfigureAwait(false);
+        IReadOnlyList<MirrorPulseRootRenameIntent> renames = await _catalog.ReadManagedRootRenamesAsync(cancellationToken).ConfigureAwait(false);
+        IReadOnlyList<RootId> deferred = await _catalog.ReadDeferredRescanRootsAsync(cancellationToken).ConfigureAwait(false);
+        return topology.Roots.Select(root =>
+        {
+            RootId id = RootId.Parse(root.RootId);
+            MirrorPulseRootRenameIntent? pending = renames.SingleOrDefault(intent => intent.RootId == id && intent.IsPending);
+            var rename = pending is null ? null : new MirrorPulseControlRootRename(pending.OperationId.ToString("D"),
+                pending.SourceName, pending.TargetName, pending.Phase.ToString(), pending.UpdatedAt);
+            bool ready = _namespaceWork.IsAdmitted(id);
+            var startup = _session.NamespaceStartupResults.SingleOrDefault(result => result.RootId == id);
+            return new MirrorPulseControlRootStatus(root, pending is null && (ready || root.State == nameof(RootRegistrationState.Disabled)) ? root.State : "NamespaceRecovery",
+                deferred.Contains(id) || pending is not null, rename, ready,
+                ready || root.State == nameof(RootRegistrationState.Disabled) && startup?.RecoveryCode is null ? null : startup?.OperationId,
+                ready ? null : startup?.RecoveryCode);
+        }).ToArray();
+    }
+
     private void InitializeControlPlane(ISecureCredentialStore credentialStore)
     {
         var provisioner = new MirrorPulseAdapterInstanceProvisioner(
@@ -417,9 +515,390 @@ public sealed class MirrorPulseHostApplication : IAsyncDisposable
             GetOperationAsync,
             GetOperationAsync,
             CancelOperationAsync,
-            RemoveAdapterAsync)
+            RemoveAdapterAsync,
+            ExecuteNamespaceMemberMoveAsync,
+            ExecuteNamespaceBirthRecoveryAsync)
             .Register(dispatcher);
-        _controlPipe = new MirrorPulseControlPipeServer(dispatcher.DispatchAsync);
+        dispatcher.Register<ControlEmptyArguments, IReadOnlyList<MirrorPulseControlRootStatus>>(
+            MirrorPulseControlCommands.RootList, async (_, token) => await ReadRootsAsync(token).ConfigureAwait(false));
+        dispatcher.Register<ConflictRefreshVersionArguments, MirrorPulseControlConflictVersionRefresh>(
+            MirrorPulseControlCommands.ConflictRefreshVersion, async (arguments, token) =>
+                await RefreshConflictVersionAsync(arguments, token).ConfigureAwait(false));
+        dispatcher.Register<RootRecoverArguments, MirrorPulseControlRootRecovery>(
+            MirrorPulseControlCommands.RootRecover, RecoverRootRenameAsync);
+        dispatcher.Register<RootPrepareRenameArguments, MirrorPulseControlRootRenamePreparation>(
+            MirrorPulseControlCommands.RootPrepareRename, PrepareRootRenameAsync);
+        dispatcher.Register<RootExecuteRenameArguments, MirrorPulseControlRootExecution>(
+            MirrorPulseControlCommands.RootExecuteRename, ExecuteRootRenameAsync);
+        dispatcher.Register<RootCancelRenameArguments, MirrorPulseControlRootCancellation>(
+            MirrorPulseControlCommands.RootCancelRename, CancelRootRenameAsync);
+        dispatcher.Register<NamespaceMemberInspectArguments, MirrorPulseControlNamespaceMemberInspection>(
+            MirrorPulseControlCommands.NamespaceMemberInspect, InspectNamespaceMemberAsync);
+        dispatcher.Register<NamespaceMemberTreeArguments, IReadOnlyList<MirrorPulseControlNamespaceMemberTreeEntry>>(
+            MirrorPulseControlCommands.NamespaceMemberTree, ReadNamespaceMemberTreeAsync);
+        dispatcher.Register<NamespaceMemberPrepareMoveArguments, MirrorPulseControlNamespaceMemberMovePreparation>(
+            MirrorPulseControlCommands.NamespaceMemberPrepareMove, PrepareNamespaceMemberMoveAsync);
+        dispatcher.Register<NamespaceMemberCreateArguments, MirrorPulseControlNamespaceMemberCreation>(
+            MirrorPulseControlCommands.NamespaceMemberCreate, CreateNamespaceMemberAsync);
+        dispatcher.Register<NamespaceMemberPrepareImportArguments, MirrorPulseControlNamespaceImportPreparation>(
+            MirrorPulseControlCommands.NamespaceMemberPrepareImport, PrepareNamespaceImportAsync);
+        dispatcher.Register<NamespaceMemberImportArguments, MirrorPulseControlNamespaceMemberCreation>(
+            MirrorPulseControlCommands.NamespaceMemberImport, ExecuteNamespaceImportAsync);
+        dispatcher.Register<NamespaceMemberImportStatusArguments, MirrorPulseControlNamespaceImportStatus>(
+            MirrorPulseControlCommands.NamespaceMemberImportStatus, ReadNamespaceImportStatusAsync);
+        dispatcher.Register<NamespaceMemberPrepareReplaceArguments, MirrorPulseControlNamespaceReplacementPreparation>(
+            MirrorPulseControlCommands.NamespaceMemberPrepareReplace, PrepareNamespaceReplacementAsync);
+        dispatcher.Register<NamespaceMemberReplaceArguments, MirrorPulseControlNamespaceReplacementCompletion>(
+            MirrorPulseControlCommands.NamespaceMemberReplace, ExecuteNamespaceReplacementAsync);
+        dispatcher.Register<NamespaceMemberReplacementStatusArguments, MirrorPulseControlNamespaceReplacementStatus>(
+            MirrorPulseControlCommands.NamespaceMemberReplacementStatus, ReadNamespaceReplacementStatusAsync);
+        dispatcher.Register<NamespaceProtectionCapturesArguments, IReadOnlyList<MirrorPulseControlPermissionCapture>>(
+            MirrorPulseControlCommands.NamespaceProtectionCaptures, ReadNamespacePermissionCapturesAsync);
+        dispatcher.Register<NamespaceProtectionRecoverTreeArguments, MirrorPulseControlOriginalTreeRecovery>(
+            MirrorPulseControlCommands.NamespaceProtectionRecoverTree, RecoverNamespaceOriginalTreeAsync);
+        dispatcher.Register<NamespaceProtectionInitializeArguments, MirrorPulseControlNamespaceInitialization>(
+            MirrorPulseControlCommands.NamespaceProtectionInitialize, InitializeNamespaceProtectionAsync);
+        dispatcher.Register<NamespaceProtectionRecoverCurrentArguments, MirrorPulseControlNamespaceInitialization>(
+            MirrorPulseControlCommands.NamespaceProtectionRecoverCurrent, RecoverNamespaceCurrentTreeAsync);
+        dispatcher.Register<NamespaceProtectionRecoverRootArguments, MirrorPulseControlNamespaceInitialization>(
+            MirrorPulseControlCommands.NamespaceProtectionRecoverRoot, RecoverNamespaceRootAsync);
+        dispatcher.Register<NamespaceProtectionInitializationStatusArguments, MirrorPulseControlNamespaceInitialization>(
+            MirrorPulseControlCommands.NamespaceProtectionInitializationStatus, ReadNamespaceInitializationStatusAsync);
+        dispatcher.Register<NamespaceProtectionInitializationsArguments, IReadOnlyList<MirrorPulseControlNamespaceInitialization>>(
+            MirrorPulseControlCommands.NamespaceProtectionInitializations, ReadNamespaceInitializationsAsync);
+        dispatcher.Register<NamespaceMemberPrepareRetirementArguments, MirrorPulseControlNamespaceMemberRetirementPreparation>(
+            MirrorPulseControlCommands.NamespaceMemberPrepareRetirement, PrepareNamespaceMemberRetirementAsync);
+        dispatcher.Register<NamespaceMemberRetirementArguments, MirrorPulseControlNamespaceMemberRetirementResult>(
+            MirrorPulseControlCommands.NamespaceMemberRetirement, ExecuteNamespaceMemberRetirementAsync);
+        dispatcher.Register<NamespaceMemberRetirementStatusArguments, MirrorPulseControlNamespaceMemberRetirementResult>(
+            MirrorPulseControlCommands.NamespaceMemberRetirementStatus, ReadNamespaceMemberRetirementAsync);
+        RegisterRemoteRetirementQueries(dispatcher);
+        RegisterRemoteDeleteRecovery(dispatcher);
+        RegisterRemoteUpdateRecovery(dispatcher);
+        RegisterTransferQueries(dispatcher);
+        dispatcher.Register<NamespaceMemberMoveStatusArguments, MirrorPulseControlNamespaceMemberMoveStatus>(
+            MirrorPulseControlCommands.NamespaceMemberMoveStatus, ReadNamespaceMemberMoveStatusAsync);
+        _controlPipe = new MirrorPulseControlPipeServer((request, token) =>
+            MirrorPulseControlStartupAdmission.Reject(_state, request) is { } rejection
+                ? ValueTask.FromResult(rejection) : dispatcher.DispatchAsync(request, token));
+    }
+
+    private async ValueTask<MirrorPulseControlRootRecovery> RecoverRootRenameAsync(RootRecoverArguments arguments,
+        CancellationToken cancellationToken)
+    {
+        MirrorPulseManagedRootRenameRecovery recovery = await _session.RecoverManagedRootRenameAsync(
+            arguments.OperationId, cancellationToken).ConfigureAwait(false);
+        CloudDirectoryMoveReconciliationResult? receipt = recovery.LibraryResult;
+        return new(recovery.Intent.OperationId, recovery.Intent.RootId.ToString(), recovery.Intent.Phase.ToString(),
+            receipt?.NativeMoveObserved, receipt?.DurableProjectionCommitted, receipt?.RequiresFullRescan,
+            receipt?.Outcome.ToString(), receipt?.Stage.ToString(), receipt?.NativeHResult);
+    }
+
+    private async ValueTask<MirrorPulseControlRootRenamePreparation> PrepareRootRenameAsync(
+        RootPrepareRenameArguments arguments, CancellationToken cancellationToken)
+    {
+        if (arguments.RootId == Guid.Empty) throw new ArgumentException("A root ID is required.", nameof(arguments));
+        ArgumentException.ThrowIfNullOrWhiteSpace(arguments.Label);
+        var history = await MirrorPulseRootLabelFailureDiagnostics.RunPreparationAsync(arguments.RootId,
+            () => _session.PrepareManagedRootRenameAsync(RootId.Parse(arguments.RootId.ToString("D")), arguments.Label, cancellationToken),
+            async entry =>
+            {
+                using var log = new LocalRollingLogWriter(Path.Combine(_paths.DataRootPath, "logs", "root-labels"));
+                await log.WriteAsync(entry, CancellationToken.None).ConfigureAwait(false);
+            }).ConfigureAwait(false);
+        return new(history.Intent.OperationId.ToString("D"), history.Intent.RootId.ToString(), history.Intent.SourceName,
+            history.Intent.TargetName, history.Intent.Phase.ToString(), history.Intent.UpdatedAt);
+    }
+
+    private async ValueTask<MirrorPulseControlRootExecution> ExecuteRootRenameAsync(RootExecuteRenameArguments arguments,
+        CancellationToken cancellationToken)
+    {
+        if (arguments.OperationId == Guid.Empty) throw new ArgumentException("The original Label operation is required.", nameof(arguments));
+        var result = await MirrorPulseRootLabelExecutionFailureDiagnostics.RunWithProgressAsync(arguments.OperationId,
+            () => _session.ExecuteManagedRootRenameAsync(arguments.OperationId, cancellationToken),
+            async entry =>
+            {
+                using var log = new LocalRollingLogWriter(Path.Combine(_paths.DataRootPath, "logs", "root-labels"));
+                await log.WriteAsync(entry, CancellationToken.None).ConfigureAwait(false);
+            }).ConfigureAwait(false);
+        return new(result.Intent.OperationId, result.Intent.RootId.ToString(), result.Intent.Phase.ToString(),
+            result.Intent.SourceName, result.Intent.TargetName, result.CurrentDirectoryName, result.MemberCount,
+            result.CurrentTreeAudited, result.NamespaceReady);
+    }
+
+    private async ValueTask<MirrorPulseControlRootCancellation> CancelRootRenameAsync(RootCancelRenameArguments arguments,
+        CancellationToken cancellationToken)
+    {
+        if (arguments.OperationId == Guid.Empty) throw new ArgumentException("The original Label operation is required.", nameof(arguments));
+        var result = await MirrorPulseRootLabelCancellationFailureDiagnostics.RunWithProgressAsync(arguments.OperationId,
+            () => _session.CancelManagedRootRenameAsync(arguments.OperationId, cancellationToken),
+            async entry =>
+            {
+                using var log = new LocalRollingLogWriter(Path.Combine(_paths.DataRootPath, "logs", "root-labels"));
+                await log.WriteAsync(entry, CancellationToken.None).ConfigureAwait(false);
+            }).ConfigureAwait(false);
+        return new(result.Intent.OperationId, result.Intent.RootId.ToString(), result.Intent.Phase.ToString(),
+            result.Intent.SourceName, result.Intent.TargetName, result.CancelledAt, result.CurrentDirectoryName,
+            result.MemberCount, result.CurrentTreeAudited, result.NamespaceReady);
+    }
+
+    private async ValueTask<MirrorPulseControlNamespaceMemberCreation> CreateNamespaceMemberAsync(
+        NamespaceMemberCreateArguments arguments, CancellationToken cancellationToken)
+    {
+        if (arguments.OperationId == Guid.Empty || arguments.ParentMemberId == Guid.Empty)
+            throw new ArgumentException("Operation and parent member IDs are required.", nameof(arguments));
+        ArgumentException.ThrowIfNullOrWhiteSpace(arguments.Name);
+        var member = await _session.CreateNamespaceMemberAsync(arguments.OperationId, arguments.ParentMemberId,
+            arguments.Name, arguments.IsDirectory, cancellationToken).ConfigureAwait(false);
+        return new(arguments.OperationId, member.MemberId, member.ParentMemberId!.Value, member.RelativePath, member.IsDirectory, true);
+    }
+
+    private async ValueTask<MirrorPulseControlNamespaceImportPreparation> PrepareNamespaceImportAsync(
+        NamespaceMemberPrepareImportArguments arguments, CancellationToken cancellationToken)
+    {
+        var plan = await _session.PrepareNamespaceImportAsync(arguments.OperationId, arguments.ParentMemberId,
+            arguments.Name, arguments.SourcePath, cancellationToken).ConfigureAwait(false);
+        var content = plan.Content ?? throw new InvalidDataException("The prepared import has no content intent.");
+        return new(plan.OperationId, arguments.ParentMemberId, arguments.Name, content.Length, content.Sha256, plan.PreparedAt);
+    }
+
+    private async ValueTask<MirrorPulseControlNamespaceMemberCreation> ExecuteNamespaceImportAsync(
+        NamespaceMemberImportArguments arguments, CancellationToken cancellationToken)
+    {
+        var member = await _session.ExecuteNamespaceImportAsync(arguments.OperationId, cancellationToken).ConfigureAwait(false);
+        return new(arguments.OperationId, member.MemberId, member.ParentMemberId!.Value, member.RelativePath, member.IsDirectory, true);
+    }
+
+    private async ValueTask<MirrorPulseControlNamespaceImportStatus> ReadNamespaceImportStatusAsync(
+        NamespaceMemberImportStatusArguments arguments, CancellationToken cancellationToken)
+    {
+        var status = await _session.ReadNamespaceImportStatusAsync(arguments.OperationId, cancellationToken).ConfigureAwait(false);
+        return new(status.OperationId, status.RelativePath, status.Phase, status.Length, status.Sha256, status.Started,
+            status.OriginalBindingRecorded, status.ContentRecorded, status.Converted, status.Protected, status.Registered, status.RequiresRecovery);
+    }
+
+    private async ValueTask<MirrorPulseControlNamespaceReplacementPreparation> PrepareNamespaceReplacementAsync(
+        NamespaceMemberPrepareReplaceArguments arguments, CancellationToken cancellationToken)
+    {
+        var prepared = await _session.PrepareNamespaceReplacementAsync(arguments.OperationId, arguments.MemberId, arguments.SourcePath, cancellationToken).ConfigureAwait(false);
+        return new(arguments.OperationId, prepared.Intent.MemberId, prepared.Intent.Original.Context.Location.RelativePath,
+            prepared.Intent.Content.Length, prepared.Intent.Content.Sha256, prepared.Intent.PreparedAt);
+    }
+
+    private async ValueTask<IReadOnlyList<MirrorPulseControlPermissionCapture>> ReadNamespacePermissionCapturesAsync(
+        NamespaceProtectionCapturesArguments arguments, CancellationToken cancellationToken)
+    {
+        var captures = await _session.ReadNamespacePermissionTreesAsync(new(arguments.RootId), arguments.AfterManifestId,
+            arguments.Limit, cancellationToken).ConfigureAwait(false);
+        return captures.Select(tree => new MirrorPulseControlPermissionCapture(tree.Definition.ManifestId,
+            tree.Definition.Anchor.Intent.RootId!.Value.Value, tree.Phase.ToString(), tree.CapturedMembers,
+            tree.Definition.ExpectedMembers, tree.Definition.CreatedAt, tree.Seal?.SealedAt)).ToArray();
+    }
+
+    private async ValueTask<MirrorPulseControlOriginalTreeRecovery> RecoverNamespaceOriginalTreeAsync(
+        NamespaceProtectionRecoverTreeArguments arguments, CancellationToken cancellationToken)
+    {
+        var restored = await _session.RecoverNamespaceOriginalTreeAsync(arguments.ManifestId, cancellationToken).ConfigureAwait(false);
+        return new(restored.ManifestId, restored.Outcome.ToString(), restored.CompletedMembers, restored.ObservedAt,
+            restored.RecoveryReason?.ToString());
+    }
+
+    private async ValueTask<MirrorPulseControlNamespaceInitialization> InitializeNamespaceProtectionAsync(
+        NamespaceProtectionInitializeArguments arguments, CancellationToken cancellationToken)
+    {
+        try { _ = await _session.InitializeNamespaceProtectionAsync(arguments.OperationId, cancellationToken).ConfigureAwait(false); }
+        catch (Exception exception) when (exception is IOException or InvalidOperationException)
+        {
+            // Admission may already own a durable fence. Return its operation ID even when the
+            // CLI generated it, so a recoverable native boundary never hides the retry handle.
+            if (await _catalog.ReadNamespaceInitializationAsync(arguments.OperationId, CancellationToken.None).ConfigureAwait(false) is null) throw;
+            var pending = await ReadNamespaceInitializationStatusAsync(new(arguments.OperationId), CancellationToken.None).ConfigureAwait(false);
+            if (pending.InventoryKind is not null && pending.InventoryKind != nameof(MirrorPulseNamespaceInitializationInventoryKind.OriginalInventory))
+                throw new ArgumentException("The operation ID completed a different namespace inventory.", nameof(arguments));
+            return pending with { RecoveryCode = pending.Phase == "Pending" ? "OriginalInventoryRecoveryRequired" : null };
+        }
+        return await ReadNamespaceInitializationStatusAsync(new(arguments.OperationId), cancellationToken).ConfigureAwait(false);
+    }
+
+    private async ValueTask<MirrorPulseControlNamespaceInitialization> ReadNamespaceInitializationStatusAsync(
+        NamespaceProtectionInitializationStatusArguments arguments, CancellationToken cancellationToken)
+    {
+        var status = await _session.ReadNamespaceInitializationStatusAsync(arguments.OperationId, cancellationToken).ConfigureAwait(false);
+        return ToControlInitialization(status);
+    }
+
+    private async ValueTask<MirrorPulseControlNamespaceInitialization> RecoverNamespaceCurrentTreeAsync(
+        NamespaceProtectionRecoverCurrentArguments arguments, CancellationToken cancellationToken)
+    {
+        try { _ = await _session.RecoverNamespaceCurrentTreeAsync(arguments.OperationId, cancellationToken).ConfigureAwait(false); }
+        catch (Exception exception) when (exception is IOException or InvalidOperationException)
+        {
+            if (await _catalog.ReadNamespaceInitializationAsync(arguments.OperationId, CancellationToken.None).ConfigureAwait(false) is null) throw;
+            var pending = await ReadNamespaceInitializationStatusAsync(new(arguments.OperationId), CancellationToken.None).ConfigureAwait(false);
+            if (pending.ScopeRootId is not null || pending.InventoryKind is not null && pending.InventoryKind != nameof(MirrorPulseNamespaceInitializationInventoryKind.CurrentInventory))
+                throw new ArgumentException("The operation ID completed a different namespace inventory.", nameof(arguments));
+            return pending with { RecoveryCode = pending.Phase == "Pending" ? "CurrentInventoryRecoveryRequired" : null };
+        }
+        return await ReadNamespaceInitializationStatusAsync(new(arguments.OperationId), cancellationToken).ConfigureAwait(false);
+    }
+
+    private async ValueTask<MirrorPulseControlNamespaceInitialization> RecoverNamespaceRootAsync(
+        NamespaceProtectionRecoverRootArguments arguments, CancellationToken cancellationToken)
+    {
+        if (arguments.OperationId == Guid.Empty || arguments.RootId == Guid.Empty)
+            throw new ArgumentException("Selected-root recovery requires nonempty operation and root IDs.", nameof(arguments));
+        try { _ = await _session.RecoverNamespaceRootAsync(arguments.OperationId, new RootId(arguments.RootId), cancellationToken).ConfigureAwait(false); }
+        catch (Exception exception) when (exception is IOException or InvalidOperationException)
+        {
+            if (await _catalog.ReadNamespaceInitializationAsync(arguments.OperationId, CancellationToken.None).ConfigureAwait(false) is null) throw;
+            var pending = await ReadNamespaceInitializationStatusAsync(new(arguments.OperationId), CancellationToken.None).ConfigureAwait(false);
+            if (pending.ScopeRootId != arguments.RootId || pending.InventoryKind != nameof(MirrorPulseNamespaceInitializationInventoryKind.CurrentInventory))
+                throw new ArgumentException("The operation ID belongs to a different namespace inventory or root.", nameof(arguments));
+            return pending with { RecoveryCode = pending.Phase == "Pending" ? "RootInventoryRecoveryRequired" : null };
+        }
+        return await ReadNamespaceInitializationStatusAsync(new(arguments.OperationId), cancellationToken).ConfigureAwait(false);
+    }
+
+    private async ValueTask<IReadOnlyList<MirrorPulseControlNamespaceInitialization>> ReadNamespaceInitializationsAsync(
+        NamespaceProtectionInitializationsArguments arguments, CancellationToken cancellationToken)
+    {
+        var attempts = await _catalog.ReadNamespaceInitializationsAsync(arguments.AfterOperationId, arguments.Limit, cancellationToken).ConfigureAwait(false);
+        return attempts.Select(ToControlInitialization).ToArray();
+    }
+
+    private static MirrorPulseControlNamespaceInitialization ToControlInitialization(MirrorPulseNamespaceInitializationStatus status) =>
+        new(status.Intent.OperationId, status.Completion is null ? "Pending" : "Completed",
+            status.Intent.Roots.Select(root => root.RootId.Value).ToArray(), status.Completion?.MemberCount,
+            status.Intent.PreparedAt, status.Completion?.CompletedAt,
+            InventoryKind: (status.Completion?.InventoryKind ?? status.Intent.RequestedInventoryKind)?.ToString(),
+            ScopeRootId: status.Intent.Version == 4 ? status.Intent.Roots[0].RootId.Value : null);
+
+    private async ValueTask<MirrorPulseControlNamespaceReplacementCompletion> ExecuteNamespaceReplacementAsync(
+        NamespaceMemberReplaceArguments arguments, CancellationToken cancellationToken)
+    {
+        var completed = await _session.ExecuteNamespaceReplacementAsync(arguments.OperationId, cancellationToken).ConfigureAwait(false);
+        var status = await _session.ReadNamespaceReplacementStatusAsync(arguments.OperationId, cancellationToken).ConfigureAwait(false);
+        return new(completed.OperationId, completed.MemberId, status.RelativePath, completed.CompletedAt, true);
+    }
+
+    private async ValueTask<MirrorPulseControlNamespaceReplacementStatus> ReadNamespaceReplacementStatusAsync(
+        NamespaceMemberReplacementStatusArguments arguments, CancellationToken cancellationToken)
+    {
+        var status = await _session.ReadNamespaceReplacementStatusAsync(arguments.OperationId, cancellationToken).ConfigureAwait(false);
+        return new(status.OperationId, status.MemberId, status.RelativePath, status.Phase, status.Length, status.Sha256, status.Started,
+            status.ActionRecorded, status.BackupRecorded, status.WriteStarted, status.ContentRecorded, status.ProtectionRestored,
+            status.Completed, status.Cancelled, status.RequiresRecovery);
+    }
+
+    private async ValueTask<MirrorPulseControlNamespaceMemberInspection> InspectNamespaceMemberAsync(
+        NamespaceMemberInspectArguments arguments, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(arguments.RelativePath);
+        var member = await _session.InspectNamespaceMemberAsync(arguments.RelativePath, arguments.IsDirectory, cancellationToken).ConfigureAwait(false);
+        return new(member.MemberId, member.ActualParentMemberId, member.RootId?.ToString(), member.RelativePath,
+            member.IsDirectory, member.NativeItemId, member.ObservedAt);
+    }
+
+    private async ValueTask<IReadOnlyList<MirrorPulseControlNamespaceMemberTreeEntry>> ReadNamespaceMemberTreeAsync(
+        NamespaceMemberTreeArguments arguments, CancellationToken cancellationToken)
+    {
+        if (arguments.MemberId == Guid.Empty) throw new ArgumentException("A member ID is required.", nameof(arguments));
+        var tree = await _session.ReadNamespaceMemberTreeAsync(arguments.MemberId, cancellationToken).ConfigureAwait(false);
+        return tree.Select(entry => new MirrorPulseControlNamespaceMemberTreeEntry(entry.MemberId,
+            entry.ParentMemberId, entry.RelativePath, entry.IsDirectory, entry.Depth)).ToArray();
+    }
+
+    private async ValueTask<MirrorPulseControlNamespaceMemberRetirementPreparation> PrepareNamespaceMemberRetirementAsync(
+        NamespaceMemberPrepareRetirementArguments arguments, CancellationToken cancellationToken)
+    {
+        if (arguments.OperationId == Guid.Empty || arguments.MemberId == Guid.Empty)
+            throw new ArgumentException("Operation and member IDs are required.", nameof(arguments));
+        if (arguments.Recursive)
+        {
+            var batch = await _session.PrepareNamespaceRetirementBatchAsync(arguments.OperationId, arguments.MemberId, cancellationToken).ConfigureAwait(false);
+            var root = batch.Entries.Single(entry => entry.MemberId == batch.MemberId);
+            return new(batch.OperationId, batch.MemberId, root.RelativePath, root.IsDirectory, batch.PreparedAt, true, batch.Entries.Count);
+        }
+        var retirement = await _session.PrepareNamespaceMemberRetirementAsync(arguments.OperationId, arguments.MemberId, cancellationToken).ConfigureAwait(false);
+        return new(retirement.OperationId, retirement.Intent.MemberId, retirement.Intent.RelativePath,
+            retirement.Intent.IsDirectory, retirement.Intent.PreparedAt);
+    }
+
+    private async ValueTask<MirrorPulseControlNamespaceMemberRetirementResult> ExecuteNamespaceMemberRetirementAsync(
+        NamespaceMemberRetirementArguments arguments, CancellationToken cancellationToken)
+    {
+        if (arguments.OperationId == Guid.Empty) throw new ArgumentException("A retirement operation ID is required.", nameof(arguments));
+        if (arguments.Recursive)
+            return MapRetirementBatch(await _session.ExecuteNamespaceRetirementBatchAsync(arguments.OperationId, cancellationToken).ConfigureAwait(false));
+        var retirement = await _session.ExecuteNamespaceMemberRetirementAsync(arguments.OperationId, cancellationToken).ConfigureAwait(false);
+        return new(retirement.OperationId, retirement.Intent.MemberId, retirement.Intent.RelativePath,
+            retirement.Intent.IsDirectory, retirement.Phase.ToString(), retirement.NativeDeletedAt is not null,
+            retirement.Phase == MirrorPulseNamespaceRetirementPhase.Completed);
+    }
+
+    private async ValueTask<MirrorPulseControlNamespaceMemberRetirementResult> ReadNamespaceMemberRetirementAsync(
+        NamespaceMemberRetirementStatusArguments arguments, CancellationToken cancellationToken)
+    {
+        if (arguments.OperationId == Guid.Empty) throw new ArgumentException("A retirement operation ID is required.", nameof(arguments));
+        if (arguments.Recursive)
+            return MapRetirementBatch(await _session.ReadNamespaceRetirementBatchAsync(arguments.OperationId, cancellationToken).ConfigureAwait(false));
+        var retirement = await _session.ReadNamespaceMemberRetirementAsync(arguments.OperationId, cancellationToken).ConfigureAwait(false);
+        return new(retirement.OperationId, retirement.Intent.MemberId, retirement.Intent.RelativePath,
+            retirement.Intent.IsDirectory, retirement.Phase.ToString(), retirement.NativeDeletedAt is not null,
+            retirement.Phase == MirrorPulseNamespaceRetirementPhase.Completed);
+    }
+
+    private static MirrorPulseControlNamespaceMemberRetirementResult MapRetirementBatch(MirrorPulseNamespaceRetirementBatch batch)
+    {
+        var root = batch.Entries.Single(entry => entry.MemberId == batch.MemberId);
+        bool completed = batch.Phase == MirrorPulseNamespaceRetirementBatchPhase.Completed;
+        return new(batch.OperationId, batch.MemberId, root.RelativePath, root.IsDirectory, batch.Phase.ToString(),
+            completed, completed, true, batch.Entries.Count);
+    }
+
+    private async ValueTask<MirrorPulseControlNamespaceMemberMovePreparation> PrepareNamespaceMemberMoveAsync(
+        NamespaceMemberPrepareMoveArguments arguments, CancellationToken cancellationToken)
+    {
+        if (arguments.OperationId == Guid.Empty || arguments.MemberId == Guid.Empty || arguments.TargetParentMemberId == Guid.Empty)
+            throw new ArgumentException("Operation, member and target parent IDs are required.", nameof(arguments));
+        ArgumentException.ThrowIfNullOrWhiteSpace(arguments.TargetName);
+        var intent = await _session.PrepareNamespaceMemberMoveAsync(arguments.OperationId, arguments.MemberId,
+            arguments.TargetParentMemberId, arguments.TargetName, cancellationToken).ConfigureAwait(false);
+        return new(intent.OperationId, intent.MemberId, intent.Target.ParentMemberId,
+            intent.Source.RelativePath, intent.Target.RelativePath, intent.PreparedAt);
+    }
+
+    private async Task<MirrorPulseControlNamespaceMemberMoveResult> ExecuteNamespaceMemberMoveAsync(
+        NamespaceMemberMoveArguments arguments, CancellationToken cancellationToken)
+    {
+        if (arguments.OperationId == Guid.Empty)
+            throw new ArgumentException("A move operation ID is required.", nameof(arguments));
+        MirrorPulseNamespaceMemberMoveCompletion completion = await _session.ExecuteNamespaceMemberMoveAsync(
+            arguments.OperationId, cancellationToken).ConfigureAwait(false);
+        return new(completion.OperationId, completion.ItemId, completion.RemoteId, completion.RelativePath,
+            completion.IsDirectory, true, completion.IsDirectory, completion.OfficialRemoteRevision);
+    }
+
+    private async ValueTask<MirrorPulseControlNamespaceMemberMoveStatus> ReadNamespaceMemberMoveStatusAsync(
+        NamespaceMemberMoveStatusArguments arguments, CancellationToken cancellationToken)
+    {
+        if (arguments.OperationId == Guid.Empty) throw new ArgumentException("A move operation ID is required.", nameof(arguments));
+        MirrorPulseNamespaceMemberMoveStatus status = await _session.ReadNamespaceMemberMoveStatusAsync(
+            arguments.OperationId, cancellationToken).ConfigureAwait(false);
+        return new(status.OperationId, status.MemberId, status.IsDirectory, status.SourceRelativePath,
+            status.TargetRelativePath, status.Phase, status.Started, status.NativeObserved,
+            status.OfficialProjectionRecorded, status.CurrentNameCommitted);
+    }
+
+    private async Task<MirrorPulseControlNamespaceBirthRecoveryResult> ExecuteNamespaceBirthRecoveryAsync(
+        NamespaceBirthRecoverArguments arguments, CancellationToken cancellationToken)
+    {
+        if (arguments.RecoveryId == Guid.Empty)
+            throw new ArgumentException("A birth recovery action ID is required.", nameof(arguments));
+        var result = await _session.ExecuteNamespaceBirthRecoveryAsync(arguments.RecoveryId, cancellationToken).ConfigureAwait(false);
+        return new(result.Action.RecoveryId, result.Receipt.Outcome.ToString(), result.Receipt.CallbackCompleted,
+            result.Receipt.Drained, result.Receipt.NativeIdentityPrepared, result.Receipt.DurableProjectionCommitted,
+            result.Verification is not null);
     }
 
     private async Task<MirrorPulseHostStatus> StartRequestedAsync(
@@ -564,7 +1043,7 @@ public sealed class MirrorPulseHostApplication : IAsyncDisposable
         CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        if (!IsRunning && _state != MirrorPulseLifecycleState.Stopping)
+        if (!IsRunning && _state is not (MirrorPulseLifecycleState.Starting or MirrorPulseLifecycleState.Stopping))
         {
             throw new InvalidOperationException("The MirrorPulse Host is not running.");
         }
@@ -654,26 +1133,9 @@ public sealed class MirrorPulseHostApplication : IAsyncDisposable
         return await ReadStatusAsync(cancellationToken).ConfigureAwait(false);
     }
 
-    private async Task<MirrorPulseControlConflictList> ReadConflictsAsync(
-        ConflictListArguments arguments,
-        CancellationToken cancellationToken)
-    {
-        var conflicts = (await _catalog.ReadRemoteConflictProjectionsAsync(cancellationToken)
-                .ConfigureAwait(false))
-            .Concat(await _catalog.ReadUploadConflictsAsync(cancellationToken: cancellationToken)
-                .ConfigureAwait(false))
-            .OrderByDescending(item => item.DetectedAt)
-            .Select(ToControlConflict)
-            .ToList();
-        int limit = arguments.Limit is > 0 and <= 1000 ? arguments.Limit.Value : 100;
-        return new(conflicts.Take(limit).ToArray(), conflicts.Count > limit
-            ? limit.ToString(System.Globalization.CultureInfo.InvariantCulture) : null);
-    }
-
-    private static MirrorPulseControlConflict ToControlConflict(MirrorPulseConflictRecord conflict) =>
-        new(conflict.ConflictId.ToString("D"), conflict.InstanceId.ToString(), conflict.RelativePath,
-            conflict.Reason.ToString(), conflict.Status.ToString(), conflict.Source.ToString(),
-            conflict.LocalRevision, conflict.RemoteRevision, conflict.DetectedAt);
+    private Task<MirrorPulseControlConflictList> ReadConflictsAsync(
+        ConflictListArguments arguments, CancellationToken cancellationToken) =>
+        MirrorPulseConflictQueries.ReadAsync(_catalog, arguments, cancellationToken);
 
     private async Task<MirrorPulseControlOperation> GetOperationAsync(
         OperationIdArguments arguments,
@@ -777,7 +1239,7 @@ public sealed class MirrorPulseHostApplication : IAsyncDisposable
         return await ReadStatusAsync(cancellationToken).ConfigureAwait(false);
     }
 
-    private async Task<MirrorPulseAppStatusResponse> ResolveConflictAsync(
+    private async Task<MirrorPulseAppStatusResponse> ResolveConflictCoreAsync(
         Guid conflictId,
         MirrorPulseConflictAction action,
         CancellationToken cancellationToken)
@@ -809,35 +1271,4 @@ public sealed class MirrorPulseHostApplication : IAsyncDisposable
         return (await ReadStatusAsync(cancellationToken).ConfigureAwait(false)) with { ConflictCommand = command };
     }
 
-    public async ValueTask DisposeAsync()
-    {
-        if (_disposed)
-        {
-            return;
-        }
-
-        _state = MirrorPulseLifecycleState.Stopping;
-        _shutdown.Cancel();
-        if (_serveTask is not null)
-        {
-            try
-            {
-                await _serveTask.ConfigureAwait(false);
-            }
-            catch (OperationCanceledException)
-            {
-            }
-        }
-
-        await _remotePoller.DisposeAsync().ConfigureAwait(false);
-        await _remoteScheduler.DisposeAsync().ConfigureAwait(false);
-        await _session.DisposeAsync().ConfigureAwait(false);
-        await _workers.DisposeAsync().ConfigureAwait(false);
-        await _catalog.DisposeAsync().ConfigureAwait(false);
-        _systemNotifications.Dispose();
-        _shutdown.Dispose();
-        _hostLease.Dispose();
-        _state = MirrorPulseLifecycleState.Stopped;
-        _disposed = true;
-    }
 }

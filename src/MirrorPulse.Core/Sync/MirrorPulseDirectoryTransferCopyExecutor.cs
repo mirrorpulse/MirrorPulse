@@ -1,0 +1,99 @@
+using MirrorPulse.Core.Caching;
+using MirrorPulse.Core.CloudFiles;
+using MirrorPulse.Core.State;
+
+namespace MirrorPulse.Core.Sync;
+
+internal enum MirrorPulseDirectoryTransferCopyCheckpoint { AfterPreparation, BeforeDispatch, BeforeAcceptance, AfterAcceptance }
+
+/// <summary>Creates the original directory transfer target in parent-first order.</summary>
+/// <remarks>The Host retains its actor, current native source guards, root leases and ordered instance
+/// admissions. Each file uses the verified private handle through its first conditional upload.
+/// This stage retains both root fences until verification, publication, retirement and journal settlement.</remarks>
+internal sealed class MirrorPulseDirectoryTransferCopyExecutor(MirrorPulseProductCatalog catalog,
+    MirrorPulseLocalTransferContentStore inputs, IMirrorPulseWorkerUploadTransport uploads,
+    IMirrorPulseWorkerMutationTransport mutations, TimeProvider? timeProvider = null)
+{
+    private readonly TimeProvider _time = timeProvider ?? TimeProvider.System;
+    internal Func<MirrorPulseDirectoryTransferCopyCheckpoint, int, CancellationToken, ValueTask>? Checkpoint { get; init; }
+
+    internal async Task<MirrorPulseDirectoryTransferCopy> CopyAsync(Guid transferId, CancellationToken token)
+    {
+        var copy = await catalog.ReadNamespaceDirectoryTransferCopyAsync(transferId, token).ConfigureAwait(false);
+        var plan = copy.Admission;
+        var directories = new Dictionary<Guid, Guid>();
+        for (int ordinal = 0; ordinal < plan.Members.Count; ordinal++)
+        {
+            token.ThrowIfCancellationRequested();
+            var step = copy.Steps[ordinal];
+            var member = plan.Members[ordinal];
+            var source = member.Source.Protection.Context.Member;
+            if (step.AcceptedAt is not null)
+            {
+                if (step.Durable && source.IsDirectory) directories.Add(source.MemberId, step.EffectId);
+                continue;
+            }
+            var route = plan.TargetRoute;
+            bool connectedDurable = mutations.SupportsDurableDirectoryCopy(route.InstanceId, route.RootKey);
+            if (step.StartedAt is not null && (!step.Durable || !connectedDurable))
+                throw new MirrorPulseMutationAmbiguousException("The original directory copy effect needs its correlated Worker receipt.");
+            Guid? parentCopy = member.Source.Protection.Context.Location.ParentMemberId is { } parentId &&
+                directories.TryGetValue(parentId, out Guid parentEffect)
+                ? parentEffect : null;
+            if (parentCopy is not null && !connectedDurable)
+                throw new NotSupportedException("The directory copy requires the negotiated original target parent.");
+            bool prepare = step.StartedAt is null && connectedDurable &&
+                mutations.SupportsDurableDirectoryCopyPreparation(route.InstanceId, route.RootKey);
+            if (step.StartedAt is null && step.PreparationSelected && !prepare)
+                throw new NotSupportedException("The original directory copy requires its selected preparation capability.");
+            var mode = step.StartedAt is not null || prepare ? MirrorPulseDurableDirectoryCopyMode.Resume :
+                connectedDurable ? MirrorPulseDurableDirectoryCopyMode.Start : MirrorPulseDurableDirectoryCopyMode.Ordinary;
+            string path = member.TargetRelativePath[(route.DirectoryName.Length + 1)..];
+            string revision;
+            if (source.IsDirectory)
+            {
+                await StartAsync().ConfigureAwait(false);
+                revision = await mutations.CreateDirectoryAsync(new(route.InstanceId, route.RootKey, path,
+                    member.CopyOperationId, MustBeAbsent: true)
+                { DurableCopyMode = mode, DurableParentCopyOperationId = parentCopy },
+                    token).ConfigureAwait(false);
+            }
+            else
+            {
+                await using var input = await inputs.OpenLeaseAsync(transferId, member, token).ConfigureAwait(false);
+                await StartAsync().ConfigureAwait(false);
+                revision = await uploads.UploadAsync(new(route.InstanceId, path, null, input.Data, input.Content.Length,
+                    member.CopyOperationId, input.Content.Sha256, route.RootKey, DestinationMustBeAbsent: true)
+                { RequireConditionalTargetSupport = true, DurableCopyMode = mode, DurableParentCopyOperationId = parentCopy },
+                    token).ConfigureAwait(false);
+            }
+            // Retain a successful correlated reply even when cancellation raced its return.
+            if (Checkpoint is not null)
+                await Checkpoint(MirrorPulseDirectoryTransferCopyCheckpoint.BeforeAcceptance, ordinal, CancellationToken.None).ConfigureAwait(false);
+            await catalog.RecordNamespaceDirectoryTransferCopyAcceptedAsync(transferId, ordinal, member.CopyOperationId,
+                revision, _time.GetUtcNow(), CancellationToken.None).ConfigureAwait(false);
+            if (connectedDurable && source.IsDirectory) directories.Add(source.MemberId, step.EffectId);
+            if (Checkpoint is not null)
+                await Checkpoint(MirrorPulseDirectoryTransferCopyCheckpoint.AfterAcceptance, ordinal, CancellationToken.None).ConfigureAwait(false);
+
+            async Task StartAsync()
+            {
+                if (step.StartedAt is not null) return;
+                if (prepare)
+                {
+                    if (!step.PreparationSelected)
+                        await catalog.SelectNamespaceDirectoryTransferCopyPreparationAsync(plan, ordinal, _time.GetUtcNow(), token).ConfigureAwait(false);
+                    await mutations.PrepareDirectoryCopyAsync(new(route.InstanceId, route.RootKey, path,
+                        step.EffectId, parentCopy, member.Content?.Length, member.Content?.Sha256), token).ConfigureAwait(false);
+                    if (Checkpoint is not null)
+                        await Checkpoint(MirrorPulseDirectoryTransferCopyCheckpoint.AfterPreparation, ordinal, token).ConfigureAwait(false);
+                }
+                await catalog.StartNamespaceDirectoryTransferCopyAsync(plan, ordinal, _time.GetUtcNow(), token, durable: connectedDurable, prepared: prepare)
+                    .ConfigureAwait(false);
+                if (Checkpoint is not null)
+                    await Checkpoint(MirrorPulseDirectoryTransferCopyCheckpoint.BeforeDispatch, ordinal, token).ConfigureAwait(false);
+            }
+        }
+        return await catalog.ReadNamespaceDirectoryTransferCopyAsync(transferId, token).ConfigureAwait(false);
+    }
+}

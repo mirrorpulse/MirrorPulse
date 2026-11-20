@@ -1,0 +1,1020 @@
+using System.Diagnostics;
+
+namespace MirrorPulse.Core.Tests;
+
+[TestClass]
+public sealed partial class NamespaceNonAdminControllerTests
+{
+    [TestMethod]
+    [DataRow("allowed", 1)]
+    [DataRow("allowed", 52)]
+    [DataRow("allowed", 56)]
+    [DataRow("allowed", 66)]
+    [DataRow("allowed", 100)]
+    [DataRow("allowed", 101)]
+    [DataRow("allowed", 104)]
+    [DataRow("allowed", 112)]
+    [DataRow("rejected", 0)]
+    [DataRow("rejected", 113)]
+    [DataRow("rejected", int.MaxValue)]
+    public Task ControllerBudgetCoversTheGrowingCatalogAndRejectsAnUnboundedSelection(string expectation, int count) =>
+        RunAsync("budget-" + expectation, count);
+
+    [TestMethod]
+    [DataRow("NativeHostTransferRetainsSourceAndBothFencesAfterOriginalCopyAndWholeTargetVerification", 2)]
+    [DataRow("NativeHostTransferDeletesOnlyOriginalRemoteSourceWhileRetainingGuardedLocalBytes", 2)]
+    [DataRow("NativeHostTransferRetiresOriginalSourceThroughTheSdkAndKeepsPrivateBytesAndBothFences", 2)]
+    [DataRow("NativeHostTransferSourceRetirementResumesOriginalNativeAndReceiptBoundariesAcrossStoreOwners", 10)]
+    [DataRow("NativeHostTransferAcknowledgesOriginalClaimAndRecoversSdkReturnBeforeReceiptAcrossStoreOwners", 2)]
+    public Task ControllerIncludesEverySelectedTransferScopeAndRetirementCutpoint(string method, int executions) =>
+        RunAsync("bundle-" + method, executions);
+
+    [TestMethod]
+    [DataRow("selected")]
+    [DataRow("missing")]
+    [DataRow("foreign")]
+    [DataRow("duplicate")]
+    public Task ControllerRetainsEveryRecoveredFileTransferRowAndItsOriginalDeadline(string selection) =>
+        RunAsync("file-transfer-" + selection, 177);
+
+    [TestMethod]
+    [DataRow("selected")]
+    [DataRow("missing")]
+    [DataRow("foreign")]
+    public Task ControllerRetainsBothNinetySecondUnsealedExecutionRows(string selection) =>
+        RunAsync("unsealed-execution-" + selection);
+
+    [TestMethod]
+    [DataRow("selected")]
+    [DataRow("missing")]
+    [DataRow("foreign")]
+    public Task ControllerRetainsCapturedRootExecutionRowsWithoutChangingTheBornRootSelection(string selection) =>
+        RunAsync("captured-unsealed-execution-" + selection);
+
+    [TestMethod]
+    [DataRow("mismatch")]
+    [DataRow("duplicate")]
+    [DataRow("empty")]
+    [DataRow("malformed")]
+    public Task ControllerRejectsSelectionsWhoseNamesCannotDescribeTheExecutedCatalog(string damage) => RunAsync("selection-" + damage, 109);
+
+    [TestMethod]
+    [DataRow("copy")]
+    [DataRow("wrong-marker")]
+    [DataRow("nested-evidence")]
+    [DataRow("oversized")]
+    public Task FailureCaptureRetainsOnlyBoundedOriginalDiagnosticsBeforeWorkspaceRemoval(string scenario) => RunAsync(scenario);
+
+    private static async Task RunAsync(string scenario, int count = 0)
+    {
+        string directory = Path.Combine(Path.GetTempPath(), "MirrorPulse-controller-tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        try
+        {
+            string script = Path.Combine(directory, "verify.ps1");
+            await File.WriteAllTextAsync(script, """
+                param([string]$Policy,[string]$Directory,[string]$Scenario,[int]$Count)
+                $ErrorActionPreference='Stop'
+                . $Policy
+                $rejectionPrefix='MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.'
+                $replacementWriterMethod='NativeReplacementContentWriterRetainsFirstBackupAndDirtyCopyAcrossBothObjectStarts'
+                $replacementWriter=$rejectionPrefix+$replacementWriterMethod
+                $replacementWriterBudgetDelta=5*45000-15000
+                $activeReplacementMethod='NativeActiveReplacementRecoversPreparedOriginalAcrossHostRoles'
+                $activeReplacement=$rejectionPrefix+$activeReplacementMethod
+                $activeReplacementBudget=2*65000
+                $reenabledRemoteMove='MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseJournalUploadSourceTests.NativeReenabledRootPreservesOfflineEditsWhenTheOriginalRemoteAddressWasMoved'
+                $reenabledRemoteMoveBudget=65000
+                $unsealedExecution=$rejectionPrefix+'NativePublicRuntimeExecutesUnsealedBornRootLabelAcrossDisposedRoles'
+                $capturedUnsealedExecution=$rejectionPrefix+'NativePublicRuntimeExecutesUnsealedCapturedRootLabelAcrossDisposedRoles'
+                $rejections=@(
+                    $rejectionPrefix+'NativeMissingOriginalRemoteDeleteRetainsActualSdkConflictWithoutInventingMemberRetirementAcrossOwners'
+                    $rejectionPrefix+'NativeMiddleMissingRemoteDeleteSettlesOriginalRejectionBeforeLaterSdkEntryAndCursorAcrossOwners'
+                    $rejectionPrefix+'NativeMissingRemoteDeleteRecoversOriginalAdmissionBeforeSdkAcrossFreshRoles'
+                    $rejectionPrefix+'NativeMissingRemoteDeleteRecoversActualSdkConflictBeforeProductResultAcrossFreshRoles'
+                    $rejectionPrefix+'NativeDefaultRuntimeRecoversReceivedMissingDeleteBeforeNewRoleAuditWithoutAcknowledgingLocalContentOriginals'
+                    $rejectionPrefix+'NativeDefaultRuntimePublishesActualMissingDeleteConflictAndCursorAcrossFreshRolesWithoutChangingLocalOriginals'
+                    $rejectionPrefix+'NativeCfSharpPreservingDeleteCharacterizesItsActualLocalTombstoneBeforeAndAfterConsumerAcknowledgement'
+                    $rejectionPrefix+'NativeLocalTombstoneDeleteReconciliationPublishesOnlyItsOriginalConflictAcrossOwners'
+                    $rejectionPrefix+'NativeLocalTombstoneDeleteRecoversOriginalAdmissionAcrossFreshRoles'
+                    $rejectionPrefix+'NativeLocalTombstoneDeleteRecoversActualSdkReceiptAcrossFreshRoles'
+                )
+                $directories=@(
+                    'NativeDirectoryConfirmationRetainsOriginalBindingAndTypedIdentityAcrossOwners',
+                    'NativeProductionDirectoryGroupSettlesOriginalCreateMoveOrRetirementAcrossOwners',
+                    'NativeProductionDirectoryGroupRereadsRealLateChildOriginalsBeforeDispatchAcrossOwners',
+                    'NativeProductionDirectoryAbsencePreservesALaterBackendFileOrDirectoryAcrossOwners',
+                    'NativeProductionDirectoryGroupRecoversAcceptedEffectsBeforeOriginalAckAcrossFreshRoles'
+                )|ForEach-Object {$rejectionPrefix+$_}
+                $fileTransferRecovery=@(
+                    'NativeHostTransferAuditsBothRootsBeforeResumingOriginalFileCopy',
+                    'NativeHostTransferDeletesOriginalRemoteSourceAfterBothRootAudits',
+                    'NativeHostTransferPreservesRecreatedAcceptedSourceAndBothFencesAfterRootAudits',
+                    'NativeHostTransferCompletesOriginalClaimAfterBothRootAudits',
+                    'NativeHostTransferRetiresAndAcknowledgesOriginalAfterPublishedTargetRoleHandoff',
+                    'NativeHostTransferPublishesOnlyUnchangedRegisteredTargetAfterRoleHandoff',
+                    'NativeHostTransferPublishesObservedTargetAfterRoleHandoff',
+                    'NativeHostTransferReactivatesSelectedTargetBeforeFirstSdkPreparationAcrossRoles',
+                    'NativeHostTransferRetiresLocalOnlySourceAfterVerifyingItsRemoteAbsence',
+                    'NativeHostTransferAcknowledgesOriginalAfterSettledSourceRoleHandoff',
+                    'NativeHostTransferResumesInterruptedSourceRetirementAcrossRoles',
+                    'NativeHostTransferCompletesRecreatedAcceptedSourceAfterBothRootAudits'
+                )|ForEach-Object {$rejectionPrefix+$_}
+                function ReadPreActiveReplacementNamespaceCatalog([string]$Path) {
+                    $value=Get-Content -LiteralPath $Path -Raw|ConvertFrom-Json
+                    $value.required.namespace=@($value.required.namespace|Where-Object {$_ -cnotin @($activeReplacement,$reenabledRemoteMove)})
+                    return $value
+                }
+                function ReadPreFileTransferNamespaceCatalog([string]$Path) {
+                    $value=ReadPreActiveReplacementNamespaceCatalog $Path
+                    # Keep the exact earlier selections for their historical budget assertions.
+                    $value.required.namespace=@($value.required.namespace|Where-Object {$_ -cnotin $fileTransferRecovery}|
+                        ForEach-Object {if($_ -ceq $replacementWriter){'Fixture.HistoricalReplacementWriter'}else{$_}})
+                    return $value
+                }
+                function ReadPreDirectoryNamespaceCatalog([string]$Path) {
+                    $value=ReadPreFileTransferNamespaceCatalog $Path
+                    $value.required.namespace=@($value.required.namespace|Where-Object {$_ -cnotin $directories -and $_ -cnotin @($unsealedExecution,$capturedUnsealedExecution)})
+                    return $value
+                }
+                function ReadHistoricalNamespaceCatalog([string]$Path) {
+                    $value=ReadPreDirectoryNamespaceCatalog $Path
+                    # These historical budgets retain their exact pre-rejection selection.
+                    $value.required.namespace=@($value.required.namespace|Where-Object {$_ -cnotin $rejections})
+                    return $value
+                }
+                if ($Scenario -like 'file-transfer-*') {
+                    $actual=ReadPreActiveReplacementNamespaceCatalog (Join-Path (Split-Path $Policy -Parent) 'test-suites.json')
+                    $names=@($actual.required.namespace)
+                    $prior=@($names|Where-Object {$_ -cnotin $fileTransferRecovery})
+                    if($Count -ne 177 -or $names.Count -ne 177 -or $prior.Count -ne 165){throw 'Retain all prior methods and exactly twelve recovered file transfer methods.'}
+                    $rowsPerMethod=@(2,2,1,2,2,2,1,2,5,2,3,1)
+                    for($index=0;$index -lt $fileTransferRecovery.Count;$index++){
+                        $name=$fileTransferRecovery[$index]
+                        foreach($selection in @(@{names=$actual.required.namespace},@{names=$actual.required.native},@{names=$actual.allowSkipped})){
+                            if(@($selection.names|Where-Object {$_ -ceq $name}).Count -ne 1){throw 'Require each recovered transfer method exactly once in all applicable suites.'}
+                        }
+                        $rows=@($actual.requiredCases.$name)
+                        $method=$name.Substring($name.LastIndexOf('.')+1)
+                        if($rowsPerMethod[$index] -eq 2 -and ($rows.Count -ne 2 -or $rows[0] -cne "$method (False)" -or $rows[1] -cne "$method (True)")){throw 'Require both exact original recovery data rows.'}
+                        if($rowsPerMethod[$index] -eq 3){
+                            $expected=@('before-native','after-native','after-receipt'|ForEach-Object {"$method ("+'"'+$_+'")'})
+                            if((($rows -join '|') -cne ($expected -join '|'))){throw 'Require all three original native retirement cut points.'}
+                        }
+                        if($rowsPerMethod[$index] -eq 5){
+                            $expected=@('absent','absent-remote-parent','occupied-before-copy','occupied-after-copy','occupied-after-retirement-start'|ForEach-Object {"$method ("+'"'+$_+'")'})
+                            if((($rows -join '|') -cne ($expected -join '|'))){throw 'Require all five original local-only source cases.'}
+                        }
+                        if($rowsPerMethod[$index] -eq 1 -and $null -ne $actual.requiredCases.PSObject.Properties[$name]){throw 'A single invocation must not fabricate data rows.'}
+                    }
+                    foreach($scope in @('AllRetained','S06')){
+                        $before=Get-OrdinaryUserNamespaceBudgetMilliseconds -TestCount $prior.Count -TestNames $prior -Scope $scope
+                        if($Scenario -ceq 'file-transfer-selected'){
+                            $now=Get-OrdinaryUserNamespaceBudgetMilliseconds -TestCount $Count -TestNames $names -Scope $scope
+                            if($now -ne $before+25*45000){throw 'Retain all earlier deadlines and add twenty-five actual 45-second recovery rows.'}
+                        }else{
+                            $invalid=switch($Scenario){
+                                'file-transfer-missing' {@($names|Where-Object {$_ -cne $fileTransferRecovery[0]})}
+                                'file-transfer-foreign' {@($names|ForEach-Object {if($_ -ceq $fileTransferRecovery[0]){'Fixture.Unrelated'}else{$_}})}
+                                'file-transfer-duplicate' {@($names|ForEach-Object {if($_ -ceq $fileTransferRecovery[0]){$fileTransferRecovery[1]}else{$_}})}
+                            }
+                            $refused=$false
+                            try{Get-OrdinaryUserNamespaceBudgetMilliseconds -TestCount $Count -TestNames $invalid -Scope $scope|Out-Null}catch{$refused=$true}
+                            if(-not $refused){throw 'Missing, foreign or duplicated methods cannot claim the recovered transfer budget.'}
+                        }
+                    }
+                    exit 0
+                }
+                if ($Scenario -like 'captured-unsealed-execution-*') {
+                    $actual=ReadPreFileTransferNamespaceCatalog (Join-Path (Split-Path $Policy -Parent) 'test-suites.json')
+                    $names=@($actual.required.namespace)
+                    $prior=@($names|Where-Object {$_ -cne $capturedUnsealedExecution})
+                    if($names.Count -ne 165 -or $prior.Count -ne 164){throw 'Retain every prior method and both born-root rows.'}
+                    foreach($selection in @(@{names=$actual.required.namespace},@{names=$actual.required.native},@{names=$actual.allowSkipped})){
+                        if(@($selection.names|Where-Object {$_ -ceq $capturedUnsealedExecution}).Count -ne 1){throw 'Require the captured-root method exactly once.'}
+                    }
+                    $rows=@($actual.requiredCases.($capturedUnsealedExecution))
+                    if($rows.Count -ne 2 -or $rows[0] -cne 'NativePublicRuntimeExecutesUnsealedCapturedRootLabelAcrossDisposedRoles (False)' -or
+                       $rows[1] -cne 'NativePublicRuntimeExecutesUnsealedCapturedRootLabelAcrossDisposedRoles (True)'){throw 'Require both exact captured-root rows.'}
+                    foreach($scope in @('AllRetained','S06')){
+                        $old=Get-OrdinaryUserNamespaceBudgetMilliseconds -TestCount 164 -TestNames $prior -Scope $scope
+                        if($Scenario -ceq 'captured-unsealed-execution-selected'){
+                            $now=Get-OrdinaryUserNamespaceBudgetMilliseconds -TestCount 165 -TestNames $names -Scope $scope
+                            if($now -ne $old+180000){throw 'Preserve every earlier deadline and add both captured-root deadlines.'}
+                        }else{
+                            $invalid=if($Scenario -ceq 'captured-unsealed-execution-missing'){$prior}else{@($names|ForEach-Object {if($_ -ceq $capturedUnsealedExecution){'Fixture.Unrelated'}else{$_}})}
+                            $refused=$false
+                            try{Get-OrdinaryUserNamespaceBudgetMilliseconds -TestCount 165 -TestNames $invalid -Scope $scope|Out-Null}catch{$refused=$true}
+                            if(-not $refused){throw 'Incomplete selections cannot claim captured-root deadlines.'}
+                        }
+                    }
+                    exit 0
+                }
+                if ($Scenario -like 'unsealed-execution-*') {
+                    $actual=ReadPreFileTransferNamespaceCatalog (Join-Path (Split-Path $Policy -Parent) 'test-suites.json')
+                    $names=@($actual.required.namespace|Where-Object {$_ -cne $capturedUnsealedExecution})
+                    $prior=@($names|Where-Object {$_ -cne $unsealedExecution})
+                    if($names.Count -ne 164 -or $prior.Count -ne 163){throw 'Retain the original namespace methods and one two-row execution method.'}
+                    foreach($selection in @(@{names=$actual.required.namespace},@{names=$actual.required.native},@{names=$actual.allowSkipped})){
+                        if(@($selection.names|Where-Object {$_ -ceq $unsealedExecution}).Count -ne 1){throw 'Select the new method exactly once in each applicable suite.'}
+                    }
+                    if(@($actual.requiredCases.($unsealedExecution)).Count -ne 2){throw 'Require both original native data rows.'}
+                    foreach($scope in @('AllRetained','S06')){
+                        $old=Get-OrdinaryUserNamespaceBudgetMilliseconds -TestCount 163 -TestNames $prior -Scope $scope
+                        if($Scenario -ceq 'unsealed-execution-selected'){
+                            $now=Get-OrdinaryUserNamespaceBudgetMilliseconds -TestCount 164 -TestNames $names -Scope $scope
+                            if($now -ne $old+180000){throw 'Keep both native ninety-second deadlines.'}
+                        }else{
+                            $invalid=if($Scenario -ceq 'unsealed-execution-missing'){$prior}else{@($names|ForEach-Object {if($_ -ceq $unsealedExecution){'Fixture.Unrelated'}else{$_}})}
+                            $refused=$false
+                            try{Get-OrdinaryUserNamespaceBudgetMilliseconds -TestCount 164 -TestNames $invalid -Scope $scope|Out-Null}catch{$refused=$true}
+                            if(-not $refused){throw 'An incomplete or foreign selection cannot claim the new native deadline.'}
+                        }
+                    }
+                    exit 0
+                }
+                if ($Scenario -like 'directory-journal-*') {
+                    $actual=ReadPreFileTransferNamespaceCatalog (Join-Path (Split-Path $Policy -Parent) 'test-suites.json')
+                    $names=@($actual.required.namespace|Where-Object {$_ -cnotin @($unsealedExecution,$capturedUnsealedExecution)});$prior=@($names|Where-Object {$_ -cnotin $directories})
+                    if($names.Count -ne 163 -or $prior.Count -ne 158){throw 'Retain all158 original namespace methods and exactly five new directory methods.'}
+                    $expectedRows=@(4,4,2,2,2)
+                    for($index=0;$index -lt $directories.Count;$index++){
+                        $method=$directories[$index]
+                        foreach($selection in @(@{names=$actual.required.namespace},@{names=$actual.required.native},@{names=$actual.allowSkipped})){
+                            if(@($selection.names|Where-Object {$_ -ceq $method}).Count -ne 1){throw 'Retain every directory method exactly once in all native/managed declarations.'}
+                        }
+                        $rows=@($actual.requiredCases.($method))
+                        if($rows.Count -ne $expectedRows[$index] -or @($rows|Sort-Object -Unique).Count -ne $rows.Count){throw 'Retain all14 distinct directory executions.'}
+                    }
+                    foreach($scope in @('AllRetained','S06')){
+                        $old=Get-OrdinaryUserNamespaceBudgetMilliseconds -TestCount 158 -TestNames $prior -Scope $scope
+                        if($Scenario -ceq 'directory-journal-selected'){
+                            $now=Get-OrdinaryUserNamespaceBudgetMilliseconds -TestCount 163 -TestNames $names -Scope $scope
+                            if($now -ne $old+4*60000+10*95000){throw 'Each original directory execution retains its real60/95second deadline.'}
+                            $step=Get-OrdinaryUserNamespaceStepTimeoutMinutes -TestCount 163 -TestNames $names -Scope $scope
+                            if($step -ne [int][Math]::Ceiling($now/60000.0)+5){throw 'Retain diagnostics and disposable-user cleanup after every native deadline.'}
+                        }else{
+                            $parameters=@{TestCount=163;TestNames=$names;Scope=$scope}
+                            switch($Scenario){
+                                'directory-journal-missing' {$parameters.TestNames=@($names|Where-Object {$_ -cne $directories[0]})}
+                                'directory-journal-unrelated' {$parameters.TestNames=@($names|ForEach-Object {if($_ -ceq $directories[0]){'Fixture.Unrelated'}else{$_}})}
+                                'directory-journal-duplicate' {$parameters.TestNames=@($names|ForEach-Object {if($_ -ceq $directories[0]){$names[0]}else{$_}})}
+                                'directory-journal-wrong-case' {$parameters.TestNames=@($names|ForEach-Object {if($_ -ceq $directories[0]){$_.ToLowerInvariant()}else{$_}})}
+                                'directory-journal-count-only' {$parameters.Remove('TestNames')}
+                                'directory-journal-over-limit' {$parameters.TestCount=164}
+                                default {throw 'Unknown directory controller selection.'}
+                            }
+                            $refused=$false;try{Get-OrdinaryUserNamespaceBudgetMilliseconds @parameters|Out-Null}catch{$refused=$true}
+                            if(-not $refused){throw 'An incomplete, foreign, duplicate, count-only or unbounded directory selection cannot borrow a native deadline.'}
+                        }
+                    }
+                    exit 0
+                }
+                if ($Scenario -ceq 'received-delete-selected') {
+                    $actual=ReadPreDirectoryNamespaceCatalog (Join-Path (Split-Path $Policy -Parent) 'test-suites.json')
+                    $names=@($actual.required.namespace);$prior=@($names|Where-Object {$_ -cnotin $rejections})
+                    if($names.Count -ne 158 -or $prior.Count -ne 148){throw 'Require all148 prior methods, seven existing rejection methods and three new reconciliation methods.'}
+                    foreach($name in $rejections){
+                        foreach($selection in @(@{names=$actual.required.namespace},@{names=$actual.required.native},@{names=$actual.allowSkipped})){
+                            if(@($selection.names|Where-Object {$_ -ceq $name}).Count -ne 1){throw 'Each rejection boundary must be selected exactly once in every actual native catalog.'}
+                        }
+                    }
+                    $rows=@($actual.requiredCases.($rejections[4]))
+                    $expected=@('ReceivedMissingDeleteBeforeCommitActive','ReceivedMissingDeleteBeforeCommitDisabled',
+                        'ReceivedMissingDeleteAfterCommitActive','ReceivedMissingDeleteAfterCommitDisabled')
+                    if($rows.Count -ne 4 -or @(Compare-Object $expected $rows).Count){throw 'Keep every actual pre/post-SDK and active/disabled startup execution.'}
+                    $rows=@($actual.requiredCases.($rejections[6]))
+                    $expected=@('LocalTombstoneFileBeforeConsumerAck','LocalTombstoneFileAfterConsumerAck',
+                        'LocalTombstoneDirectoryBeforeConsumerAck','LocalTombstoneDirectoryAfterConsumerAck')
+                    if($rows.Count -ne 4 -or @(Compare-Object $expected $rows).Count){throw 'Retain all actual file/directory and before/after original SDK acknowledgement controls.'}
+                    $legacy=@($names|Where-Object {$_ -cnotin @($rejections[7],$rejections[8],$rejections[9])})
+                    $before=@($legacy|Where-Object {$_ -cnotin @($rejections[5],$rejections[6])})
+                    $expectedRows=@(@('TombstoneMixedPrefixFile','TombstoneMixedPrefixDirectory'),
+                        @('TombstoneAdmissionFile','TombstoneAdmissionDirectory'),@('TombstoneReceiptFile','TombstoneReceiptDirectory'))
+                    for($index=0;$index -lt 3;$index++){
+                        $rows=@($actual.requiredCases.($rejections[7+$index]))
+                        if($rows.Count -ne 2 -or @(Compare-Object $expectedRows[$index] $rows -CaseSensitive).Count){throw 'Keep every new file/directory cut as an explicit original row.'}
+                    }
+                    foreach($scope in @('AllRetained','S06')){
+                        $old=Get-OrdinaryUserNamespaceBudgetMilliseconds -TestCount 148 -TestNames $prior -Scope $scope
+                        $first=Get-OrdinaryUserNamespaceBudgetMilliseconds -TestCount 153 -TestNames $before -Scope $scope
+                        $previous=Get-OrdinaryUserNamespaceBudgetMilliseconds -TestCount 155 -TestNames $legacy -Scope $scope
+                        $now=Get-OrdinaryUserNamespaceBudgetMilliseconds -TestCount 158 -TestNames $names -Scope $scope
+                        if($first -ne $old+8*65000 -or $previous -ne $first+5*65000 -or $now -ne $previous+6*65000){throw 'Retain every old65-second execution and add exactly six new65-second executions.'}
+                        $minutes=Get-OrdinaryUserNamespaceStepTimeoutMinutes -TestCount 158 -TestNames $names -Scope $scope
+                        if($minutes -ne [int][Math]::Ceiling($now/60000.0)+5){throw 'Retain cleanup after the complete original child envelope.'}
+                    }
+                    $invalid=@($names|ForEach-Object {if($_ -ceq $rejections[-1]){'Fixture.Unrelated'}else{$_}})
+                    $refused=$false
+                    try{Get-OrdinaryUserNamespaceBudgetMilliseconds -TestCount 158 -TestNames $invalid|Out-Null}catch{$refused=$true}
+                    if(-not $refused){throw 'An unrelated method cannot borrow the original recovery deadline.'}
+                    $eng=Split-Path $Policy -Parent
+                    $minutes=& pwsh -NoProfile -File (Join-Path $eng 'verify-keep-remote-native.ps1') -Scope received-delete-reconciliation -BudgetOnly
+                    if($LASTEXITCODE -ne 0 -or [int]$minutes -ne [int][Math]::Ceiling((19*65000+120000)/60000.0)){
+                        throw 'The selected clean dual-architecture gate must preserve all nineteen actual65-second deadlines and collection.'
+                    }
+                    $workflow=Get-Content -LiteralPath (Join-Path (Split-Path $eng -Parent) '.github/workflows/received-delete-reconciliation.yml') -Raw
+                    if($workflow -notmatch 'runner: windows-latest' -or $workflow -notmatch 'runner: windows-11-arm' -or
+                       $workflow -notmatch 'prepare-native-ci-volume.ps1' -or $workflow -notmatch 'fail-fast: false' -or
+                       $workflow -notmatch 'timeout-minutes: 30' -or 30 - [int]$minutes -ne 7){
+                        throw 'Retain both native architectures, real NTFS/USN preparation and the original setup/export margin.'
+                    }
+                    exit 0
+                }
+                if ($Scenario -ceq 'journal-before-rescan-selected') {
+                    $eng=Split-Path $Policy -Parent
+                    $actual=ReadHistoricalNamespaceCatalog (Join-Path (Split-Path $Policy -Parent) 'test-suites.json')
+                    $added='MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseJournalUploadSourceTests.NativeProductionPumpSettlesOriginalJournalBeforeAnExplicitRescanAcrossOwners'
+                    $names=@($actual.required.namespace);$before=@($names|Where-Object {$_ -cne $added})
+                    if($names.Count -ne 148 -or $before.Count -ne 147 -or
+                       @($actual.required.native|Where-Object {$_ -ceq $added}).Count -ne 1 -or
+                       @($actual.allowSkipped|Where-Object {$_ -ceq $added}).Count -ne 1){throw 'The actual explicit-rescan native boundary must remain independently required.'}
+                    foreach($scope in @('AllRetained','S06')){
+                        $old=Get-OrdinaryUserNamespaceBudgetMilliseconds -TestCount 147 -TestNames $before -Scope $scope
+                        $new=Get-OrdinaryUserNamespaceBudgetMilliseconds -TestCount 148 -TestNames $names -Scope $scope
+                        if($new -ne $old+65000){throw 'Add exactly the original65-second fixture deadline.'}
+                    }
+                    $parameters=@{TestCount=148;TestNames=@($names|Where-Object {$_ -cne $added})}
+                    $rejected=$false;try{Get-OrdinaryUserNamespaceBudgetMilliseconds @parameters|Out-Null}catch{$rejected=$true}
+                    if(-not $rejected){throw 'An incomplete selected catalog cannot claim the added deadline.'}
+                    $minutes=& (Join-Path $eng 'verify-keep-remote-native.ps1') -Scope disabled-local-birth -BudgetOnly
+                    if($LASTEXITCODE -ne 0 -or $minutes -ne 17){throw 'The selected qualification must retain all fifteen cases, the successor owner window and cleanup.'}
+                    exit 0
+                }
+                if ($Scenario -ceq 'disabled-host-job-deadline') {
+                    $eng=Split-Path $Policy -Parent
+                    $workflow=[IO.File]::ReadAllText((Join-Path $eng '../.github/workflows/protected-confirmation.yml'))
+                    $job=$workflow.Substring($workflow.IndexOf('  signed-keep-remote:',[StringComparison]::Ordinal))
+                    $match=[regex]::Match($job,"timeout-minutes: \$\{\{ inputs\.contract == 'signed-disabled-host' && (?<expanded>[0-9]+) \|\| (?<legacy>[0-9]+) \}\}")
+                    $step=[regex]::Match($job,"(?s)if: inputs\.contract == 'signed-disabled-host'\s+shell: pwsh\s+timeout-minutes: (?<minutes>[0-9]+)")
+                    $current=& (Join-Path $eng 'verify-cli-disabled-operations.ps1') -BudgetOnly
+                    if($LASTEXITCODE -ne 0 -or -not $match.Success -or -not $step.Success -or
+                       [int]$match.Groups['legacy'].Value -ne 20 -or [int]$step.Groups['minutes'].Value -ne [int]$current){throw 'Retain the actual signed fixture budget and every legacy job deadline.'}
+                    # The previous signed Host contract allowed ten fixture minutes and ten setup/export minutes.
+                    if([int]$match.Groups['expanded'].Value -ne [int]$current+10){throw 'Retain the complete original signed setup/export margin.'}
+                    $full=[IO.File]::ReadAllText((Join-Path $eng '../.github/workflows/ci.yml'))
+                    $fullStep=[regex]::Match($full,"(?s)name: Verify signed ARM64 disabled operations.*?timeout-minutes: (?<minutes>[0-9]+)")
+                    if(-not $fullStep.Success -or [int]$fullStep.Groups['minutes'].Value -ne [int]$current){throw 'The final full workflow must retain the same actual fixture deadline.'}
+                    exit 0
+                }
+                if ($Scenario -ceq 'disabled-job-deadline') {
+                    $eng=Split-Path $Policy -Parent
+                    $workflow=[IO.File]::ReadAllText((Join-Path $eng '../.github/workflows/protected-confirmation.yml'))
+                    $job=$workflow.Substring($workflow.IndexOf('  probe:',[StringComparison]::Ordinal))
+                    $job=$job.Substring(0,$job.IndexOf('  signed-keep-remote:',[StringComparison]::Ordinal))
+                    $match=[regex]::Match($job,"timeout-minutes: \$\{\{ inputs\.contract == 'disabled-local-birth' && (?<expanded>[0-9]+) \|\| (?<legacy>[0-9]+) \}\}")
+                    if(-not $match.Success -or [int]$match.Groups['legacy'].Value -ne 15){throw 'Retain the original job deadline for every other qualification.'}
+                    $current=& (Join-Path $eng 'verify-keep-remote-native.ps1') -Scope disabled-local-birth -BudgetOnly
+                    if($LASTEXITCODE -ne 0){throw 'The actual native selection must supply its own step deadline.'}
+                    # Preserve the original five-case qualification's seven-minute setup/export margin.
+                    $originalStep=[int][Math]::Ceiling((5*65000+120000)/60000.0)
+                    $margin=[int]$match.Groups['legacy'].Value-$originalStep
+                    if([int]$match.Groups['expanded'].Value -ne [int]$current+$margin){throw 'The outer job must retain every original setup/export minute beyond its complete native step.'}
+                    exit 0
+                }
+                $bornCancellation='MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativePublicCancellationRecoversAnInheritedBornRootThroughItsOriginalPurposeAfterRoleDisposal'
+                $disabledImport='MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeAutomaticStartupKeepsDisabledImportLocalAcrossOwnersWithoutOpeningOrdinaryWork'
+                $disabledCreation='MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeDisabledRootControlledCreationRetainsFilesDirectoriesAndOriginalsAcrossOwnersWithoutDispatch'
+                $disabledCreationRole='MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeDisabledRootControlledCreationRetainsFilesDirectoriesAndOriginalsAcrossFreshRolesWithoutDispatch'
+                $disabledMove='MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeDisabledRootControlledMoveRetainsFilesDirectoriesAndOriginalsAcrossFreshRolesWithoutDispatch'
+                $disabledRetirement='MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeDisabledRootControlledRetirementRetainsOriginalJournalAcrossFreshRolesWithoutDispatch'
+                $disabledReplacement='MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeDisabledRootControlledReplacementRetainsBytesBackupAndJournalAcrossFreshRolesWithoutDispatch'
+                $residentReplacement='MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeResidentInSyncReplacementRetainsOriginalBytesJournalAndDirtyContentWithoutSourceCalls'
+                if ($Scenario -like 'resident-replacement-*') {
+                    $complete=ReadHistoricalNamespaceCatalog (Join-Path (Split-Path $Policy -Parent) 'test-suites.json')
+                    # Preserve the historical selection below; the new explicit-rescan boundary has its own exact gate.
+                    $complete.required.namespace=@($complete.required.namespace|Where-Object {$_ -cne 'MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseJournalUploadSourceTests.NativeProductionPumpSettlesOriginalJournalBeforeAnExplicitRescanAcrossOwners'})
+                    $names=@($complete.required.namespace);$prior=@($names|Where-Object {$_ -cne $residentReplacement})
+                    if($Count -ne 147 -or $names.Count -ne 147 -or $prior.Count -ne 146 -or
+                       @($complete.required.native|Where-Object {$_ -ceq $residentReplacement}).Count -ne 1 -or
+                       @($complete.allowSkipped|Where-Object {$_ -ceq $residentReplacement}).Count -ne 1 -or
+                       @($complete.requiredCases.$residentReplacement).Count -ne 2){throw 'Both actual resident identity starts must be independently required.'}
+                    if((Get-OrdinaryUserNamespaceBudgetMilliseconds -TestCount 146 -TestNames $prior) -ne 7990000 -or
+                       (Get-OrdinaryUserNamespaceBudgetMilliseconds -TestCount 146 -TestNames $prior -Scope S06) -ne 7585000){throw 'Every prior selected fixture must retain its original deadline.'}
+                    if($Scenario -ceq 'resident-replacement-selected'){
+                        if((Get-OrdinaryUserNamespaceBudgetMilliseconds -TestCount 147 -TestNames $names) -ne 8080000 -or
+                           (Get-OrdinaryUserNamespaceBudgetMilliseconds -TestCount 147 -TestNames $names -Scope S06) -ne 7675000){throw 'Only the two actual45-second replacement starts may add time.'}
+                    }else{
+                        $parameters=@{TestCount=147;TestNames=$names}
+                        switch($Scenario){
+                            'resident-replacement-missing' {$parameters.TestNames=$prior}
+                            'resident-replacement-unrelated' {$parameters.TestNames=@($names|ForEach-Object {if($_ -ceq $residentReplacement){'Fixture.Unrelated'}else{$_}})}
+                            'resident-replacement-duplicate' {$parameters.TestNames=@($names|ForEach-Object {if($_ -ceq $residentReplacement){$names[0]}else{$_}})}
+                            'resident-replacement-count-only' {$parameters.Remove('TestNames')}
+                            default {throw 'Unknown resident replacement selection.'}
+                        }
+                        $refused=$false;try{Get-OrdinaryUserNamespaceBudgetMilliseconds @parameters|Out-Null}catch{$refused=$true}
+                        if(-not $refused){throw 'An unrelated selection cannot borrow the two actual original deadlines.'}
+                    }
+                    exit 0
+                }
+                if ($Scenario -like 'disabled-replacement-*') {
+                    $complete=ReadHistoricalNamespaceCatalog (Join-Path (Split-Path $Policy -Parent) 'test-suites.json')
+                    # Preserve the historical selection below; the new explicit-rescan boundary has its own exact gate.
+                    $complete.required.namespace=@($complete.required.namespace|Where-Object {$_ -cne 'MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseJournalUploadSourceTests.NativeProductionPumpSettlesOriginalJournalBeforeAnExplicitRescanAcrossOwners'})
+                    $complete.required.namespace=@($complete.required.namespace|Where-Object {$_ -cne $residentReplacement})
+                    $names=@($complete.required.namespace)
+                    $prior=@($names|Where-Object {$_ -cne $disabledReplacement})
+                    if($Count -ne 146 -or $names.Count -ne 146 -or $prior.Count -ne 145 -or
+                       @($complete.required.native|Where-Object {$_ -ceq $disabledReplacement}).Count -ne 1 -or
+                       @($complete.allowSkipped|Where-Object {$_ -ceq $disabledReplacement}).Count -ne 1){throw 'The actual controlled replacement must be independently required.'}
+                    if((Get-OrdinaryUserNamespaceBudgetMilliseconds -TestCount 145 -TestNames $prior) -ne 7925000 -or
+                       (Get-OrdinaryUserNamespaceBudgetMilliseconds -TestCount 145 -TestNames $prior -Scope S06) -ne 7520000){throw 'Every original deadline must remain unchanged.'}
+                    if($Scenario -ceq 'disabled-replacement-selected'){
+                        if((Get-OrdinaryUserNamespaceBudgetMilliseconds -TestCount 146 -TestNames $names) -ne 7990000 -or
+                           (Get-OrdinaryUserNamespaceBudgetMilliseconds -TestCount 146 -TestNames $names -Scope S06) -ne 7585000){throw 'Only the actual new65-second execution may be added.'}
+                    }else{
+                        $parameters=@{TestCount=146;TestNames=$names}
+                        switch($Scenario){
+                            'disabled-replacement-missing' {$parameters.TestNames=$prior}
+                            'disabled-replacement-unrelated' {$parameters.TestNames=@($names|ForEach-Object {if($_ -ceq $disabledReplacement){'Fixture.Unrelated'}else{$_}})}
+                            'disabled-replacement-duplicate' {$parameters.TestNames=@($names|ForEach-Object {if($_ -ceq $disabledReplacement){$names[0]}else{$_}})}
+                            'disabled-replacement-count-only' {$parameters.Remove('TestNames')}
+                            default {throw 'Unknown disabled replacement selection.'}
+                        }
+                        $refused=$false
+                        try{Get-OrdinaryUserNamespaceBudgetMilliseconds @parameters|Out-Null}catch{$refused=$true}
+                        if(-not $refused){throw 'An unrelated or unbounded selection cannot borrow the controlled replacement deadline.'}
+                    }
+                    exit 0
+                }
+                if ($Scenario -like 'disabled-retirement-*') {
+                    $complete=ReadHistoricalNamespaceCatalog (Join-Path (Split-Path $Policy -Parent) 'test-suites.json')
+                    # Preserve the historical selection below; the new explicit-rescan boundary has its own exact gate.
+                    $complete.required.namespace=@($complete.required.namespace|Where-Object {$_ -cne 'MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseJournalUploadSourceTests.NativeProductionPumpSettlesOriginalJournalBeforeAnExplicitRescanAcrossOwners'})
+                    $complete.required.namespace=@($complete.required.namespace|Where-Object {$_ -cne $residentReplacement})
+                    $names=@($complete.required.namespace|Where-Object {$_ -cne $disabledReplacement})
+                    $prior=@($names|Where-Object {$_ -cne $disabledRetirement -and $_ -cne $disabledReplacement})
+                    if($Count -ne 145 -or $names.Count -ne 145 -or $prior.Count -ne 144 -or
+                       @($complete.required.native|Where-Object {$_ -ceq $disabledRetirement}).Count -ne 1 -or
+                       @($complete.allowSkipped|Where-Object {$_ -ceq $disabledRetirement}).Count -ne 1){throw 'The actual controlled retirement must be independently required.'}
+                    if((Get-OrdinaryUserNamespaceBudgetMilliseconds -TestCount 144 -TestNames $prior) -ne 7860000 -or
+                       (Get-OrdinaryUserNamespaceBudgetMilliseconds -TestCount 144 -TestNames $prior -Scope S06) -ne 7455000){throw 'Every original deadline must remain unchanged.'}
+                    if($Scenario -ceq 'disabled-retirement-selected'){
+                        if((Get-OrdinaryUserNamespaceBudgetMilliseconds -TestCount 145 -TestNames $names) -ne 7925000 -or
+                           (Get-OrdinaryUserNamespaceBudgetMilliseconds -TestCount 145 -TestNames $names -Scope S06) -ne 7520000){throw 'Only the actual new65-second execution may be added.'}
+                    }else{
+                        $parameters=@{TestCount=145;TestNames=$names}
+                        switch($Scenario){
+                            'disabled-retirement-missing' {$parameters.TestNames=$prior}
+                            'disabled-retirement-unrelated' {$parameters.TestNames=@($names|ForEach-Object {if($_ -ceq $disabledRetirement){'Fixture.Unrelated'}else{$_}})}
+                            'disabled-retirement-duplicate' {$parameters.TestNames=@($names|ForEach-Object {if($_ -ceq $disabledRetirement){$names[0]}else{$_}})}
+                            'disabled-retirement-count-only' {$parameters.Remove('TestNames')}
+                            default {throw 'Unknown disabled retirement selection.'}
+                        }
+                        $refused=$false
+                        try{Get-OrdinaryUserNamespaceBudgetMilliseconds @parameters|Out-Null}catch{$refused=$true}
+                        if(-not $refused){throw 'An unrelated or unbounded selection cannot borrow the controlled retirement deadline.'}
+                    }
+                    exit 0
+                }
+                if ($Scenario -like 'disabled-move-*') {
+                    $complete=ReadHistoricalNamespaceCatalog (Join-Path (Split-Path $Policy -Parent) 'test-suites.json')
+                    # Preserve the historical selection below; the new explicit-rescan boundary has its own exact gate.
+                    $complete.required.namespace=@($complete.required.namespace|Where-Object {$_ -cne 'MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseJournalUploadSourceTests.NativeProductionPumpSettlesOriginalJournalBeforeAnExplicitRescanAcrossOwners'})
+                    $complete.required.namespace=@($complete.required.namespace|Where-Object {$_ -cne $residentReplacement})
+                    $names=@($complete.required.namespace|Where-Object {$_ -cne $disabledRetirement -and $_ -cne $disabledReplacement})
+                    $prior=@($names|Where-Object {$_ -cne $disabledMove -and $_ -cne $disabledRetirement -and $_ -cne $disabledReplacement})
+                    if($Count -ne 144 -or $names.Count -ne 144 -or $prior.Count -ne 143 -or
+                       @($complete.required.native|Where-Object {$_ -ceq $disabledMove}).Count -ne 1 -or
+                       @($complete.allowSkipped|Where-Object {$_ -ceq $disabledMove}).Count -ne 1){throw 'The actual controlled move must be independently required.'}
+                    if((Get-OrdinaryUserNamespaceBudgetMilliseconds -TestCount 143 -TestNames $prior) -ne 7795000 -or
+                       (Get-OrdinaryUserNamespaceBudgetMilliseconds -TestCount 143 -TestNames $prior -Scope S06) -ne 7390000){throw 'Every original deadline must remain unchanged.'}
+                    if($Scenario -ceq 'disabled-move-selected'){
+                        if((Get-OrdinaryUserNamespaceBudgetMilliseconds -TestCount 144 -TestNames $names) -ne 7860000 -or
+                           (Get-OrdinaryUserNamespaceBudgetMilliseconds -TestCount 144 -TestNames $names -Scope S06) -ne 7455000){throw 'Only the actual new65-second execution may be added.'}
+                    }else{
+                        $parameters=@{TestCount=144;TestNames=$names}
+                        switch($Scenario){
+                            'disabled-move-missing' {$parameters.TestNames=$prior}
+                            'disabled-move-unrelated' {$parameters.TestNames=@($names|ForEach-Object {if($_ -ceq $disabledMove){'Fixture.Unrelated'}else{$_}})}
+                            'disabled-move-duplicate' {$parameters.TestNames=@($names|ForEach-Object {if($_ -ceq $disabledMove){$names[0]}else{$_}})}
+                            'disabled-move-count-only' {$parameters.Remove('TestNames')}
+                            default {throw 'Unknown disabled move selection.'}
+                        }
+                        $refused=$false
+                        try{Get-OrdinaryUserNamespaceBudgetMilliseconds @parameters|Out-Null}catch{$refused=$true}
+                        if(-not $refused){throw 'An unrelated or unbounded selection cannot borrow the controlled move deadline.'}
+                    }
+                    exit 0
+                }
+                if ($Scenario -like 'disabled-create-role-*') {
+                    $complete=ReadHistoricalNamespaceCatalog (Join-Path (Split-Path $Policy -Parent) 'test-suites.json')
+                    # Preserve the historical selection below; the new explicit-rescan boundary has its own exact gate.
+                    $complete.required.namespace=@($complete.required.namespace|Where-Object {$_ -cne 'MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseJournalUploadSourceTests.NativeProductionPumpSettlesOriginalJournalBeforeAnExplicitRescanAcrossOwners'})
+                    $complete.required.namespace=@($complete.required.namespace|Where-Object {$_ -cne $residentReplacement})
+                    $names=@($complete.required.namespace|Where-Object {$_ -cne $disabledMove -and $_ -cne $disabledRetirement -and $_ -cne $disabledReplacement})
+                    $prior=@($names|Where-Object {$_ -cne $disabledCreationRole})
+                    if($Count -ne 143 -or $names.Count -ne 143 -or $prior.Count -ne 142 -or
+                       @($complete.required.native|Where-Object {$_ -ceq $disabledCreationRole}).Count -ne 1 -or
+                       @($complete.allowSkipped|Where-Object {$_ -ceq $disabledCreationRole}).Count -ne 1){throw 'The fresh-role creation boundary must be separately required.'}
+                    if((Get-OrdinaryUserNamespaceBudgetMilliseconds -TestCount 142 -TestNames $prior) -ne 7730000 -or
+                       (Get-OrdinaryUserNamespaceBudgetMilliseconds -TestCount 142 -TestNames $prior -Scope S06) -ne 7325000){throw 'Every original deadline must remain unchanged.'}
+                    if($Scenario -ceq 'disabled-create-role-selected'){
+                        if((Get-OrdinaryUserNamespaceBudgetMilliseconds -TestCount 143 -TestNames $names) -ne 7795000 -or
+                           (Get-OrdinaryUserNamespaceBudgetMilliseconds -TestCount 143 -TestNames $names -Scope S06) -ne 7390000){throw 'Only the actual new65-second execution may be added.'}
+                    }else{
+                        $parameters=@{TestCount=143;TestNames=$names}
+                        switch($Scenario){
+                            'disabled-create-role-missing' {$parameters.TestNames=$prior}
+                            'disabled-create-role-unrelated' {$parameters.TestNames=@($names|ForEach-Object {if($_ -ceq $disabledCreationRole){'Fixture.Unrelated'}else{$_}})}
+                            'disabled-create-role-duplicate' {$parameters.TestNames=@($names|ForEach-Object {if($_ -ceq $disabledCreationRole){$names[0]}else{$_}})}
+                            'disabled-create-role-count-only' {$parameters.Remove('TestNames')}
+                            default {throw 'Unknown fresh-role creation selection.'}
+                        }
+                        $refused=$false
+                        try{Get-OrdinaryUserNamespaceBudgetMilliseconds @parameters|Out-Null}catch{$refused=$true}
+                        if(-not $refused){throw 'An unrelated or unbounded selection cannot borrow the fresh-role deadline.'}
+                    }
+                    exit 0
+                }
+                if ($Scenario -like 'disabled-creation-*') {
+                    $complete=ReadHistoricalNamespaceCatalog (Join-Path (Split-Path $Policy -Parent) 'test-suites.json')
+                    # Preserve the historical selection below; the new explicit-rescan boundary has its own exact gate.
+                    $complete.required.namespace=@($complete.required.namespace|Where-Object {$_ -cne 'MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseJournalUploadSourceTests.NativeProductionPumpSettlesOriginalJournalBeforeAnExplicitRescanAcrossOwners'})
+                    $complete.required.namespace=@($complete.required.namespace|Where-Object {$_ -cne $residentReplacement})
+                    $names=@($complete.required.namespace|Where-Object {$_ -cne $disabledCreationRole -and $_ -cne $disabledMove -and $_ -cne $disabledRetirement -and $_ -cne $disabledReplacement})
+                    $prior=@($names|Where-Object {$_ -cne $disabledCreation})
+                    if($Count -ne 142 -or $names.Count -ne 142 -or $prior.Count -ne 141 -or
+                       @($complete.required.native|Where-Object {$_ -ceq $disabledCreation}).Count -ne 1 -or
+                       @($complete.allowSkipped|Where-Object {$_ -ceq $disabledCreation}).Count -ne 1){throw 'The actual disabled creation must be separately required and declared for both native scopes.'}
+                    if((Get-OrdinaryUserNamespaceBudgetMilliseconds -TestCount 141 -TestNames $prior) -ne 7665000 -or
+                       (Get-OrdinaryUserNamespaceBudgetMilliseconds -TestCount 141 -TestNames $prior -Scope S06) -ne 7260000){throw 'Every original deadline must remain unchanged.'}
+                    if($Scenario -ceq 'disabled-creation-selected'){
+                        if((Get-OrdinaryUserNamespaceBudgetMilliseconds -TestCount 142 -TestNames $names) -ne 7730000 -or
+                           (Get-OrdinaryUserNamespaceBudgetMilliseconds -TestCount 142 -TestNames $names -Scope S06) -ne 7325000){throw 'The new method adds exactly one65-second native execution.'}
+                    }else{
+                        $parameters=@{TestCount=142;TestNames=$names}
+                        switch($Scenario){
+                            'disabled-creation-missing' {$parameters.TestNames=$prior}
+                            'disabled-creation-unrelated' {$parameters.TestNames=@($names|ForEach-Object {if($_ -ceq $disabledCreation){'Fixture.Unrelated'}else{$_}})}
+                            'disabled-creation-duplicate' {$parameters.TestNames=@($names|ForEach-Object {if($_ -ceq $disabledCreation){$names[0]}else{$_}})}
+                            'disabled-creation-count-only' {$parameters.Remove('TestNames')}
+                            default {throw 'Unknown disabled creation selection.'}
+                        }
+                        $refused=$false
+                        try{Get-OrdinaryUserNamespaceBudgetMilliseconds @parameters|Out-Null}catch{$refused=$true}
+                        if(-not $refused){throw 'An unbounded or substituted catalog cannot borrow the actual native deadline.'}
+                    }
+                    exit 0
+                }
+                $legacyInitializer='MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativePublicCancellationRetainsAndResumesItsOriginalPartiallyRotatedInitializer'
+                $keepRemotePrefix='MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.'
+                $keepRemote=@('NativeKeepRemoteFirstSealRequiresTheOriginalFileAndJournalAndReplaysWithoutWriting',
+                    'NativeKeepRemoteResidentByteCopyRetainsPlaceholderAndOriginalJournal',
+                    'NativeKeepRemoteResidentWriterKeepsItsWriteAndCompletionFactsAcrossRetry',
+                    'NativeKeepRemoteResidentWriterPreservesChangedLocalBytesBeforeItsFirstWrite',
+                    'NativeKeepRemoteConfirmationRetainsOriginalAttemptsAndRecoversLostSdkReturns',
+                    'NativeKeepRemoteAcknowledgementRecoversLostSdkReturnAndPreservesLaterEdit',
+                    'NativeKeepRemoteIndependentRuntimeSettlesOriginalCommandBeforeReadmission',
+                    'NativeKeepRemoteUploadPumpResumesAcceptedCommandAfterRootAudit',
+                    'NativeKeepRemoteCfSharpAccessOnlyPreservesOriginalJournalAndRealSameLengthWrite',
+                    'NativeKeepRemoteDefaultCommandResumesFirstPermissionIntentBeforeRootAudit',
+                    'NativeKeepRemoteCurrentRoleRestoresItsRegisteredInheritedDescriptor',
+                    'NativeKeepRemoteAfterAcknowledgedMoveRetainsItsPrefixAndSettlesTheOriginalJournal',
+                    'NativeKeepRemoteControlledCreatePreservesItsAbsentBaselineAndAllOriginalJournalEffects',
+                    'NativeKeepRemoteNewRoleResumesOriginalWriteAndConfirmsSelectedBytes',
+                    'NativeKeepRemoteRestorationRetainsActualAccessResultsAndPreservesOrdinaryLaterEdits',
+                    'NativeKeepRemoteRoleHandoffRecoversLostReadbackWithoutReapplyingContent')|ForEach-Object {$keepRemotePrefix+$_}
+                if ($Scenario -like 'keep-remote-*') {
+                    $catalog=ReadHistoricalNamespaceCatalog (Join-Path (Split-Path $Policy -Parent) 'test-suites.json')
+                    # Preserve the historical selection below; the new explicit-rescan boundary has its own exact gate.
+                    $catalog.required.namespace=@($catalog.required.namespace|Where-Object {$_ -cne 'MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseJournalUploadSourceTests.NativeProductionPumpSettlesOriginalJournalBeforeAnExplicitRescanAcrossOwners'})
+                    $catalog.required.namespace=@($catalog.required.namespace|Where-Object {$_ -cne $residentReplacement})
+                    $names=@($catalog.required.namespace | Where-Object {$_ -cne $disabledCreationRole -and $_ -cne $disabledCreation -and $_ -cne $disabledMove -and $_ -cne $disabledRetirement -and $_ -cne $disabledReplacement})
+                    $prior=@($names|Where-Object {$_ -cnotin $keepRemote})
+                    if ($Count -ne 141 -or $names.Count -ne $Count -or $prior.Count -ne 125 -or
+                        @($keepRemote|Where-Object {$_ -cin $names}).Count -ne 16) {throw 'Require every explicit resident KeepRemote method and every prior method.'}
+                    $actualRows=0
+                    foreach($method in $keepRemote){$cases=$catalog.requiredCases.PSObject.Properties[$method];$actualRows+=if($null -eq $cases){1}else{@($cases.Value).Count}}
+                    if($actualRows -ne 29){throw 'The explicit native data rows and their controller deadlines must change together.'}
+                    if ((Get-OrdinaryUserNamespaceBudgetMilliseconds -TestCount 125 -TestNames $prior) -ne 5780000 -or
+                        (Get-OrdinaryUserNamespaceBudgetMilliseconds -TestCount 125 -TestNames $prior -Scope S06) -ne 5375000) {throw 'Retain the complete original catalog deadlines.'}
+                    if ($Scenario -eq 'keep-remote-selected') {
+                        if ((Get-OrdinaryUserNamespaceBudgetMilliseconds -TestCount $Count -TestNames $names) -ne 5780000+29*65000 -or
+                            (Get-OrdinaryUserNamespaceBudgetMilliseconds -TestCount $Count -TestNames $names -Scope S06) -ne 5375000+29*65000) {throw 'Each actual data row owns its 65-second native deadline.'}
+                    } else {
+                        $parameters=@{TestCount=$Count;TestNames=$names}
+                        switch ($Scenario) {
+                            'keep-remote-missing' {$parameters.TestNames=@($names|Where-Object {$_ -cne $keepRemote[0]})}
+                            'keep-remote-unrelated' {$parameters.TestNames=@($names|ForEach-Object {if($_ -ceq $keepRemote[0]){'Fixture.Unrelated'}else{$_}})}
+                            'keep-remote-duplicate' {$parameters.TestNames=@($names|ForEach-Object {if($_ -ceq $keepRemote[0]){$names[0]}else{$_}})}
+                            'keep-remote-count-only' {$parameters.Remove('TestNames')}
+                            'keep-remote-restoration-missing' {$parameters.TestNames=@($names|Where-Object {$_ -cne $keepRemote[-2]})}
+                            'keep-remote-restoration-unrelated' {$parameters.TestNames=@($names|ForEach-Object {if($_ -ceq $keepRemote[-2]){'Fixture.Unrelated'}else{$_}})}
+                            default {throw 'Unknown resident KeepRemote selection.'}
+                        }
+                        $rejected=$false
+                        try {Get-OrdinaryUserNamespaceBudgetMilliseconds @parameters|Out-Null} catch {$rejected=$true}
+                        if (-not $rejected) {throw 'A substitute, missing, duplicate or count-only selection cannot borrow a KeepRemote deadline.'}
+                    }
+                    exit 0
+                }
+                if ($Scenario -like 'disabled-import-*') {
+                    $catalog=ReadHistoricalNamespaceCatalog (Join-Path (Split-Path $Policy -Parent) 'test-suites.json')
+                    # Preserve the historical selection below; the new explicit-rescan boundary has its own exact gate.
+                    $catalog.required.namespace=@($catalog.required.namespace|Where-Object {$_ -cne 'MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseJournalUploadSourceTests.NativeProductionPumpSettlesOriginalJournalBeforeAnExplicitRescanAcrossOwners'})
+                    $catalog.required.namespace=@($catalog.required.namespace|Where-Object {$_ -cne $residentReplacement})
+                    $names=@($catalog.required.namespace | Where-Object {$_ -cne $disabledCreationRole -and $_ -cne $disabledCreation -and $_ -cne $disabledMove -and $_ -cne $disabledRetirement -and $_ -cne $disabledReplacement} | Where-Object {$_ -cnotin $keepRemote})
+                    $prior=@($names|Where-Object {$_ -cne $disabledImport})
+                    if ($Count -ne 125 -or $names.Count -ne $Count -or $prior.Count -ne 124) {throw 'Require precisely the original catalog plus the disabled-import method.'}
+                    if ((Get-OrdinaryUserNamespaceBudgetMilliseconds -TestCount 124 -TestNames $prior) -ne 5715000 -or
+                        (Get-OrdinaryUserNamespaceBudgetMilliseconds -TestCount 124 -TestNames $prior -Scope S06) -ne 5310000) {throw 'Retain both complete original deadlines.'}
+                    if ($Scenario -eq 'disabled-import-selected') {
+                        if ((Get-OrdinaryUserNamespaceBudgetMilliseconds -TestCount $Count -TestNames $names) -ne 5780000 -or
+                            (Get-OrdinaryUserNamespaceBudgetMilliseconds -TestCount $Count -TestNames $names -Scope S06) -ne 5375000 -or
+                            (Get-OrdinaryUserNamespaceStepTimeoutMinutes -TestCount $Count -TestNames $names) -ne 102 -or
+                            (Get-OrdinaryUserNamespaceStepTimeoutMinutes -TestCount $Count -TestNames $names -Scope S06) -ne 95) {throw 'Add only the actual65-second method and retain cleanup.'}
+                    } else {
+                        $parameters=@{TestCount=$Count;TestNames=$names}
+                        switch ($Scenario) {
+                            'disabled-import-missing' {$parameters.TestNames=@($names|Where-Object {$_ -cne $disabledImport})}
+                            'disabled-import-unrelated' {$parameters.TestNames=@($names|ForEach-Object {if($_ -ceq $disabledImport){'Fixture.Unrelated'}else{$_}})}
+                            'disabled-import-duplicate' {$parameters.TestNames=@($names|ForEach-Object {if($_ -ceq $disabledImport){$names[0]}else{$_}})}
+                            'disabled-import-count-only' {$parameters.Remove('TestNames')}
+                            default {throw 'Unknown disabled-import selection.'}
+                        }
+                        $rejected=$false
+                        try {Get-OrdinaryUserNamespaceBudgetMilliseconds @parameters|Out-Null} catch {$rejected=$true}
+                        if (-not $rejected) {throw 'No substitute, missing, duplicate or count-only expansion may borrow this native deadline.'}
+                    }
+                    exit 0
+                }
+                if ($Scenario -like 'born-root-cancellation-*') {
+                    $catalog=ReadHistoricalNamespaceCatalog (Join-Path (Split-Path $Policy -Parent) 'test-suites.json')
+                    # Preserve the historical selection below; the new explicit-rescan boundary has its own exact gate.
+                    $catalog.required.namespace=@($catalog.required.namespace|Where-Object {$_ -cne 'MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseJournalUploadSourceTests.NativeProductionPumpSettlesOriginalJournalBeforeAnExplicitRescanAcrossOwners'})
+                    $catalog.required.namespace=@($catalog.required.namespace|Where-Object {$_ -cne $residentReplacement})
+                    $names=@($catalog.required.namespace | Where-Object {$_ -cne $disabledCreationRole -and $_ -cne $disabledCreation -and $_ -cne $disabledMove -and $_ -cne $disabledRetirement -and $_ -cne $disabledReplacement} | Where-Object {$_ -cnotin $keepRemote} | Where-Object {$_ -cne $disabledImport})
+                    if ($Count -ne 124 -or $names.Count -ne $Count -or @($names|Where-Object {$_ -ceq $bornCancellation}).Count -ne 1) {throw 'Require the exact additive inherited born-root cancellation catalog.'}
+                    if ($Scenario -eq 'born-root-cancellation-selected') {
+                        $prior=@($names|Where-Object {$_ -cne $bornCancellation})
+                        if ((Get-OrdinaryUserNamespaceBudgetMilliseconds -TestCount 123 -TestNames $prior) -ne 5595000) {throw 'Retain every original 123-name fixture deadline.'}
+                        if ((Get-OrdinaryUserNamespaceBudgetMilliseconds -TestCount $Count -TestNames $names) -ne 5595000+2*60000) {throw 'Add only the two actual inherited born-root 60-second executions.'}
+                        if ((Get-OrdinaryUserNamespaceStepTimeoutMinutes -TestCount $Count -TestNames $names) -ne 101) {throw 'Retain the five-minute diagnostic/profile cleanup margin.'}
+                    } else {
+                        $parameters=@{TestCount=$Count;TestNames=$names}
+                        switch ($Scenario) {
+                            'born-root-cancellation-missing' {$parameters.TestNames=@($names|ForEach-Object {if($_ -ceq $bornCancellation){'Fixture.Unrelated'}else{$_}})}
+                            'born-root-cancellation-duplicate' {$parameters.TestNames=@($names|ForEach-Object {if($_ -ceq $bornCancellation){$names[0]}else{$_}})}
+                            'born-root-cancellation-count-only' {$parameters.Remove('TestNames')}
+                            default {throw 'Unknown born-root cancellation selection.'}
+                        }
+                        $rejected=$false
+                        try {Get-OrdinaryUserNamespaceBudgetMilliseconds @parameters|Out-Null} catch {$rejected=$true}
+                        if (-not $rejected) {throw 'A new slot cannot substitute an unrelated method or omit its exact selected catalog.'}
+                    }
+                    exit 0
+                }
+                if ($Scenario -like 'legacy-initializer-*') {
+                    $catalog=ReadHistoricalNamespaceCatalog (Join-Path (Split-Path $Policy -Parent) 'test-suites.json')
+                    # Preserve the historical selection below; the new explicit-rescan boundary has its own exact gate.
+                    $catalog.required.namespace=@($catalog.required.namespace|Where-Object {$_ -cne 'MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseJournalUploadSourceTests.NativeProductionPumpSettlesOriginalJournalBeforeAnExplicitRescanAcrossOwners'})
+                    $catalog.required.namespace=@($catalog.required.namespace|Where-Object {$_ -cne $residentReplacement})
+                    $names=@($catalog.required.namespace | Where-Object {$_ -cne $disabledCreationRole -and $_ -cne $disabledCreation -and $_ -cne $disabledMove -and $_ -cne $disabledRetirement -and $_ -cne $disabledReplacement} | Where-Object {$_ -cnotin $keepRemote} | Where-Object {$_ -cne $disabledImport} | Where-Object {$_ -cne $bornCancellation})
+                    if ($Count -ne 123 -or $names.Count -ne $Count -or @($names|Where-Object {$_ -ceq $legacyInitializer}).Count -ne 1) {throw 'Require the complete explicit original-initializer cancellation catalog.'}
+                    if ($Scenario -eq 'legacy-initializer-selected') {
+                        $prior=@($names|Where-Object {$_ -cne $legacyInitializer})
+                        if ((Get-OrdinaryUserNamespaceBudgetMilliseconds -TestCount 122 -TestNames $prior) -ne 4635000) {throw 'Every original deadline must remain exact.'}
+                        if ((Get-OrdinaryUserNamespaceBudgetMilliseconds -TestCount $Count -TestNames $names) -ne 4755000+4*60000+10*60000) {throw 'Retain all six original executions and add only ten born-recovery cut60-second executions.'}
+                        if ((Get-OrdinaryUserNamespaceStepTimeoutMinutes -TestCount $Count -TestNames $names) -ne 99) {throw 'Preserve the five-minute diagnostic/profile cleanup margin.'}
+                    } else {
+                        $parameters=@{TestCount=$Count;TestNames=$names}
+                        switch ($Scenario) {
+                            'legacy-initializer-missing' {$parameters.TestNames=@($names|ForEach-Object {if($_ -ceq $legacyInitializer){'Fixture.Unrelated'}else{$_}})}
+                            'legacy-initializer-duplicate' {$parameters.TestNames=@($names|ForEach-Object {if($_ -ceq $legacyInitializer){$names[0]}else{$_}})}
+                            'legacy-initializer-count-only' {$parameters.Remove('TestNames')}
+                            default {throw 'Unknown explicit initializer selection test.'}
+                        }
+                        $rejected=$false
+                        try {Get-OrdinaryUserNamespaceBudgetMilliseconds @parameters|Out-Null} catch {$rejected=$true}
+                        if (-not $rejected) {throw 'An added slot cannot replace the exact original initializer method or omit its selected catalog.'}
+                    }
+                    exit 0
+                }
+                $unsealed='MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativePublicRuntimeCancelsOriginalUnsealedRootPreparationsAfterIndependentRoleDisposal'
+                if ($Scenario -like 'unsealed-cancellation-*') {
+                    $catalog=ReadHistoricalNamespaceCatalog (Join-Path (Split-Path $Policy -Parent) 'test-suites.json')
+                    # Preserve the historical selection below; the new explicit-rescan boundary has its own exact gate.
+                    $catalog.required.namespace=@($catalog.required.namespace|Where-Object {$_ -cne 'MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseJournalUploadSourceTests.NativeProductionPumpSettlesOriginalJournalBeforeAnExplicitRescanAcrossOwners'})
+                    $catalog.required.namespace=@($catalog.required.namespace|Where-Object {$_ -cne $residentReplacement})
+                    $names=@($catalog.required.namespace | Where-Object {$_ -cne $disabledCreationRole -and $_ -cne $disabledCreation -and $_ -cne $disabledMove -and $_ -cne $disabledRetirement -and $_ -cne $disabledReplacement} | Where-Object {$_ -cnotin $keepRemote} | Where-Object {$_ -cne $disabledImport} | Where-Object {$_ -cne $bornCancellation} | Where-Object {$_ -cne $legacyInitializer})
+                    if ($Count -ne 122 -or $names.Count -ne $Count -or @($names|Where-Object {$_ -ceq $unsealed}).Count -ne 1) {throw 'Require the complete explicit unsealed cancellation catalog.'}
+                    if ($Scenario -eq 'unsealed-cancellation-selected') {
+                        $legacy=@($names|Where-Object {$_ -cne $unsealed})
+                        $prior=Get-OrdinaryUserNamespaceBudgetMilliseconds -TestCount 121 -TestNames $legacy
+                        $actual=Get-OrdinaryUserNamespaceBudgetMilliseconds -TestCount $Count -TestNames $names
+                        if ($prior -ne 4515000 -or $actual -ne $prior+2*60000) {throw 'Retain every prior deadline and both actual unsealed cancellation executions.'}
+                        if ((Get-OrdinaryUserNamespaceStepTimeoutMinutes -TestCount $Count -TestNames $names) -ne 83) {throw 'Retain the five-minute diagnostic/profile cleanup margin.'}
+                    } else {
+                        $names=@($names|ForEach-Object {if($_ -ceq $unsealed){'Fixture.Unrelated'}else{$_}})
+                        $rejected=$false
+                        try {Get-OrdinaryUserNamespaceBudgetMilliseconds -TestCount $Count -TestNames $names|Out-Null} catch {$rejected=$true}
+                        if (-not $rejected) {throw 'The added slot cannot substitute an unrelated method.'}
+                    }
+                    exit 0
+                }
+                if ($Scenario -like 'root-cancellation-*') {
+                    $catalog=ReadHistoricalNamespaceCatalog (Join-Path (Split-Path $Policy -Parent) 'test-suites.json')
+                    # Preserve the historical selection below; the new explicit-rescan boundary has its own exact gate.
+                    $catalog.required.namespace=@($catalog.required.namespace|Where-Object {$_ -cne 'MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseJournalUploadSourceTests.NativeProductionPumpSettlesOriginalJournalBeforeAnExplicitRescanAcrossOwners'})
+                    $catalog.required.namespace=@($catalog.required.namespace|Where-Object {$_ -cne $residentReplacement})
+                    $names=@($catalog.required.namespace | Where-Object {$_ -cne $disabledCreationRole -and $_ -cne $disabledCreation -and $_ -cne $disabledMove -and $_ -cne $disabledRetirement -and $_ -cne $disabledReplacement} | Where-Object {$_ -cnotin $keepRemote} | Where-Object {$_ -cne $disabledImport} | Where-Object {$_ -cne $bornCancellation} | Where-Object {$_ -cne $legacyInitializer} | Where-Object {$_ -cne $unsealed})
+                    $cancel='MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativePublicRuntimeCancelsOnlyUnstartedOriginalRootLabelsAcrossRolesAndRetainsLaterNames'
+                    if ($Count -ne 121 -or $names.Count -ne $Count -or @($names|Where-Object {$_ -ceq $cancel}).Count -ne 1) {throw 'Require the complete explicit cancellation catalog.'}
+                    if ($Scenario -eq 'root-cancellation-selected') {
+                        $legacy=@($names|Where-Object {$_ -cne $cancel})
+                        $prior=Get-OrdinaryUserNamespaceBudgetMilliseconds -TestCount 120 -TestNames $legacy
+                        $actual=Get-OrdinaryUserNamespaceBudgetMilliseconds -TestCount $Count -TestNames $names
+                        if ($prior -ne 4155000 -or $actual -ne $prior+6*60000) {throw 'Keep all prior native deadlines and count each of the six actual cancellation/refusal executions.'}
+                        if ((Get-OrdinaryUserNamespaceStepTimeoutMinutes -TestCount $Count -TestNames $names) -ne 81) {throw 'Preserve the five-minute diagnostic/profile cleanup margin.'}
+                    } else {
+                        $names=@($names|ForEach-Object {if($_ -ceq $cancel){'Fixture.Unrelated'}else{$_}})
+                        $rejected=$false
+                        try {Get-OrdinaryUserNamespaceBudgetMilliseconds -TestCount $Count -TestNames $names|Out-Null} catch {$rejected=$true}
+                        if (-not $rejected) {throw 'The added slot cannot substitute an unrelated method.'}
+                    }
+                    exit 0
+                }
+                if ($Scenario -like 'root-public-*') {
+                    $catalog=ReadHistoricalNamespaceCatalog (Join-Path (Split-Path $Policy -Parent) 'test-suites.json')
+                    # Preserve the historical selection below; the new explicit-rescan boundary has its own exact gate.
+                    $catalog.required.namespace=@($catalog.required.namespace|Where-Object {$_ -cne 'MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseJournalUploadSourceTests.NativeProductionPumpSettlesOriginalJournalBeforeAnExplicitRescanAcrossOwners'})
+                    $catalog.required.namespace=@($catalog.required.namespace|Where-Object {$_ -cne $residentReplacement})
+                    $names=@($catalog.required.namespace | Where-Object {$_ -cne $disabledCreationRole -and $_ -cne $disabledCreation -and $_ -cne $disabledMove -and $_ -cne $disabledRetirement -and $_ -cne $disabledReplacement} | Where-Object {$_ -cnotin $keepRemote} | Where-Object {$_ -cne $disabledImport} | Where-Object {$_ -cne $bornCancellation} | Where-Object {$_ -cne $legacyInitializer} | Where-Object {$_ -cne $unsealed} | Where-Object {$_ -cne 'MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativePublicRuntimeCancelsOnlyUnstartedOriginalRootLabelsAcrossRolesAndRetainsLaterNames'})
+                    $public='MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativePublicRuntimeExecutesOnlyOriginalProtectedRootLabelsAndAuditsCurrentReadmission'
+                    if ($Count -ne 120 -or $names.Count -ne $Count -or @($names|Where-Object {$_ -ceq $public}).Count -ne 1) {throw 'Require the exact additive public runtime catalog.'}
+                    if ($Scenario -eq 'root-public-selected') {
+                        $actual=Get-OrdinaryUserNamespaceBudgetMilliseconds -TestCount $Count -TestNames $names
+                        if ($actual -ne 3915000+4*60000) {throw 'All four active/disabled and case-only public runtime executions retain sixty-second deadlines.'}
+                        if ((Get-OrdinaryUserNamespaceStepTimeoutMinutes -TestCount $Count -TestNames $names) -ne 75) {throw 'Retain diagnostics and disposable-user cleanup after the bounded child.'}
+                    } else {
+                        $names=@($names|ForEach-Object {if($_ -ceq $public){'Fixture.Unrelated'}else{$_}})
+                        $rejected=$false
+                        try {Get-OrdinaryUserNamespaceBudgetMilliseconds -TestCount $Count -TestNames $names|Out-Null} catch {$rejected=$true}
+                        if (-not $rejected) {throw 'The expanded slot must require the actual public runtime method.'}
+                    }
+                    exit 0
+                }
+                if ($Scenario -like 'root-admission-*') {
+                    $catalog=ReadHistoricalNamespaceCatalog (Join-Path (Split-Path $Policy -Parent) 'test-suites.json')
+                    # Preserve the historical selection below; the new explicit-rescan boundary has its own exact gate.
+                    $catalog.required.namespace=@($catalog.required.namespace|Where-Object {$_ -cne 'MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseJournalUploadSourceTests.NativeProductionPumpSettlesOriginalJournalBeforeAnExplicitRescanAcrossOwners'})
+                    $catalog.required.namespace=@($catalog.required.namespace|Where-Object {$_ -cne $residentReplacement})
+                    $names=@($catalog.required.namespace | Where-Object {$_ -cne $disabledCreationRole -and $_ -cne $disabledCreation -and $_ -cne $disabledMove -and $_ -cne $disabledRetirement -and $_ -cne $disabledReplacement} | Where-Object {$_ -cnotin $keepRemote} | Where-Object {$_ -cne $disabledImport} | Where-Object {$_ -cne $bornCancellation} | Where-Object {$_ -cne $legacyInitializer} | Where-Object {$_ -cne $unsealed} | Where-Object {$_ -cne 'MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativePublicRuntimeCancelsOnlyUnstartedOriginalRootLabelsAcrossRolesAndRetainsLaterNames'} | Where-Object {$_ -cne 'MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativePublicRuntimeExecutesOnlyOriginalProtectedRootLabelsAndAuditsCurrentReadmission'})
+                    $admission='MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeRootLabelJournalAdmissionRequiresCurrentTreeAndActualSdkReturnBeforeReadmission'
+                    if ($Count -ne 119 -or $names.Count -ne $Count -or @($names|Where-Object {$_ -ceq $admission}).Count -ne 1) {throw 'Require the exact additive admission catalog.'}
+                    if ($Scenario -eq 'root-admission-selected') {
+                        $actual=Get-OrdinaryUserNamespaceBudgetMilliseconds -TestCount $Count -TestNames $names
+                        if ($actual -ne 3735000+6*30000) {throw 'All six enabled/disabled ACK cuts retain their existing thirty-second deadlines.'}
+                        if ((Get-OrdinaryUserNamespaceStepTimeoutMinutes -TestCount $Count -TestNames $names) -ne 71) {throw 'Preserve diagnostics and disposable-user cleanup after the actual bounded child budget.'}
+                    } else {
+                        $names=@($names|ForEach-Object {if($_ -ceq $admission){'Fixture.Unrelated'}else{$_}})
+                        $rejected=$false
+                        try {Get-OrdinaryUserNamespaceBudgetMilliseconds -TestCount $Count -TestNames $names|Out-Null} catch {$rejected=$true}
+                        if (-not $rejected) {throw 'The expanded slot must require the actual root admission method.'}
+                    }
+                    exit 0
+                }
+                if ($Scenario -like 'root-runtime-*') {
+                    $names=@(1..112|ForEach-Object {'Fixture.Case'+$_})
+                    $names+='MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseManagedRootNamespaceTests.NativeRootRenamePreparationCutsRetainOnlyCompleteOriginalProductProofAcrossOwners'
+                    $names+='MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseManagedRootNamespaceTests.NativeDefaultProviderApprovesOnlyTheCurrentOriginalRootRenameAndRetainsRecoveryAcrossOwners'
+                    $names+='MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeRootLabelPreparationSealsOnlyItsOriginalProtectedSubtreeAcrossOwners'
+                    $names+='MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeProtectedRootLabelExecutionRecoversOriginalSubtreeAndCaseOnlyHistoryAcrossOwners'
+                    $names+='MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeObservedRootLabelRecoverySettlesOnlyOriginalMovedMembersUnderANewRoleAcrossOwners'
+                    if ($Scenario -eq 'root-runtime-selected') {
+                        $names+='MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeRuntimeSettlesOriginalObservedRootLabelBeforeNewRoleStartupAudit'
+                        $actual=Get-OrdinaryUserNamespaceBudgetMilliseconds -TestCount 118 -TestNames $names
+                        if ($actual -ne 120000+112*15000+28*30000+6*60000) {throw 'Retain all original matrix deadlines and six actual sixty-second runtime startup executions.'}
+                    } else {
+                        $names+='Fixture.Unrelated';$rejected=$false
+                        try {Get-OrdinaryUserNamespaceBudgetMilliseconds -TestCount 118 -TestNames $names|Out-Null} catch {$rejected=$true}
+                        if (-not $rejected) {throw 'The expanded slot did not require the actual runtime startup matrix.'}
+                    }
+                    exit 0
+                }
+
+                if ($Scenario -like 'root-observed-*') {
+                    $names=@(1..112|ForEach-Object {'Fixture.Case'+$_})
+                    $names+='MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseManagedRootNamespaceTests.NativeRootRenamePreparationCutsRetainOnlyCompleteOriginalProductProofAcrossOwners'
+                    $names+='MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseManagedRootNamespaceTests.NativeDefaultProviderApprovesOnlyTheCurrentOriginalRootRenameAndRetainsRecoveryAcrossOwners'
+                    $names+='MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeRootLabelPreparationSealsOnlyItsOriginalProtectedSubtreeAcrossOwners'
+                    $names+='MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeProtectedRootLabelExecutionRecoversOriginalSubtreeAndCaseOnlyHistoryAcrossOwners'
+                    if ($Scenario -eq 'root-observed-selected') {
+                        $names+='MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeObservedRootLabelRecoverySettlesOnlyOriginalMovedMembersUnderANewRoleAcrossOwners'
+                        $actual=Get-OrdinaryUserNamespaceBudgetMilliseconds -TestCount 117 -TestNames $names
+                        if ($actual -ne 120000+112*15000+28*30000) {throw 'Retain all existing pairs and fourteen executions plus eight actual observed-recovery executions.'}
+                    } else {
+                        $names+='Fixture.Unrelated';$rejected=$false
+                        try {Get-OrdinaryUserNamespaceBudgetMilliseconds -TestCount 117 -TestNames $names|Out-Null} catch {$rejected=$true}
+                        if (-not $rejected) {throw 'The expanded slot did not require the actual new-role observed-recovery matrix.'}
+                    }
+                    exit 0
+                }
+                if ($Scenario -like 'root-execution-*') {
+                    $names=@(1..112|ForEach-Object {'Fixture.Case'+$_})
+                    $names+='MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseManagedRootNamespaceTests.NativeRootRenamePreparationCutsRetainOnlyCompleteOriginalProductProofAcrossOwners'
+                    $names+='MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseManagedRootNamespaceTests.NativeDefaultProviderApprovesOnlyTheCurrentOriginalRootRenameAndRetainsRecoveryAcrossOwners'
+                    $names+='MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeRootLabelPreparationSealsOnlyItsOriginalProtectedSubtreeAcrossOwners'
+                    if ($Scenario -eq 'root-execution-selected') {
+                        $names+='MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeProtectedRootLabelExecutionRecoversOriginalSubtreeAndCaseOnlyHistoryAcrossOwners'
+                        $actual=Get-OrdinaryUserNamespaceBudgetMilliseconds -TestCount 116 -TestNames $names
+                        if ($actual -ne 120000+112*15000+20*30000) {throw 'Retain all original preparation pairs and fourteen actual execution state/fault deadlines.'}
+                    } else {
+                        $names+='Fixture.Unrelated';$rejected=$false
+                        try {Get-OrdinaryUserNamespaceBudgetMilliseconds -TestCount 116 -TestNames $names|Out-Null} catch {$rejected=$true}
+                        if (-not $rejected) {throw 'The expanded slot did not require the actual root execution matrix.'}
+                    }
+                    exit 0
+                }
+                if ($Scenario -like 'root-label-*') {
+                    $names=@(1..112|ForEach-Object {'Fixture.Case'+$_})
+                    $names+='MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseManagedRootNamespaceTests.NativeRootRenamePreparationCutsRetainOnlyCompleteOriginalProductProofAcrossOwners'
+                    $names+='MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseManagedRootNamespaceTests.NativeDefaultProviderApprovesOnlyTheCurrentOriginalRootRenameAndRetainsRecoveryAcrossOwners'
+                    if ($Scenario -eq 'root-label-selected') {
+                        $names+='MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeRootLabelPreparationSealsOnlyItsOriginalProtectedSubtreeAcrossOwners'
+                        $actual=Get-OrdinaryUserNamespaceBudgetMilliseconds -TestCount 115 -TestNames $names
+                        if ($actual -ne 120000+112*15000+6*30000) {throw 'All three actual preparation/approval pairs must retain both thirty-second state executions.'}
+                    } else {
+                        $names+='Fixture.Unrelated';$rejected=$false
+                        try {Get-OrdinaryUserNamespaceBudgetMilliseconds -TestCount 115 -TestNames $names|Out-Null} catch {$rejected=$true}
+                        if (-not $rejected) {throw 'The expanded slot did not require the actual protected-root preparation composite.'}
+                    }
+                    exit 0
+                }
+                if ($Scenario -like 'approval-*') {
+                    $names=@(1..112|ForEach-Object {'Fixture.Case'+$_})
+                    $names+='MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseManagedRootNamespaceTests.NativeRootRenamePreparationCutsRetainOnlyCompleteOriginalProductProofAcrossOwners'
+                    if ($Scenario -eq 'approval-selected') {
+                        $names+='MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseManagedRootNamespaceTests.NativeDefaultProviderApprovesOnlyTheCurrentOriginalRootRenameAndRetainsRecoveryAcrossOwners'
+                        $actual=Get-OrdinaryUserNamespaceBudgetMilliseconds -TestCount 114 -TestNames $names
+                        if ($actual -ne 120000+112*15000+4*30000) {throw 'Both approval and preparation must retain both thirty-second availability executions.'}
+                    } else {
+                        $names+='Fixture.Unrelated';$rejected=$false
+                        try {Get-OrdinaryUserNamespaceBudgetMilliseconds -TestCount 114 -TestNames $names|Out-Null} catch {$rejected=$true}
+                        if (-not $rejected) {throw 'The second expanded catalog slot did not require the actual new callback test.'}
+                    }
+                    exit 0
+                }
+                if ($Scenario -like 'preparation-*') {
+                    $names=@(for ($index=1;$index -lt $Count;$index++) { 'Fixture.Case'+$index })
+                    $names+='MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseManagedRootNamespaceTests.NativeRootRenamePreparationCutsRetainOnlyCompleteOriginalProductProofAcrossOwners'
+                    if ($Scenario -eq 'preparation-missing') {
+                        $names[-1]='Fixture.Unrelated';$rejected=$false
+                        try {Get-OrdinaryUserNamespaceBudgetMilliseconds -TestCount $Count -TestNames $names|Out-Null} catch {$rejected=$true}
+                        if (-not $rejected) {throw 'The expanded selection did not require the actual new preparation case.'}
+                    } else {
+                        $actual=Get-OrdinaryUserNamespaceBudgetMilliseconds -TestCount $Count -TestNames $names
+                        $expected=[Math]::Max(600000,120000+($Count-1)*15000+2*30000)
+                        if ($actual -ne $expected) {throw 'Both actual preparation availability states must retain their original thirty-second deadlines.'}
+                    }
+                    exit 0
+                }
+                if ($Scenario -like 'bundle-*') {
+                    $names=@(1..108 | ForEach-Object { 'Fixture.Case' + $_ })
+                    $names+='MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.'+$Scenario.Substring(7)
+                    $old=Get-OrdinaryUserNamespaceBudgetMilliseconds -TestCount 109
+                    $actual=Get-OrdinaryUserNamespaceBudgetMilliseconds -TestCount 109 -TestNames $names
+                    if ($actual -ne $old-15000+$Count*45000) { throw 'A selected transfer execution or cutpoint lost its existing 45-second native deadline.' }
+                    exit 0
+                }
+                if ($Scenario -like 'selection-*') {
+                    $names=@(1..$Count | ForEach-Object { 'Fixture.Case' + $_ })
+                    switch ($Scenario) {
+                        'selection-mismatch' { $names=$names[1..($Count-1)] }
+                        'selection-duplicate' { $names[1]=$names[0] }
+                        'selection-empty' { $names[0]='' }
+                        'selection-malformed' { $names[0]="Fixture.`nCase" }
+                    }
+                    $rejected=$false
+                    try { Get-OrdinaryUserNamespaceBudgetMilliseconds -TestCount $Count -TestNames $names | Out-Null }
+                    catch { $rejected=$true }
+                    if (-not $rejected) { throw 'An invalid catalog selection was accepted.' }
+                    exit 0
+                }
+                if ($Scenario -like 'budget-*') {
+                    $rejected=$false
+                    try {
+                        $parameters=@{TestCount=$Count}
+                        if ($Scenario -eq 'budget-catalog') {
+                            $catalog=Get-Content -Raw (Join-Path (Split-Path $Policy -Parent) 'test-suites.json') | ConvertFrom-Json
+                            $parameters.TestNames=@($catalog.required.namespace)
+                            $rows=@($catalog.requiredCases.$replacementWriter)
+                            $expectedRows=@(0..3|ForEach-Object {"$replacementWriterMethod ($_)"})
+                            if(($rows -join '|') -cne ($expectedRows -join '|')){throw 'Require all four replacement writer cases.'}
+                            $replacementRows=@($catalog.requiredCases.$activeReplacement)
+                            $expectedReplacementRows=@("$activeReplacementMethod (False)","$activeReplacementMethod (True)")
+                            if(($replacementRows -join '|') -cne ($expectedReplacementRows -join '|')){throw 'Require both active replacement restart cases.'}
+                            foreach($selection in @(@{names=$catalog.required.namespace},@{names=$catalog.required.native},@{names=$catalog.allowSkipped})){
+                                if(@($selection.names|Where-Object {$_ -ceq $activeReplacement}).Count -ne 1){throw 'Require the active replacement restart method exactly once in every applicable selection.'}
+                                if(@($selection.names|Where-Object {$_ -ceq $reenabledRemoteMove}).Count -ne 1){throw 'Require the reenabled moved-address method exactly once in every applicable selection.'}
+                            }
+                            if($activeReplacement -cin $catalog.required.deferredP079){throw 'Active replacement is part of S06.'}
+                            if($reenabledRemoteMove -cin $catalog.required.deferredP079){throw 'Reenable across a remote move is part of S06.'}
+                            $beforeRemoteMoveNames=@($parameters.TestNames|Where-Object {$_ -cne $reenabledRemoteMove})
+                            $priorNames=@($beforeRemoteMoveNames|Where-Object {$_ -cne $activeReplacement})
+                            $historical=@($priorNames|ForEach-Object {if($_ -ceq $replacementWriter){'Fixture.HistoricalReplacementWriter'}else{$_}})
+                            foreach($scope in @('AllRetained','S06')){
+                                $prior=Get-OrdinaryUserNamespaceBudgetMilliseconds -TestCount $historical.Count -TestNames $historical -Scope $scope
+                                $beforeRestart=Get-OrdinaryUserNamespaceBudgetMilliseconds -TestCount $priorNames.Count -TestNames $priorNames -Scope $scope
+                                $beforeRemoteMove=Get-OrdinaryUserNamespaceBudgetMilliseconds -TestCount $beforeRemoteMoveNames.Count -TestNames $beforeRemoteMoveNames -Scope $scope
+                                $current=Get-OrdinaryUserNamespaceBudgetMilliseconds @parameters -Scope $scope
+                                if($beforeRestart -ne $prior+$replacementWriterBudgetDelta){throw 'Retain all five bounded replacement owner windows.'}
+                                if($beforeRemoteMove -ne $beforeRestart+$activeReplacementBudget){throw 'Both active replacement restart cases retain their 65-second deadlines.'}
+                                if($current -ne $beforeRemoteMove+$reenabledRemoteMoveBudget){throw 'The reenabled moved-address case retains its 65-second deadline.'}
+                            }
+                        }
+                        $budget=Get-OrdinaryUserNamespaceBudgetMilliseconds @parameters
+                        $stepMinutes=Get-OrdinaryUserNamespaceStepTimeoutMinutes @parameters
+                    }
+                    catch { $rejected=$true }
+                    if ($Scenario -eq 'budget-rejected') {
+                        if (-not $rejected) { throw 'An invalid or unbounded selection was accepted.' }
+                    } else {
+                        $unsealedExecutionBudget=4*90000
+                        $fileTransferRecoveryBudget=25*45000
+                        $originalCatalogCount=$Count-4-$fileTransferRecovery.Count
+                        $expectedCatalogBudget=120000+($originalCatalogCount-10+51)*15000+18*30000+28*15000+6*45000+6*15000+4*45000+5*15000+6*45000+2*45000+2*45000+4*60000+10*60000+15000+2*45000+50000+13*15000+29*50000+50000+50000+50000+50000+50000+75000+50000+19*65000+4*60000+10*95000-5*15000+$unsealedExecutionBudget+$fileTransferRecoveryBudget+$replacementWriterBudgetDelta+$activeReplacementBudget+$reenabledRemoteMoveBudget
+                        $maximum=if ($Scenario -eq 'budget-catalog') {$expectedCatalogBudget} else {1800000}
+                        if ($rejected -or $budget -lt 600000 -or $budget -gt $maximum) { throw 'The whole-suite envelope is missing or unbounded.' }
+                        if ($Scenario -eq 'budget-catalog' -and $budget -ne $expectedCatalogBudget) {
+                            throw 'The actual catalog lost a same/cross-instance transfer or one of its five retirement cutpoints.'
+                        }
+                        if ($Count -ge 52 -and $budget -le 600000) { throw 'The growing suite still has the obsolete fixed ten-minute envelope.' }
+                        if ($Count -eq 56 -and $budget -le (Get-OrdinaryUserNamespaceBudgetMilliseconds -TestCount 52)) {
+                            throw 'New required cases did not receive execution budget.'
+                        }
+                        $maximumMinutes=[int][Math]::Ceiling($maximum/60000.0)+5
+                        if ($stepMinutes -lt 15 -or $stepMinutes -gt $maximumMinutes -or
+                            $stepMinutes -ne [int][Math]::Ceiling($budget/60000.0)+5 -or $stepMinutes*60000 - $budget -lt 300000) {
+                            throw 'The workflow can terminate the controller before its child timeout and diagnostic cleanup.'
+                        }
+                    }
+                    exit 0
+                }
+                $id=[guid]::NewGuid().ToString('N')
+                $workspace=Join-Path $Directory $id
+                $evidence=Join-Path $Directory 'evidence'
+                New-Item -ItemType Directory -Path (Join-Path $workspace 'work/results') -Force | Out-Null
+                [IO.File]::WriteAllText((Join-Path $workspace '.mp-namespace-ci'),$id)
+                [IO.File]::WriteAllText((Join-Path $workspace 'work/context.json'),'original-context')
+                [IO.File]::WriteAllText((Join-Path $workspace 'work/results/namespace.trx'),'original-trx')
+                [IO.File]::WriteAllText((Join-Path $workspace 'stdout.log'),'original-stdout')
+                [IO.File]::WriteAllText((Join-Path $workspace 'stderr.log'),'original-stderr')
+                [IO.File]::WriteAllText((Join-Path $workspace 'configuration.json'),'synthetic-secret-must-not-be-copied')
+                if ($Scenario -eq 'wrong-marker') { [IO.File]::WriteAllText((Join-Path $workspace '.mp-namespace-ci'),'changed') }
+                if ($Scenario -eq 'nested-evidence') { $evidence=Join-Path $workspace 'must-not-be-created' }
+                if ($Scenario -eq 'oversized') {
+                    $large=[IO.File]::OpenWrite((Join-Path $workspace 'work/results/namespace.trx'))
+                    try { $large.SetLength(10MB+1) } finally { $large.Dispose() }
+                }
+                $failed=$false
+                try { Copy-OrdinaryUserNamespaceFailureEvidence -Workspace $workspace -Identifier $id -EvidenceDirectory $evidence }
+                catch { $failed=$true }
+                if ($Scenario -ne 'copy') {
+                    if (-not $failed) { throw 'Invalid evidence input was accepted.' }
+                    if (Test-Path -LiteralPath (Join-Path $evidence 'namespace.trx')) { throw 'Invalid or unbounded evidence was copied.' }
+                    exit 0
+                }
+                if ($failed) { throw 'Valid marked failure evidence was rejected.' }
+                $expected=@{'context.json'='original-context';'namespace.trx'='original-trx';'child-stdout.log'='original-stdout';'child-stderr.log'='original-stderr'}
+                if (@(Get-ChildItem -LiteralPath $evidence -File).Count -ne $expected.Count) { throw 'Failure capture copied an unexpected file.' }
+                foreach ($name in $expected.Keys) {
+                    if ([IO.File]::ReadAllText((Join-Path $evidence $name)) -cne $expected[$name]) { throw 'An original diagnostic changed during capture.' }
+                }
+                """);
+            var start = new ProcessStartInfo("pwsh") { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true };
+            foreach (string argument in new[] { "-NoProfile", "-File", script, "-Policy",
+                Path.Combine(SftpProtocolFixture.FindRepositoryRoot(), "eng", "namespace-nonadmin-controller.ps1"),
+                "-Directory", directory, "-Scenario", scenario, "-Count", count.ToString(System.Globalization.CultureInfo.InvariantCulture) })
+                start.ArgumentList.Add(argument);
+            using var process = Process.Start(start)!;
+            Task<string> output = process.StandardOutput.ReadToEndAsync(); Task<string> error = process.StandardError.ReadToEndAsync();
+            try { await process.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(30)); }
+            catch { if (!process.HasExited) { process.Kill(entireProcessTree: true); await process.WaitForExitAsync(); } throw; }
+            Assert.AreEqual(0, process.ExitCode, await output + await error);
+        }
+        finally { Directory.Delete(directory, recursive: true); }
+    }
+
+    [TestMethod]
+    public async Task ControllerAdmitsTheActualRequiredNamespaceCatalogWithinTheExistingChildBound()
+    {
+        string catalog = await File.ReadAllTextAsync(Path.Combine(SftpProtocolFixture.FindRepositoryRoot(), "eng", "test-suites.json"));
+        using var document = System.Text.Json.JsonDocument.Parse(catalog);
+        int count = document.RootElement.GetProperty("required").GetProperty("namespace").GetArrayLength();
+        Assert.IsGreaterThan(0, count);
+        await RunAsync("budget-catalog", count);
+    }
+
+    [TestMethod]
+    public async Task WorkflowUsesTheControllerEnvelopeBeforeLaunchingTheDisposableUser()
+    {
+        string workflow = await File.ReadAllTextAsync(Path.Combine(SftpProtocolFixture.FindRepositoryRoot(), ".github", "workflows", "ci.yml"));
+        StringAssert.Contains(workflow, "Get-OrdinaryUserNamespaceStepTimeoutMinutes -TestCount @($catalog.required.namespace).Count");
+        StringAssert.Contains(workflow, "timeout-minutes: ${{ fromJSON(steps.namespace-nonadmin-budget.outputs.timeout_minutes) }}");
+        Assert.IsLessThan(workflow.IndexOf("Verify strict Cloud Files ACLs as a fresh non-administrator user", StringComparison.Ordinal),
+            workflow.IndexOf("id: namespace-nonadmin-budget", StringComparison.Ordinal));
+    }
+}

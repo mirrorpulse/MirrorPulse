@@ -44,6 +44,8 @@ public sealed class AdapterWorkerUploadClient
     {
         ArgumentNullException.ThrowIfNull(request);
         ArgumentNullException.ThrowIfNull(request.Content);
+        if (request.RequireConditionalTargetSupport && _channel.ProtocolVersion != 2)
+            throw new NotSupportedException("This upload requires negotiated Worker V2 conditional target support before dispatch.");
         if (request.InstanceId != _instanceId || request.Length < 0 ||
             !request.Content.CanRead || request.Content.Length - request.Content.Position < request.Length)
         {
@@ -63,14 +65,17 @@ public sealed class AdapterWorkerUploadClient
                 throw new InvalidDataException("The transmitted content no longer matches the durable upload intent.");
         }
         Guid streamId = _channel.ProtocolVersion == 2 ? Guid.NewGuid() : request.OperationId ?? Guid.NewGuid();
-        JsonElement payload = _channel.MutationPayload(request.RootKey, new
+        var fields = new Dictionary<string, object?>
         {
-            path = request.NormalizedPath,
-            expectedRevision = request.ExpectedRevision,
-            length = request.Length,
-            streamId,
-            operationId = request.OperationId,
-        }, operationId, expectedRevision: request.ExpectedRevision,
+            ["path"] = request.NormalizedPath,
+            ["expectedRevision"] = request.ExpectedRevision,
+            ["length"] = request.Length,
+            ["streamId"] = streamId,
+            ["operationId"] = request.OperationId,
+        };
+        AdapterWorkerProtocolSession.AddDurableCopyMode(_channel.Protocol, request.RootKey, request.DurableCopyMode, request.DurableParentCopyOperationId,
+            request.OperationId is not null && expectedHash is not null && request.ExpectedRevision is null && request.DestinationMustBeAbsent, fields);
+        JsonElement payload = _channel.MutationPayload(request.RootKey, fields, operationId, expectedRevision: request.ExpectedRevision,
             destinationMustBeAbsent: request.ExpectedRevision is null && request.DestinationMustBeAbsent);
         await _operation.WaitAsync(cancellationToken).ConfigureAwait(false);
         var ready = new TaskCompletionSource<Guid>(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -227,7 +232,9 @@ public sealed class AdapterWorkerUploadClient
                 ? new MirrorPulseWorkerMutationConflictException(
                     frame.Payload.TryGetProperty("expectedRevision", out JsonElement expected) ? expected.GetString() : null,
                     frame.Payload.TryGetProperty("actualRevision", out JsonElement actual) ? actual.GetString() : null)
-                : new IOException($"The Adapter Worker upload failed: {code}.");
+                : code == "MutationOutcomeAmbiguous"
+                    ? new Sync.MirrorPulseMutationAmbiguousException("The Worker has no original upload copy evidence.")
+                    : new IOException($"The Adapter Worker upload failed: {code}.");
             ready!.TrySetException(exception);
             completion!.TrySetException(exception);
             return ValueTask.CompletedTask;

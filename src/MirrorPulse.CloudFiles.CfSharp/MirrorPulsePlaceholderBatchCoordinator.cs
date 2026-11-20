@@ -77,6 +77,22 @@ public sealed class MirrorPulsePlaceholderBatchCoordinator
         return await _create(plan.Placeholders, options, cancellationToken).ConfigureAwait(false);
     }
 
+    /// <summary>Selects the same current address as polling before protected native population begins.</summary>
+    public static async ValueTask<MirrorPulsePlaceholderBatchPlan> PlanAsync(MirrorPulseRootRouter router,
+        InstanceId instanceId, string rootKey, IReadOnlyList<CloudRemoteDirectoryEntry> entries, CancellationToken token = default)
+    {
+        ArgumentNullException.ThrowIfNull(router); ArgumentNullException.ThrowIfNull(entries);
+        var placeholders = new List<CloudPlaceholderSpec>(entries.Count); var ignored = new List<CloudRemoteDirectoryEntry>();
+        foreach (var entry in entries)
+        {
+            ArgumentNullException.ThrowIfNull(entry);
+            if (entry.IsDeleted) { ignored.Add(entry); continue; }
+            var identity = await router.CreateCurrentFileIdentityAsync(instanceId, rootKey, entry.RemoteId, entry.RemoteRevision, token).ConfigureAwait(false);
+            placeholders.Add(entry.ItemKind == CloudItemKind.Directory ? BuildDirectory(entry, identity) : BuildFile(entry, identity));
+        }
+        return new(placeholders.AsReadOnly(), ignored.AsReadOnly());
+    }
+
     private static CloudFilePlaceholderSpec BuildFile(
         CloudRemoteDirectoryEntry entry,
         CloudPlaceholderIdentity identity)

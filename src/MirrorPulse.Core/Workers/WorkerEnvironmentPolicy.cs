@@ -31,7 +31,7 @@ public static class WorkerEnvironmentPolicy
         };
         foreach (var pair in request.Environment)
         {
-            if (pair.Key is not ("MP_TRANSFER_CACHE_DIR" or "MP_FILE_CACHE_DIR"))
+            if (pair.Key is not ("MP_TRANSFER_CACHE_DIR" or "MP_FILE_CACHE_DIR" or "MP_WORKER_STATE_DIR"))
             {
                 throw new InvalidDataException("The Worker environment contains an undeclared variable.");
             }

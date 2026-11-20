@@ -1,12 +1,13 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory)][string]$ResultsDirectory,
-    [ValidateSet("managed", "native", "official", "signed", "packaged")][string]$Suite = "managed",
+    [ValidateSet("managed", "native", "official", "signed", "packaged", "namespace", "cfsharpDelete", "cfsharpRecreation", "deferredP079", "signedAtomicDirectory", "signedDirectoryMove", "signedDirectoryTransfer", "signedDirectoryCopyRecovery", "signedPreparedDirectoryCopy", "fileTransferRecovery")][string]$Suite = "managed",
     [string]$OutputPath
 )
 
 $ErrorActionPreference = "Stop"
 $catalog = Get-Content -LiteralPath (Join-Path $PSScriptRoot "test-suites.json") -Raw | ConvertFrom-Json
+. (Join-Path $PSScriptRoot 'test-execution-policy.ps1')
 $files = @(Get-ChildItem -LiteralPath $ResultsDirectory -Filter "*.trx" -File -Recurse)
 if ($files.Count -eq 0) { throw "No TRX results were produced for the requested gate." }
 $results = @(
@@ -21,11 +22,14 @@ $results = @(
             if ($null -eq $definition) { throw "A TRX result has no test definition." }
             $name = "$($definition.TestMethod.className.Split(',')[0]).$($definition.TestMethod.name)"
             $category = "managed"
-            foreach ($candidate in @("native", "official", "signed", "packaged")) {
-                if ($catalog.required.$candidate -contains $name) { $category = $candidate; break }
+            foreach ($candidate in @("native", "official", "signed", "packaged", "deferredP079", "signedAtomicDirectory", "signedDirectoryMove", "signedDirectoryTransfer", "signedDirectoryCopyRecovery", "signedPreparedDirectoryCopy")) {
+                if ($catalog.required.$candidate -contains $name) { $category = if ($candidate -in @('deferredP079','signedAtomicDirectory','signedDirectoryMove','signedDirectoryTransfer','signedDirectoryCopyRecovery','signedPreparedDirectoryCopy')) { 'native' } else { $candidate }; break }
             }
             [pscustomobject][ordered]@{
                 name = $name
+                case = [string]$result.testName
+                testId = [string]$result.testId
+                executionId = [string]$result.executionId
                 assembly = [IO.Path]::GetFileNameWithoutExtension($definition.storage)
                 category = $category
                 outcome = [string]$result.outcome
@@ -49,13 +53,12 @@ if ($Suite -eq "managed") {
         }
     }
 } else {
-    foreach ($required in $catalog.required.$Suite) {
-        $matched = @($results | Where-Object name -eq $required)
-        if ($matched.Count -ne 1 -or $matched[0].outcome -ne "Passed") {
-            throw "Required $Suite test did not execute successfully exactly once: $required"
-        }
-    }
+    Assert-RequiredTestResults -Catalog $catalog -Suite $Suite -Results $results
     if ($skipped.Count -ne 0) { throw "The $Suite gate contains skipped tests." }
+    if ($Suite -in @('namespace', 'cfsharpDelete', 'cfsharpRecreation', 'deferredP079', 'signedAtomicDirectory', 'signedDirectoryMove', 'signedDirectoryTransfer', 'signedDirectoryCopyRecovery', 'signedPreparedDirectoryCopy', 'fileTransferRecovery') -and
+        $results.Count -ne (Get-RequiredTestExecutionCount -Catalog $catalog -Names @($catalog.required.$Suite))) {
+        throw "The $Suite gate must select exactly the required tests."
+    }
 }
 $categories = @(
     foreach ($group in $results | Group-Object category | Sort-Object Name) {

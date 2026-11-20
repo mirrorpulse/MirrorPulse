@@ -9,12 +9,22 @@ production-release completion claim.
 
 ## CLI and Control
 
+Controlled replacement uses `namespace member prepare-replace MEMBER_ID SOURCE_PATH`
+with an optional `--operation-id GUID`, followed by `replace OPERATION_ID`.
+`replace-recover OPERATION_ID` calls the same Host executor;
+`replacement-status OPERATION_ID` reads historical progress without waiting on
+the namespace actor. The runtime and Control path are connected, with full
+production native and installed CLI acceptance still pending. Local completion
+queues reconciliation and does not report remote acceptance or tree readiness.
+
 | Capability | Status | CLI / Control | Current behavior |
 | --- | --- | --- | --- |
 | Host and sync status | Implemented | host status; status; sync status / host.status, sync.status | Reads the current Host snapshot; large-queue queries still need bounds. |
 | Host auto-start / stop | Implemented | host start, stop; ordinary command auto-start | Installed MSIX alias and matching Host are exercised by the manual installation gate. |
 | Host restart | Partial | host restart / host.restart | Stops and waits for the old process. A later ordinary command starts the replacement. |
 | Adapter inventory | Implemented | adapter list / adapter.list | Reports installations, versions, instances and roots. |
+| Managed root status | Implemented | root list / root.list | Reads Host-owned stable root IDs, labels, availability, required rescans and pending rename phases and operation IDs through Control. |
+| Managed root Label commands | Partial | root prepare-rename ROOT_ID LABEL; root execute-rename, cancel-rename, recover OPERATION_ID / root.prepareRename, root.executeRename, root.cancelRename, root.recover | Preparation retains a Label-only change. Execution drains overlapping work, retains the original public proof and requires a fresh complete current-tree audit before active readmission; disabled roots stay closed. Cancellation accepts only an original not-started move and preserves immutable replay. Pending execution returns exit 11. Signed final-reenabled restart, complete process-fault and race acceptance remain open. |
 | Official signed file installation | Implemented | adapter install, update / adapter.install | Embedded and legacy detached signatures work; extracted-file hashes are verified. |
 | Latest product update / default bundled packages | Unsupported | update currently takes a local path | CI aggregation downloads releases; product downloading and offline bundled registration are not connected. |
 | External publisher / unsigned installation | Unsupported | developer-mode setting | Current Host uses the official trust anchor and signed-only installation. The setting does not enable unsigned packages. |
@@ -22,6 +32,7 @@ production-release completion claim.
 | Configure / enable / select version | Partial | instance.* | Catalog changes require restart; live desired/effective behavior is incomplete. |
 | Package removal | Partial | adapter remove, uninstall / adapter.remove | Reference checks exist; full removal, crash recovery and user-file preservation need acceptance. |
 | Conflict inventory / snooze | Implemented | conflict list, show, snooze / conflict.list, conflict.snooze | show selects a record from list; paging and presentation paths are incomplete. |
+| Conflict version refresh | Partial | conflict refresh-version --conflict-id GUID --operation-id GUID / conflict.refreshVersion | Explicitly appends an observed version for a current unowned coalesced file group. The same operation ID replays its retained outcome; pending observation returns exit 11. It preserves original error facts and grants no mutation or journal ACK. Active decision supersession and signed/installed acceptance remain open. |
 | Conflict resolution | Partial | conflict resolve / conflict.resolve | Outcomes report pending/resolved/failed and a command ID; queued actions return exit 11. Remote Retry/DeleteLocal/DeleteRemote still need an executor; preserve-path/side are not fully propagated. |
 | Operation get / watch / cancel | Partial | operation.* | watch reads one snapshot; cancel persists state without stopping the underlying work. |
 | Settings / startup | Partial | config, developer-mode, startup / settings.get, settings.set | Persistence exists; some settings lack runtime consumers and no Windows startup task is registered. |
@@ -41,12 +52,14 @@ show which outcomes are queued rather than completed.
 
 | Capability | Status | Current behavior / evidence |
 | --- | --- | --- |
-| Directory pages and demand ranges | Implemented | Installed signed Workers and protocol fixtures exercise reads. Full Explorer image/thumbnail/retention acceptance remains open. |
+| Directory pages and demand ranges | Implemented | Installed signed Workers and protocol fixtures exercise reads. The ARM64 CLI gate requires repeated full and boundary reads of a large binary file across Host stop/restart and instance disable. Interactive Explorer image/thumbnail and availability policy acceptance remains open. |
 | Multiple instances | Implemented | Signed aggregate tests start independent Local Workers with separate instance IDs. |
-| Multiple roots per instance | Partial | Root models exist, but Worker requests omit RootKey and the active poller skips instances with more than one root. |
-| Offline edits and upload replay | Partial | ARM64 signed Local CLI regression verifies queue 0 to 2 to 0. Failed and blocked commands no longer abort later valid commands in the same batch; sync status exposes blocked reasons. Full rescan, directory creation, metadata and bounded paging still need completion. |
+| Multiple roots per instance | Partial | Worker requests carry RootKey, with explicit demand/upload routing and independent root-scoped polling. The current delivery baseline uses one declared root per instance. Existing addressing remains compatible; complete same-instance multi-root transfer acceptance is deferred for review after the journal milestone. |
+| Transfers between single-root instances | Partial | Public transfer move/resume/status/list commands drive retained copy, whole-target verification, protected publication, conditional source deletion, native retirement and original journal acknowledgement. Current signed Local evidence covers the first move; complete later-source generations, both directions and restart acceptance remain pending. Different packages/backends remain in scope subject to declared and negotiated capabilities. |
+| Offline edits and upload replay | Partial | ARM64 signed Local CLI regression requires offline queue growth and drain, plus a stopped-Host audit of all retained content intents, including completed uploads, to distinguish read-only hydration from the real queued write. File and directory-create recovery retain accepted intent across restart; sync status exposes blocked reasons. File-chain aggregate execution, recursive move/delete and bounded fair paging still need completion. Local metadata-only changes are outside the content-sync policy. |
 | Move / delete | Partial | Current official Workers implement file/directory mutations. Complete journal, cross-root, recursive and conflict safety is not proven. |
-| Remote polling | Partial | Single-root polling retains retry snapshots and replays durable pending batches before observing newer changes. Metadata and multi-root behavior still need completion. |
+| Strict tree protection and controlled file operations | Partial | Persistent member creation, file import and replacement preparation/execution/status, file and whole-directory movement, and leaf/subtree retirement have Control/CLI entry points. Replacement stages input before locks and atomically retains its first authority. Directory movement requires the original public CfSharp proof and atomic settlement after fresh inspection of every member. Component and disposable native gates do not establish installed product enforcement; complete replacement product acceptance and strict Host startup/recovery remain pending. |
+| Remote polling | Partial | Polling rotates by stable root ID and retains independent snapshots and pending batches per root. Disabled roots retain state without source reads; retained work precedes newer enumeration. Pending root rename fences observation and replay. Complete recovery, later-generation admission and global work bounds remain open. |
 | Pin / free space | Unsupported | The availability helper exists, but no complete Control/CLI command is connected. |
 | Explorer identity / icon | Partial | MSIX identity is tested separately from interactive Shell/custom-name acceptance; the registrar still uses a system icon. |
 
@@ -77,14 +90,76 @@ process per instance do not constitute a filesystem sandbox.
 
 ## Evidence boundaries
 
+Managed entry deletion is rejected by the provider, but this does not yet protect
+the complete directory tree. An external recursive caller can remove ordinary
+unconverted child files before the protected entry receives its delete callback.
+Rejecting every provider delete callback does not intercept these ordinary files.
+Whole-tree protection remains an open product requirement.
+
+Unsent file-chain coalescing decisions preserve the official journal operation IDs
+and are immutable across catalog restart. Operations already started cannot be
+merged; decision members cannot be individually dispatched. Planning is not
+yet connected to the upload pump: complete public journal pagination, remote
+verification, local projection and acknowledgement of every original ID remain
+required before the product can claim coalescing execution.
+
+The catalog records whether mutation execution has ever started before dispatch.
+That evidence survives a return to Prepared and catalog restart. Migrated records
+without historical evidence remain Unknown; their current state cannot establish
+that they were never sent. An explicit coalescing decision can supersede only
+proven never-started Prepared journal intent with a matching complete observation
+window, immutable original intent, common baseline and historical content binding.
+The plan, original-operation ownership and Superseded state commit together.
+Original intent remains readable, with its plan ID, and generic mutation recovery
+excludes it. Superseding neither executes a Worker operation nor acknowledges the
+official journal; aggregate execution and recovery still need implementation.
+
+An inherited NTFS delete-denial probe preserves ordinary children and their latest
+in-place edits, but it also blocks individual deletion and replacement-based saves.
+That probe is a compatibility diagnostic; the product has not adopted its ACL.
+
+Root rename intent fences local dispatch, rescans and remote application. The
+catalog retains immutable original object evidence and successive rename history.
+Native rename recovery still requires a public directory object binding and safe
+subtree reconciliation from CfSharp; these persistence tests do not prove the
+native operation is implemented.
+
 Ordinary managed, explicit native, signed-package and installed-MSIX tests are
 different gates. A successful ordinary run does not prove native or Explorer
 tests executed. Missing environment prerequisites must produce skipped results.
 
-The ARM64 signed Local CLI gate covers real Host/Worker/CfSharp transfer,
-offline replay, conflicts and cursor/catalog persistence. FTP/SFTP process
+The ARM64 signed Local CLI regression gate covers real Host/Worker/CfSharp uploads,
+offline replay, conflicts and cursor/catalog persistence. A separate manual
+`verify-cli-transfers.ps1` gate exercises forward and reverse transfers between two
+single-root instances using the actual signed package's declared roots, including
+typed move/resume, complete bytes, original receipts, later generations and Host
+restart through the signed Local V2 Workers. Read that source's actual original
+report before treating this matrix as passed. FTP/SFTP process
 tests and WebDAV/SMB fixtures establish their documented boundaries, not all
 servers or complete offline Explorer workflows.
 
 See [official Adapter capabilities](official-adapter-capabilities.md),
 [Cloud Files lifecycle](cloud-files-lifecycle.md) and [CLI reference](cli.md).
+
+`namespace protection captures ROOT_ID [--after MANIFEST_ID]` returns a bounded
+page of historical captures, including open and cancelled inventories.
+`namespace protection recover-tree MANIFEST_ID` restores and audits one sealed
+original inventory under shared Host scheduling and namespace ownership. It
+rejects an open capture and reports changed membership or a renamed anchor as
+recovery required. A verified original inventory does not establish readiness
+for relocated or later-born members, acknowledge uploads or enable a root.
+
+`namespace protection initializations [--after OPERATION_ID]` discovers pending
+and historical attempts even if a caller lost its retry handle. Each page is
+bounded to 256 entries in canonical operation ID order. Missing admissions,
+damaged reservations and corrupt completion records fail the query rather than
+silently omitting recovery work. A historical completion is not current readiness.
+
+`namespace protection recover-root ROOT_ID [--operation-id GUID]` selects one
+registered root and audits its current members and shared sync-root anchor. It
+returns `scopeRootId` in pending and completed results. Only the selected root
+is admitted after a fresh native audit; another root's pending work remains
+fenced. A retry must use the same root and operation ID. Whole-inventory and
+selected-root attempts cannot reuse each other's operation IDs. Neither a
+historical result nor a selected-root result grants whole-tree readiness or
+asserts remote acceptance.

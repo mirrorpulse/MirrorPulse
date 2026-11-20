@@ -101,6 +101,7 @@ public readonly record struct InstallId
 /// </summary>
 public readonly record struct InstanceId
 {
+    [System.Text.Json.Serialization.JsonConstructor]
     public InstanceId(Guid value)
     {
         if (value == Guid.Empty)

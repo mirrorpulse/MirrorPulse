@@ -11,7 +11,7 @@ internal sealed class SignedWebDavV2HttpFixture : IAsyncDisposable
 {
     private readonly HttpListener _listener = new();
     private readonly Task _loop;
-    private readonly string _authorization;
+    private readonly string? _authorization;
     private bool _disposed;
     public ConcurrentDictionary<string, byte[]> Files { get; } = new(StringComparer.Ordinal);
     public ConcurrentDictionary<string, bool> Directories { get; } = new(StringComparer.Ordinal);
@@ -34,7 +34,7 @@ internal sealed class SignedWebDavV2HttpFixture : IAsyncDisposable
     public int Puts { get; private set; }
     public Uri Endpoint { get; }
 
-    public SignedWebDavV2HttpFixture(string label, string authorization)
+    public SignedWebDavV2HttpFixture(string label, string? authorization)
     {
         var socket = new TcpListener(IPAddress.Loopback, 0);
         socket.Start();

@@ -5,28 +5,118 @@ param(
     [Parameter(Mandatory = $true)]
     [string]$PackagePath,
     [switch]$Regression,
+    [switch]$Coalescing,
+    [ValidateSet('KeepBoth', 'KeepRemote', IgnoreCase = $false)]
+    [string]$CoalescingAction = 'KeepBoth',
+    [switch]$CreateConflict,
+    [switch]$EmptyCreate,
+    [switch]$MoveConflict,
+    [switch]$MoveOnlyConflict,
+    [switch]$RequirePureMoveJournal,
     [ValidateSet("Debug", "Release")]
     [string]$Configuration = "Release",
     [string]$EvidencePath
 )
 
 $ErrorActionPreference = "Stop"
+if (($MoveConflict -or $MoveOnlyConflict) -and (-not $Coalescing -or $CoalescingAction -cne 'KeepRemote' -or
+    $CreateConflict -or $EmptyCreate -or ($MoveConflict -and $MoveOnlyConflict))) {
+    throw 'The moved-file fixture requires its independent KeepRemote coalescing choice.'
+}
+if ($RequirePureMoveJournal -and -not $MoveOnlyConflict) {
+    throw 'Strict journal qualification requires the independent pure rename fixture.'
+}
+if ($EmptyCreate -and -not $CreateConflict) {
+    throw 'The empty creation fixture requires its independent controlled-Create conflict scenario.'
+}
+if ($CreateConflict -and (-not $Coalescing -or $CoalescingAction -cne 'KeepRemote')) {
+    throw 'The controlled-Create fixture requires its independent KeepRemote coalescing choice.'
+}
+if ($PSBoundParameters.ContainsKey('CoalescingAction') -and -not $Coalescing) {
+    throw 'A coalescing choice requires the independent coalescing fixture.'
+}
+if ($Coalescing -and ($Regression -or [string]::IsNullOrWhiteSpace($EvidencePath) -or $env:MIRRORPULSE_NATIVE_TEST -cne '1')) {
+    throw 'The independent coalescing fixture requires its own evidence path and explicitly enabled disposable native environment.'
+}
 $repositoryRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
+. (Join-Path $PSScriptRoot 'cli-integration-failure-policy.ps1')
+. (Join-Path $PSScriptRoot 'cli-active-replacement.ps1')
+. (Join-Path $PSScriptRoot 'cli-root-label-lifecycle.ps1')
+. (Join-Path $PSScriptRoot 'cli-root-label-evidence-policy.ps1')
+. (Join-Path $PSScriptRoot 'cli-root-label-cancellation.ps1')
+. (Join-Path $PSScriptRoot 'cli-root-label-cancellation-policy.ps1')
+. (Join-Path $PSScriptRoot 'cli-coalescing-content.ps1')
+. (Join-Path $PSScriptRoot 'cli-coalescing-commands.ps1')
+. (Join-Path $PSScriptRoot 'cli-coalescing-edit-witness.ps1')
+$primaryFailure = $null
 $runRoot = Join-Path ([IO.Path]::GetTempPath()) "MirrorPulse-cli-integration-$([guid]::NewGuid().ToString('N'))"
 $cliRoot = Join-Path $runRoot "cli"
 $hostRoot = Join-Path $runRoot "host"
 $syncRoot = Join-Path $runRoot "sync"
 $dataRoot = Join-Path $runRoot "data"
 $sourceRoot = Join-Path $runRoot "source"
+$probeRoot = Join-Path $runRoot "probe"
 $hostProcess = $null
 $fixtureBytes = [Text.Encoding]::ASCII.GetBytes("0123456789ABCDEF-local-fixture")
+$hydrationReads = [Collections.Generic.List[object]]::new()
+$hydrationAudits = [Collections.Generic.List[object]]::new()
+$namespaceAudits = [Collections.Generic.List[object]]::new()
+$script:firstNamespaceMember = $null
+$script:firstAnchorMember = $null
+$startupOriginals = $null
+$rootLabelLifecycle = $null
+$rootLabelCancellations = $null
+$activeReplacement = $null
+$coalescingEvidence = $null
+
+function Invoke-CliFixtureProbe {
+    param([Parameter(Mandatory)][ValidateSet('read', 'audit', 'inspect', 'cleanup')][string]$Mode, [Parameter(Mandatory)][string]$Phase)
+    $start = [Diagnostics.ProcessStartInfo]::new('dotnet')
+    $start.UseShellExecute = $false
+    $start.CreateNoWindow = $true
+    $start.RedirectStandardOutput = $true
+    $start.RedirectStandardError = $true
+    $start.ArgumentList.Add($script:probeAssembly)
+    $start.ArgumentList.Add("--$Mode-cli-fixture")
+    $start.ArgumentList.Add($runRoot)
+    $process = [Diagnostics.Process]::Start($start)
+    try {
+        $output = $process.StandardOutput.ReadToEndAsync()
+        $errorOutput = $process.StandardError.ReadToEndAsync()
+        if (-not $process.WaitForExit(30000)) { throw "The external $Mode consumer timed out ($Phase)." }
+        if ($process.ExitCode -ne 0) {
+            $providerLog = Join-Path $dataRoot 'logs/cloud-files/mirrorpulse.log'
+            if (Test-Path -LiteralPath $providerLog) {
+                Write-Host 'Original isolated Cloud Files provider diagnostics:'
+                Get-Content -LiteralPath $providerLog -Tail 16 | ForEach-Object { Write-Host $_ }
+            }
+            throw "The external $Mode consumer failed ($Phase): $($errorOutput.GetAwaiter().GetResult())"
+        }
+        $result = $output.GetAwaiter().GetResult() | ConvertFrom-Json
+        if ($result.schemaVersion -ne 1) { throw 'The fixture consumer returned an invalid evidence version.' }
+        $result | Add-Member -NotePropertyName phase -NotePropertyValue $Phase
+        if ($Mode -eq 'read') {
+            $hydrationReads.Add($result)
+            Write-Host "External consumer $Phase`: fullReads=$($result.wholeFileReads); rangeReads=$($result.rangeReads); binaryLength=$($result.binaryLength); sha256=$($result.binarySha256)."
+        } elseif ($Mode -eq 'audit') {
+            $hydrationAudits.Add($result)
+            Write-Host "Retained intent audit $Phase`: readOnly=$($result.readOnlyFileMutations); queued=$($result.queuedFileMutations); acknowledged=$($result.acknowledgedQueuedFileMutations)."
+        } else {
+            Write-Host "Public placeholder observations $Phase`: $($result | ConvertTo-Json -Depth 5 -Compress)"
+        }
+        return $result
+    } finally {
+        if (-not $process.HasExited) { $process.Kill($true); $process.WaitForExit() }
+        $process.Dispose()
+    }
+}
 
 function Invoke-MirrorPulseCli {
-    param([Parameter(Mandatory = $true)][string[]]$Arguments)
+    param([Parameter(Mandatory = $true)][AllowEmptyString()][string[]]$Arguments, [int[]]$ExpectedExitCode = @(0))
 
     Write-Host "CLI command: $($Arguments -join ' ')"
     $text = (& $script:cliExecutable @Arguments 2>&1 | Out-String).Trim()
-    if ($LASTEXITCODE -ne 0) {
+    if ($LASTEXITCODE -notin $ExpectedExitCode) {
         throw "CLI command failed ($LASTEXITCODE): $($Arguments -join ' ')`n$text"
     }
 
@@ -46,6 +136,18 @@ function Wait-MirrorPulseHostStopped {
     } while ([DateTime]::UtcNow -lt $deadline)
 
     throw "The Host did not stop after the CLI lifecycle command."
+}
+
+function Wait-MirrorPulseHostReady {
+    $deadline = [DateTime]::UtcNow.AddSeconds(60)
+    do {
+        $lifecycle = Invoke-MirrorPulseCli @('--json', '--no-start', 'host', 'status')
+        if ($lifecycle.kind -cne 'result') { throw 'Require the actual restarted Host lifecycle.' }
+        if ($lifecycle.data.state -cin @('Running', 'Degraded') -and $null -eq $lifecycle.data.startupPhase) { return }
+        if ($lifecycle.data.state -ceq 'Failed') { throw 'The restarted Host failed initialization.' }
+        Start-Sleep -Milliseconds 250
+    } while ([DateTime]::UtcNow -lt $deadline)
+    throw 'The restarted Host did not finish its protected namespace recovery.'
 }
 
 function Write-MirrorPulseUploadDiagnostics {
@@ -70,14 +172,66 @@ function Write-MirrorPulseUploadDiagnostics {
     }
 }
 
+function Assert-CliNamespaceRoot {
+    param([Parameter(Mandatory)][string]$Phase, [Parameter(Mandatory)][ValidateSet('Active', 'Disabled')][string]$ExpectedState)
+    $status = Invoke-MirrorPulseCli @('--json', '--no-start', 'root', 'list')
+    if ($Regression -and $EvidencePath) {
+        $originals = Join-Path ([IO.Path]::GetDirectoryName([IO.Path]::GetFullPath($EvidencePath))) 'cli-regression.originals/namespace-roots'
+        New-Item -ItemType Directory -Path $originals -Force | Out-Null
+        $status | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath (Join-Path $originals ($Phase + '-roots.json')) -Encoding utf8
+    }
+    $selected = @($status.data | Where-Object { $_.root.rootId -eq $script:registeredRoot.rootId })
+    $expectedAdmission = $ExpectedState -ceq 'Active'
+    if ($selected.Count -ne 1 -or $selected[0].namespaceReady -isnot [bool] -or $selected[0].namespaceReady -ne $expectedAdmission -or
+        $selected[0].root.state -cne $ExpectedState -or $selected[0].syncState -cne $ExpectedState -or $null -ne $selected[0].pendingRename -or
+        $null -ne $selected[0].namespaceRecoveryOperationId -or $null -ne $selected[0].namespaceRecoveryCode) {
+        throw "The default Host did not retain the expected namespace admission of its original $ExpectedState root ($Phase)."
+    }
+    $member = Invoke-MirrorPulseCli @('--json', '--no-start', 'namespace', 'member', 'inspect', $script:rootDirectory, '--directory')
+    if ($Regression -and $EvidencePath) {
+        $member | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath (Join-Path $originals ($Phase + '-member.json')) -Encoding utf8
+    }
+    if ($member.data.rootId -cne $script:registeredRoot.rootId -or [string]::IsNullOrEmpty($member.data.memberId) -or
+        $member.data.actualParentMemberId -cne $script:firstAnchorMember -or
+        ($null -ne $script:firstNamespaceMember -and $member.data.memberId -cne $script:firstNamespaceMember)) {
+        throw "The default Host lost the original protected root member ($Phase)."
+    }
+    if ($null -eq $script:firstNamespaceMember) { $script:firstNamespaceMember = $member.data.memberId }
+    $namespaceAudits.Add([ordered]@{phase=$Phase;anchorMemberId=$script:firstAnchorMember;rootId=$script:registeredRoot.rootId;memberId=$member.data.memberId;state=$ExpectedState;freshAdmission=$selected[0].namespaceReady})
+}
+
 try {
     if (-not (Test-Path -LiteralPath $PackagePath -PathType Leaf)) {
         throw "The Adapter package was not found: $PackagePath"
     }
 
     New-Item -ItemType Directory -Path $cliRoot, $hostRoot, $syncRoot, $dataRoot, $sourceRoot -Force | Out-Null
+    # Match the current-user ownership required by every strict namespace fixture.
+    # Elevated runners can otherwise create the empty directory with a group owner.
+    if ((Get-Item -LiteralPath $syncRoot -Force).Attributes.HasFlag([IO.FileAttributes]::ReparsePoint) -or
+        @(Get-ChildItem -LiteralPath $syncRoot -Force).Count -ne 0) {
+        throw 'The fresh CLI fixture anchor must be an empty, unredirected directory.'
+    }
+    $fixtureUser = [Security.Principal.WindowsIdentity]::GetCurrent()
+    try {
+        $fixtureAccess = Get-Acl -LiteralPath $syncRoot
+        $fixtureAccess.SetOwner($fixtureUser.User)
+        Set-Acl -LiteralPath $syncRoot -AclObject $fixtureAccess
+        if ((Get-Acl -LiteralPath $syncRoot).GetOwner([Security.Principal.SecurityIdentifier]).Value -cne $fixtureUser.User.Value) {
+            throw 'The synthetic CLI fixture anchor did not retain its current-user owner.'
+        }
+    } finally { $fixtureUser.Dispose() }
     New-Item -ItemType Directory -Path (Join-Path $sourceRoot "nested") -Force | Out-Null
     [IO.File]::WriteAllBytes((Join-Path $sourceRoot "nested\fixture.txt"), $fixtureBytes)
+    if ($Coalescing -and $CoalescingAction -ceq 'KeepRemote' -and -not $CreateConflict -and -not $MoveOnlyConflict) {
+        [IO.File]::WriteAllBytes((Join-Path $sourceRoot 'cli-roundtrip.txt'), (Get-CliCoalescingSeedBytes))
+    }
+    if ($Regression) {
+        $binaryFixture = [byte[]]::new(2 * 1024 * 1024 + 257)
+        [Random]::new(4096).NextBytes($binaryFixture)
+        [IO.File]::WriteAllBytes((Join-Path $sourceRoot 'nested\fixture.bin'), $binaryFixture)
+        [IO.File]::WriteAllText((Join-Path $sourceRoot 'cli-active-replacement.bin'), 'original bytes to preserve in the private backup')
+    }
 
     $cliProject = Join-Path $repositoryRoot "src\MirrorPulse.Cli\MirrorPulse.Cli.csproj"
     $hostProject = Join-Path $repositoryRoot "src\MirrorPulse.Host\MirrorPulse.Host.csproj"
@@ -85,6 +239,12 @@ try {
     if ($LASTEXITCODE -ne 0) { throw "CLI publish failed." }
     & dotnet publish $hostProject --configuration $Configuration --runtime $Runtime --self-contained true --no-restore --output $hostRoot
     if ($LASTEXITCODE -ne 0) { throw "Host publish failed." }
+    $probeProject = Join-Path $repositoryRoot 'tests\MirrorPulse.CfSharp.CrashProbe\MirrorPulse.CfSharp.CrashProbe.csproj'
+    & dotnet publish $probeProject --configuration $Configuration --self-contained false --no-restore --output $probeRoot
+    if ($LASTEXITCODE -ne 0) { throw 'The test-only external consumer publish failed.' }
+    $script:probeAssembly = Join-Path $probeRoot 'MirrorPulse.CfSharp.CrashProbe.dll'
+    [ordered]@{schemaVersion=2;instanceId='';rootId='';rootKey='';directoryName=''} |
+        ConvertTo-Json | Set-Content -LiteralPath (Join-Path $runRoot '.mp-cli-fixture.json') -Encoding utf8
 
     $script:cliExecutable = Join-Path $cliRoot "mp.exe"
     $hostExecutable = Join-Path $hostRoot "MirrorPulse.Host.exe"
@@ -117,6 +277,12 @@ try {
     if ($hostStatus.kind -ne "result" -or $hostStatus.data.state -notin @("Running", "Degraded")) {
         throw "The Host did not reach a running state through the CLI."
     }
+    $anchor = Invoke-MirrorPulseCli @('--json', '--no-start', 'namespace', 'member', 'inspect', '', '--directory')
+    if ($anchor.data.relativePath -cne '' -or $null -ne $anchor.data.rootId -or [string]::IsNullOrEmpty($anchor.data.memberId)) {
+        throw 'The default Host did not register and audit its no-Adapter anchor.'
+    }
+    $namespaceAudits.Add([ordered]@{phase='NoAdapters';anchorMemberId=$anchor.data.memberId;freshAdmission=$true})
+    $script:firstAnchorMember = $anchor.data.memberId
 
     $install = Invoke-MirrorPulseCli @("--json", "--developer-mode", "adapter", "install", "--package", (Resolve-Path $PackagePath).Path)
     $installId = $install.data.installedAdapterId
@@ -127,6 +293,12 @@ try {
         "--config", "sourceDirectory=$sourceRoot")
     $instanceId = $instance.data.createdInstanceId
     if ([string]::IsNullOrWhiteSpace($instanceId)) { throw "The CLI create response did not contain an instance ID." }
+    $createdTopology = Invoke-MirrorPulseCli @('--json', '--no-start', 'adapter', 'list')
+    $createdRoots = @($createdTopology.data.roots | Where-Object instanceId -eq $instanceId)
+    if ($createdRoots.Count -ne 1) { throw 'The synthetic CLI instance requires exactly one configured root.' }
+    [ordered]@{schemaVersion=1;instanceId=$instanceId;rootId=$createdRoots[0].rootId
+        rootKey=$createdRoots[0].uniquenessKey;directoryName=$createdRoots[0].directoryName} |
+        ConvertTo-Json | Set-Content -LiteralPath (Join-Path $runRoot '.mp-cli-fixture.json') -Encoding utf8
 
     # A new instance is admitted when the Host is composed on the next start.
     $restart = Invoke-MirrorPulseCli @("--json", "--developer-mode", "host", "restart")
@@ -138,8 +310,8 @@ try {
         Start-Sleep -Milliseconds 500
         $status = Invoke-MirrorPulseCli @("--json", "--developer-mode", "status")
         $entry = @($status.data.instances) | Where-Object { $_.instanceId -eq $instanceId } | Select-Object -First 1
-    } while (($null -eq $entry -or $entry.phase -ne "Connected") -and [DateTime]::UtcNow -lt $deadline)
-    if ($null -eq $entry -or $entry.phase -ne "Connected") {
+    } while (($null -eq $entry -or $entry.workerConnected -ne $true) -and [DateTime]::UtcNow -lt $deadline)
+    if ($null -eq $entry -or $entry.workerConnected -ne $true) {
         throw "The CLI status response did not show a connected Local Worker: $($entry | ConvertTo-Json -Compress)"
     }
 
@@ -151,6 +323,18 @@ try {
         throw "The Adapter instance did not register a first-level root."
     }
     $mappedRoot = Join-Path $syncRoot $rootDirectory
+    $managedRoots = Invoke-MirrorPulseCli @("--json", "--developer-mode", "root", "list")
+    $managedRoot = @($managedRoots.data) | Where-Object { $_.root.instanceId -eq $instanceId } | Select-Object -First 1
+    $registeredRoot = @($topology.data.roots) | Where-Object { $_.instanceId -eq $instanceId } | Select-Object -First 1
+    [ordered]@{schemaVersion=1;instanceId=$instanceId;rootId=$registeredRoot.rootId
+        rootKey=$registeredRoot.uniquenessKey;directoryName=$rootDirectory} |
+        ConvertTo-Json | Set-Content -LiteralPath (Join-Path $runRoot '.mp-cli-fixture.json') -Encoding utf8
+    if ($null -eq $managedRoot -or $managedRoot.root.rootId -ne $registeredRoot.rootId -or
+        $managedRoot.root.directoryName -ne $rootDirectory -or $managedRoot.syncState -ne "Active" -or
+        $null -ne $managedRoot.pendingRename) {
+        throw "The CLI root status did not preserve the configured stable root and availability."
+    }
+    Assert-CliNamespaceRoot -Phase InitialRoot -ExpectedState Active
 
     $refresh = Invoke-MirrorPulseCli @("--json", "--developer-mode", "sync", "refresh")
     if ($refresh.kind -ne "result") { throw "The CLI refresh response is invalid." }
@@ -179,7 +363,77 @@ try {
         throw "The Cloud Files range read returned the wrong bytes."
     }
 
+    if ($Coalescing) {
+        $coalescingEvidence = Invoke-CliCoalescingContentConflict -InvokeCli { param($arguments) Invoke-MirrorPulseCli $arguments } `
+            -WaitHostStopped { Wait-MirrorPulseHostStopped } `
+            -ReadStoppedAudit { param($completed) Invoke-CliStoppedCoalescingOracle -ProbeAssembly $script:probeAssembly -FixtureRoot $runRoot -Completed $completed -Action $CoalescingAction -ControlledCreate:$CreateConflict -MovedFile:$MoveConflict -MoveOnly:$MoveOnlyConflict } `
+            -ReadStoppedEdit {
+                param([bool]$intermediate)
+                Read-CliStoppedCoalescingEdit -ProbeAssembly $script:probeAssembly -FixtureRoot $runRoot -MovedFile:($MoveConflict -or $MoveOnlyConflict) -IntermediateMove:$intermediate
+            } `
+            -InspectOnlineSeed {
+                $inspection = Invoke-CliFixtureProbe -Mode inspect -Phase BeforeCoalescingDisable
+                $target = @($inspection.items | Where-Object role -CEQ 'RoundTripFile')
+                if ($target.Count -ne 1) { throw 'The independent probe did not inspect the exact KeepRemote seed.' }
+                @{ nativeInspected = $true; native = $target[0]; nativeIdentitySha256 = $inspection.roundTripIdentitySha256 }
+            } `
+            -ResolveChoice { param($conflict) Invoke-CliCoalescingChoice -CliPath $script:cliExecutable -FixtureRoot $runRoot -ConflictId $conflict -Action $CoalescingAction } `
+            -RecordControlledMove {
+                param([guid]$operation,[guid]$intermediateOperation)
+                $marker=[ordered]@{schemaVersion=1;instanceId=$instanceId;rootId=$registeredRoot.rootId
+                    rootKey=$registeredRoot.uniquenessKey;directoryName=$rootDirectory;controlledMoveOperationId=$operation.ToString('D')}
+                if($intermediateOperation -ne [guid]::Empty){$marker.intermediateMoveOperationId=$intermediateOperation.ToString('D')}
+                $marker | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $runRoot '.mp-cli-fixture.json') -Encoding utf8
+            } `
+            -Action $CoalescingAction `
+            -ControlledCreate:$CreateConflict `
+            -EmptyCreate:$EmptyCreate `
+            -MovedFile:$MoveConflict `
+            -MoveOnly:$MoveOnlyConflict `
+            -InstanceId $instanceId -MappedRoot $mappedRoot -SourceRoot $sourceRoot -EvidencePath $EvidencePath
+        $coalescingEvidence.packageSha256 = (Get-FileHash -LiteralPath $PackagePath).Hash
+        $coalescingEvidence.signatureSha256 = (Get-FileHash -LiteralPath ($PackagePath + '.signature.json')).Hash
+        if ($CoalescingAction -ceq 'KeepRemote') {
+            $coalescingEvidence.cliExecutableSha256 = (Get-FileHash -LiteralPath $script:cliExecutable).Hash
+            $coalescingEvidence.hostExecutableSha256 = (Get-FileHash -LiteralPath $hostExecutable).Hash
+            $coalescingEvidence.probeAssemblySha256 = (Get-FileHash -LiteralPath $script:probeAssembly).Hash
+        }
+    }
     if ($Regression) {
+        $onlineRead = Invoke-CliFixtureProbe -Mode read -Phase Online
+        $deadline = [DateTime]::UtcNow.AddSeconds(30)
+        do {
+            $readStatus = Invoke-MirrorPulseCli @('--json', '--developer-mode', 'status')
+            if ($readStatus.data.pendingUploads -eq 0) { break }
+            Start-Sleep -Milliseconds 500
+        } while ([DateTime]::UtcNow -lt $deadline)
+        if ($readStatus.data.pendingUploads -ne 0) {
+            Write-MirrorPulseUploadDiagnostics
+            throw 'Read-only hydration left pending uploads.'
+        }
+        Invoke-MirrorPulseCli @('--json', '--developer-mode', 'host', 'stop') | Out-Null
+        Wait-MirrorPulseHostStopped
+        $beforeWriteAudit = Invoke-CliFixtureProbe -Mode audit -Phase BeforeLocalWrite
+        if ($beforeWriteAudit.routeVerified -ne $true -or $beforeWriteAudit.readOnlyFileMutations -ne 0 -or
+            $beforeWriteAudit.queuedFileMutations -ne 0) { throw 'Hydration recorded a redundant content upload before any local write.' }
+        $stoppedRead = Invoke-CliFixtureProbe -Mode read -Phase HostStopped
+        if ($stoppedRead.binarySha256 -cne $onlineRead.binarySha256) { throw 'Resident content changed after the Host stopped.' }
+        Invoke-MirrorPulseCli @('--json', '--developer-mode', 'host', 'start') | Out-Null
+        $deadline = [DateTime]::UtcNow.AddSeconds(30)
+        do {
+            $restartedReadStatus = Invoke-MirrorPulseCli @('--json', '--developer-mode', 'status')
+            $restartedReadInstance = @($restartedReadStatus.data.instances) | Where-Object instanceId -eq $instanceId | Select-Object -First 1
+            if ($restartedReadInstance.workerConnected -eq $true) { break }
+            Start-Sleep -Milliseconds 500
+        } while ([DateTime]::UtcNow -lt $deadline)
+        if ($restartedReadInstance.workerConnected -ne $true) {
+            Write-MirrorPulseUploadDiagnostics
+            throw 'The Local Worker did not reconnect for the repeated-read check.'
+        }
+        Assert-CliNamespaceRoot -Phase RestartedRoot -ExpectedState Active
+        $restartedRead = Invoke-CliFixtureProbe -Mode read -Phase HostRestarted
+        if ($restartedRead.binarySha256 -cne $onlineRead.binarySha256) { throw 'Resident content changed after the Host restarted.' }
+
         $roundTrip = Join-Path $sourceRoot "cli-roundtrip.txt"
         Set-Content -LiteralPath $roundTrip -Value "remote-before-local" -NoNewline
         Invoke-MirrorPulseCli @("--json", "--developer-mode", "sync", "refresh") | Out-Null
@@ -197,6 +451,7 @@ try {
             throw "The remote batch did not hydrate the expected content."
         }
         $cursorStatus = Invoke-MirrorPulseCli @("--json", "--developer-mode", "status")
+        Invoke-CliFixtureProbe -Mode inspect -Phase BeforeDisable | Out-Null
         $cursorBeforeRestart = @($cursorStatus.data.instances) |
             Where-Object { $_.instanceId -eq $instanceId } |
             Select-Object -First 1 -ExpandProperty cursorFingerprint
@@ -223,11 +478,20 @@ try {
         if ($null -eq $offlineInstance -or $offlineInstance.phase -ne "Offline") {
             throw "The disabled Adapter instance did not remain offline after the Host restarted."
         }
+        Assert-CliNamespaceRoot -Phase DisabledRoot -ExpectedState Disabled
+        Invoke-CliFixtureProbe -Mode inspect -Phase InstanceDisabled | Out-Null
+        $disabledRead = Invoke-CliFixtureProbe -Mode read -Phase InstanceDisabled
+        if ($disabledRead.binarySha256 -cne $onlineRead.binarySha256) { throw 'Resident content changed while the Adapter was disabled.' }
         Start-Sleep -Seconds 1
         $baselineStatus = Invoke-MirrorPulseCli @("--json", "--developer-mode", "status")
         $pendingBeforeWrite = $baselineStatus.data.pendingUploads
         $queuedFile = Join-Path $mappedRoot "queued-upload.txt"
-        [IO.File]::WriteAllText($queuedFile, "queued-local-upload")
+        $queuedInput = Join-Path $runRoot "queued-upload-input.txt"
+        [IO.File]::WriteAllText($queuedInput, "queued-local-upload")
+        $managedParent = Invoke-MirrorPulseCli @("--json", "namespace", "member", "inspect", $rootDirectory, "--directory")
+        $preparedImport = Invoke-MirrorPulseCli @("--json", "namespace", "member", "prepare-import",
+            $managedParent.data.memberId, "queued-upload.txt", $queuedInput)
+        Invoke-MirrorPulseCli @("--json", "namespace", "member", "import", $preparedImport.data.operationId) | Out-Null
         $deadline = [DateTime]::UtcNow.AddSeconds(15)
         do {
             Start-Sleep -Milliseconds 250
@@ -247,6 +511,7 @@ try {
             Start-Sleep -Milliseconds 500
             Invoke-MirrorPulseCli @("--json", "--developer-mode", "status") | Out-Null
         }
+        Assert-CliNamespaceRoot -Phase ReenabledRoot -ExpectedState Active
         if (-not (Test-Path -LiteralPath $sourceUpload) -or
             [IO.File]::ReadAllText($sourceUpload) -ne "queued-local-upload") {
             $failedStatus = Invoke-MirrorPulseCli @("--json", "--developer-mode", "status")
@@ -289,27 +554,98 @@ try {
                 "Phase=$($instanceStatus.phase); Error=$($instanceStatus.lastErrorCode)."
         }
 
+        $invokeLabelCli = {
+            param($arguments, [int[]]$exitCodes = @(0))
+            Invoke-MirrorPulseCli -Arguments $arguments -ExpectedExitCode $exitCodes
+        }
+        $rootLabelLifecycle = Invoke-CliRootLabelLifecycle -InvokeCli $invokeLabelCli `
+            -RootId $registeredRoot.rootId -InstanceId $instanceId -DirectoryName $rootDirectory `
+            -SyncRoot $syncRoot -SourceRoot $sourceRoot -EvidencePath $EvidencePath
+        if ($EvidencePath) {
+            $rootLabelOriginals = Join-Path ([IO.Path]::GetDirectoryName([IO.Path]::GetFullPath($EvidencePath))) 'cli-regression.originals/root-labels'
+            Assert-CliRootLabelLifecycleEvidence -Evidence $rootLabelLifecycle -OriginalsDirectory $rootLabelOriginals
+        }
+
+        $rootLabelCancellations = Invoke-CliRootLabelCancellationLifecycle -InvokeCli $invokeLabelCli `
+            -RootId $registeredRoot.rootId -InstanceId $instanceId -DirectoryName $rootDirectory `
+            -SyncRoot $syncRoot -SourceRoot $sourceRoot -EvidencePath $EvidencePath
+        if ($EvidencePath) {
+            $cancellationOriginals = Join-Path ([IO.Path]::GetDirectoryName([IO.Path]::GetFullPath($EvidencePath))) 'cli-regression.originals/root-cancellations'
+            Assert-CliRootLabelCancellationEvidence -Evidence $rootLabelCancellations -OriginalsDirectory $cancellationOriginals
+        }
+
+        # Exercise Label transitions against the baseline before creating the two replacement upload generations.
+        $activeReplacement = Invoke-CliActiveReplacement -InvokeCli $invokeLabelCli `
+            -WaitForHost { Wait-MirrorPulseHostReady } -FixtureRoot $runRoot -DirectoryName $rootDirectory `
+            -InstanceId $instanceId -RootId $registeredRoot.rootId -EvidencePath $EvidencePath
+        $markerPath = Join-Path $runRoot '.mp-cli-fixture.json'
+        $marker = Get-Content -LiteralPath $markerPath -Raw | ConvertFrom-Json -AsHashtable
+        $marker.controlledReplacementOperationId = $activeReplacement.operationId
+        $marker | ConvertTo-Json | Set-Content -LiteralPath $markerPath -Encoding utf8
+
         # Both sides change while the Host is stopped. The conflict must survive another restart.
         Invoke-MirrorPulseCli @("--json", "--developer-mode", "host", "stop") | Out-Null
         Wait-MirrorPulseHostStopped
+        $afterWriteAudit = Invoke-CliFixtureProbe -Mode audit -Phase AfterLocalWrite
+        if ($afterWriteAudit.routeVerified -ne $true -or $afterWriteAudit.readOnlyFileMutations -ne 0 -or
+            $afterWriteAudit.queuedFileMutations -lt 1 -or $afterWriteAudit.acknowledgedQueuedFileMutations -ne $afterWriteAudit.queuedFileMutations) {
+            throw 'The retained intent audit did not distinguish repeated reads from the actual queued local write.'
+        }
+        $replacementAudit = $afterWriteAudit.activeReplacement
+        if ($replacementAudit.operationId -cne $activeReplacement.operationId -or
+            $replacementAudit.memberId -cne $activeReplacement.memberId -or
+            $replacementAudit.nativeItemId -cne $activeReplacement.nativeItemId -or
+            $replacementAudit.backupSha256 -cne $activeReplacement.originalSha256 -or
+            $replacementAudit.contentSha256 -cne $activeReplacement.replacementSha256 -or
+            @($replacementAudit.acknowledgedMutations | Where-Object sha256 -ceq $activeReplacement.replacementSha256).Count -ne 1 -or
+            @($replacementAudit.acknowledgedMutations | Where-Object sha256 -ceq $activeReplacement.laterSha256).Count -ne 1 -or
+            @($replacementAudit.acknowledgedMutations).Count -ne 2) {
+            throw 'The stopped Host audit did not verify the first backup and both original acknowledged save generations.'
+        }
+        if ($EvidencePath) {
+            $originals = Join-Path ([IO.Path]::GetDirectoryName([IO.Path]::GetFullPath($EvidencePath))) 'cli-regression.originals/active-replacement'
+            $replacementAudit | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath (Join-Path $originals 'stopped-audit.json') -Encoding utf8
+        }
         [IO.File]::WriteAllText($remoteFile, "local-conflict")
         [IO.File]::WriteAllText($roundTrip, "remote-conflict")
-        Invoke-MirrorPulseCli @("--json", "--developer-mode", "host", "start") | Out-Null
+        $startupOriginals = if ($EvidencePath) {
+            Join-Path ([IO.Path]::GetDirectoryName([IO.Path]::GetFullPath($EvidencePath))) 'cli-regression.originals'
+        }
+        Wait-CliRootLabelHostStart -InvokeCli $invokeLabelCli -Phase 'offline-conflict-start' `
+            -PreviousProcessId $activeReplacement.recoveryHostProcessId -OriginalsDirectory $startupOriginals | Out-Null
         $deadline = [DateTime]::UtcNow.AddSeconds(30)
         do {
-            Start-Sleep -Milliseconds 500
-            Invoke-MirrorPulseCli @("--json", "--developer-mode", "sync", "refresh") | Out-Null
             $conflicts = Invoke-MirrorPulseCli @("--json", "--developer-mode", "conflict", "list")
             $conflict = @($conflicts.data.items) |
                 Where-Object { $_.relativePath -like "*cli-roundtrip.txt" } | Select-Object -First 1
-        } while ($null -eq $conflict -and [DateTime]::UtcNow -lt $deadline)
+            if ($null -ne $conflict -or [DateTime]::UtcNow -ge $deadline) { break }
+            Invoke-MirrorPulseCli @("--json", "--developer-mode", "sync", "refresh") | Out-Null
+            Start-Sleep -Milliseconds 500
+        } while ($true)
         if ($null -eq $conflict) { throw "The local/remote race did not create a CLI-visible conflict." }
         $conflictId = $conflict.conflictId
     }
 
+    # The coalescing oracle deliberately returns with the Host stopped.
+    # Restore the running precondition for this shared restart assertion.
+    if ($Coalescing) { Invoke-MirrorPulseCli @('--json', '--developer-mode', 'host', 'start') | Out-Null }
+    $beforeFinalRestart = Invoke-MirrorPulseCli @('--json', '--no-start', 'host', 'status')
+    if ($beforeFinalRestart.kind -cne 'result' -or $beforeFinalRestart.data.processId -le 0) {
+        throw 'The original Host process is required before the final restart.'
+    }
     $restart = Invoke-MirrorPulseCli @("--json", "--developer-mode", "host", "restart")
     if ($restart.kind -ne "result") { throw "The CLI Host restart response is invalid." }
     Wait-MirrorPulseHostStopped
+    if ($startupOriginals) {
+        $beforeFinalRestart | ConvertTo-Json -Depth 12 |
+            Set-Content -LiteralPath (Join-Path $startupOriginals 'final-restart-before.json') -Encoding utf8
+        $restart | ConvertTo-Json -Depth 12 |
+            Set-Content -LiteralPath (Join-Path $startupOriginals 'final-restart-stop.json') -Encoding utf8
+    }
+    Wait-CliRootLabelHostStart -InvokeCli {
+        param($arguments, $expectedExitCode = @(0))
+        Invoke-MirrorPulseCli -Arguments $arguments -ExpectedExitCode $expectedExitCode
+    } -Phase 'final-restart' -PreviousProcessId $beforeFinalRestart.data.processId -OriginalsDirectory $startupOriginals | Out-Null
     $listed = Invoke-MirrorPulseCli @("--json", "--developer-mode", "instance", "list")
     if (-not (@($listed.data.instances) | Where-Object { $_.instanceId -eq $instanceId })) {
         throw "The instance was not retained across a CLI Host restart."
@@ -329,9 +665,36 @@ try {
     }
 
     Invoke-MirrorPulseCli @("--json", "--developer-mode", "host", "stop") | Out-Null
+    Wait-MirrorPulseHostStopped
+    Write-CliFixtureExecutionObservations -EvidencePath $EvidencePath -HydrationReads $hydrationReads.ToArray() `
+        -HydrationAudits $hydrationAudits.ToArray() -NamespaceAudits $namespaceAudits.ToArray()
     Write-Output "Verified CLI -> Host -> Worker integration for $Runtime ($instanceId)."
 }
+catch {
+    $primaryFailure = $_
+    try { Write-CliFixtureFailure -Failure $primaryFailure -Phase Execution -EvidencePath $EvidencePath -FixtureRoot $runRoot -DataRoot $dataRoot }
+    catch { Write-Host "Original fixture failure recording also failed: $($_.Exception.GetType().Name)." }
+    try {
+        Write-CliFixtureStartupObservations -EvidencePath $EvidencePath -HydrationReads $hydrationReads.ToArray() -HydrationAudits $hydrationAudits.ToArray() -NamespaceAudits $namespaceAudits.ToArray() -ReadLifecycle {
+            $text = (& $script:cliExecutable --json --no-start host status 2>&1 | Out-String).Trim()
+            if ($LASTEXITCODE -ne 0) { throw [IO.IOException]::new('The lifecycle observer was unavailable.') }
+            $text | ConvertFrom-Json
+        }
+    } catch { Write-Host "Startup observation recording also failed: $($_.Exception.GetType().Name)." }
+    if ($Coalescing) {
+        try {
+            Invoke-MirrorPulseCli @('--json', '--developer-mode', 'host', 'stop') | Out-Null
+            Wait-MirrorPulseHostStopped
+            Invoke-CliCoalescingEditFailureObservation -ProbeAssembly $script:probeAssembly -FixtureRoot $runRoot -EvidencePath $EvidencePath -MovedFile:($MoveConflict -or $MoveOnlyConflict)
+        } catch { Write-Host "Stopped coalescing edit observation also failed: $($_.Exception.GetType().Name)." }
+    }
+    throw $primaryFailure
+}
 finally {
+    Invoke-CliFixtureTeardown -PrimaryFailure $primaryFailure -RecordFailure {
+        param($failure)
+        Write-CliFixtureFailure -Failure $failure -Phase Cleanup -EvidencePath $EvidencePath -FixtureRoot $runRoot -DataRoot $dataRoot
+    } -Cleanup {
     if ($null -ne $script:cliExecutable -and (Test-Path -LiteralPath $script:cliExecutable)) {
         try {
             & $script:cliExecutable --json --developer-mode host stop 2>$null | Out-Null
@@ -340,19 +703,56 @@ finally {
     }
     if ($null -ne $hostProcess -and -not $hostProcess.HasExited) {
         $hostProcess.Kill($true)
+        $hostProcess.WaitForExit()
     }
     Remove-Item Env:\MIRRORPULSE_DATA_ROOT -ErrorAction SilentlyContinue
     Remove-Item Env:\MIRRORPULSE_SYNC_ROOT -ErrorAction SilentlyContinue
     Remove-Item Env:\MIRRORPULSE_HOST_PATH -ErrorAction SilentlyContinue
     Remove-Item Env:\MIRRORPULSE_DEVELOPER_MODE -ErrorAction SilentlyContinue
     if (Test-Path -LiteralPath $runRoot) {
-        Remove-Item -LiteralPath $runRoot -Recurse -Force -ErrorAction SilentlyContinue
+        $cleanupRoot = [IO.Path]::GetFullPath($runRoot)
+        $cleanupParent = [IO.Path]::TrimEndingDirectorySeparator([IO.Path]::GetTempPath())
+        if ([IO.Path]::GetDirectoryName($cleanupRoot) -cne $cleanupParent -or
+            [IO.Path]::GetFileName($cleanupRoot) -cnotmatch '\AMirrorPulse-cli-integration-[0-9a-f]{32}\z' -or
+            (Get-Item -LiteralPath $cleanupRoot -Force).Attributes.HasFlag([IO.FileAttributes]::ReparsePoint)) {
+            throw 'The cleanup target is outside the isolated CLI fixture.'
+        }
+        if (Test-Path -LiteralPath (Join-Path $cleanupRoot '.mp-cli-fixture.json')) {
+            $cleanup = Invoke-CliFixtureProbe -Mode cleanup -Phase Teardown
+            if ($cleanup.exclusiveCatalogOwner -ne $true -or
+                ($cleanup.protectedNamespace -eq $true -and ($cleanup.validatedObjects -lt 1 -or
+                    $cleanup.restoredObjects -ne $cleanup.validatedObjects -or $cleanup.cloudRootUnregistered -ne $true)) -or
+                ($cleanup.protectedNamespace -eq $false -and ($cleanup.validatedObjects -ne 0 -or $cleanup.restoredObjects -ne 0)) -or
+                $null -eq $cleanup.protectedNamespace) {
+                throw 'The isolated fixture permission cleanup was incomplete.'
+            }
+        }
+        Remove-Item -LiteralPath $cleanupRoot -Recurse -Force -ErrorAction Stop
+        if (Test-Path -LiteralPath $cleanupRoot) { throw 'The isolated CLI fixture workspace was not removed.' }
     }
+    }
+}
+if ($Coalescing) {
+    $coalescingEvidence.teardownCompleted = $true
+    $coalescingEvidence | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $EvidencePath -Encoding utf8
+    if ($RequirePureMoveJournal -and
+        ($coalescingEvidence.rawEffect -cne 'MoveFile' -or
+         $coalescingEvidence.originalContentObservationCount -ne 0 -or
+         $coalescingEvidence.originalCount -ne 2 -or
+         @($coalescingEvidence.originalMoveJournalOperationIds).Count -ne 2)) {
+        throw "Pure rename requires raw MoveFile and exactly two original Move notifications. Observed $($coalescingEvidence.rawEffect), $($coalescingEvidence.originalCount) originals and $($coalescingEvidence.originalContentObservationCount) content notifications."
+    }
+    return
 }
 if ($EvidencePath) {
     [ordered]@{
-        schemaVersion=1;runtime=$Runtime;regression=$Regression.IsPresent;rangeRead=$true
+        schemaVersion=2;runtime=$Runtime;regression=$Regression.IsPresent;rangeRead=$true
         offlineQueueRetained=$Regression.IsPresent;uploadJournalDrained=$Regression.IsPresent
         conflictPersisted=$Regression.IsPresent;cursorPersisted=$Regression.IsPresent
-    } | ConvertTo-Json | Set-Content -LiteralPath $EvidencePath -Encoding utf8
+        hydration=[ordered]@{reads=@($hydrationReads.ToArray());audits=@($hydrationAudits.ToArray())}
+        namespace=[ordered]@{defaultHostIntegrated=$true;audits=@($namespaceAudits.ToArray())}
+        rootLabels=$rootLabelLifecycle
+        rootCancellations=$rootLabelCancellations
+        activeReplacement=$activeReplacement
+    } | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $EvidencePath -Encoding utf8
 }

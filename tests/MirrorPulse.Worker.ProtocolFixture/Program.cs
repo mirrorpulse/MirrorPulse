@@ -3,22 +3,66 @@ using System.IO.Pipes;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using MirrorPulse.Adapter.Sdk;
 using MirrorPulse.Core.Contracts;
 using MirrorPulse.Core.Transport;
 
 InstanceId instance = InstanceId.Parse(args[1]);
 WorkerSessionId session = WorkerSessionId.Parse(args[3]);
+string? cache = Environment.GetEnvironmentVariable("MP_TRANSFER_CACHE_DIR");
+string? workerState = Environment.GetEnvironmentVariable("MP_WORKER_STATE_DIR");
+string? modePath = cache is null ? null : Path.Combine(cache, ".mp-startup-fixture-mode");
+string mode = modePath is not null && File.Exists(modePath) ? (await File.ReadAllTextAsync(modePath)).Trim() : "Normal";
+if (mode == "DurableStateProbe")
+{
+    string state = workerState ?? throw new InvalidDataException("WorkerStateGrantRequired");
+    if (!Directory.Exists(state)) throw new InvalidDataException("WorkerStateGrantMissing");
+    string receipt = Path.Combine(state, ".mp-worker-state-fixture");
+    if (!File.Exists(receipt))
+        await File.WriteAllBytesAsync(receipt, JsonSerializer.SerializeToUtf8Bytes(new { instanceId = instance.Value, firstSession = session.Value }));
+    using var retained = JsonDocument.Parse(await File.ReadAllBytesAsync(receipt));
+    if (retained.RootElement.GetProperty("instanceId").GetGuid() != instance.Value)
+        throw new InvalidDataException("WorkerStateInstanceMismatch");
+}
+using FileStream? heldResource = mode is "IgnoreStopWithOpenFile" or "IdleBeforePipeWithOpenFile" or "NormalWithOpenFile"
+    ? new FileStream(Path.Combine(cache!, ".mp-startup-fixture-open-resource"), FileMode.Create, FileAccess.ReadWrite, FileShare.None)
+    : null;
+if (heldResource is not null)
+{
+    string pid = Path.Combine(cache!, ".mp-startup-fixture-pid");
+    await File.WriteAllTextAsync(pid + ".pending", Environment.ProcessId.ToString(System.Globalization.CultureInfo.InvariantCulture));
+    File.Move(pid + ".pending", pid);
+}
+if (mode == "ExitBeforePipe")
+{
+    while (!File.Exists(Path.Combine(cache!, ".mp-startup-fixture-exit"))) await Task.Delay(10);
+    Environment.Exit(73);
+}
+if (mode is "IdleBeforePipe" or "IdleBeforePipeWithOpenFile") await Task.Delay(Timeout.InfiniteTimeSpan);
 await using var pipe = new NamedPipeClientStream(".", args[5], PipeDirection.InOut, PipeOptions.Asynchronous);
 await pipe.ConnectAsync(10000);
+if (mode == "IdleBeforeHello") await Task.Delay(Timeout.InfiniteTimeSpan);
+if (mode == "UnexpectedHello")
+{
+    await SendAsync(new(1, "Connected", Guid.NewGuid(), instance, session, false,
+        JsonSerializer.SerializeToElement(new { secret = "startup-secret-needle" })));
+    await Task.Delay(Timeout.InfiniteTimeSpan);
+}
 Guid helloId = Guid.NewGuid();
 string[] capabilities = ["root-addresses", "stable-operations", "conditional-targets", "bounded-streams", "cancel-ack"];
+if (mode is "OriginalDirectory" or "WrongOriginalDirectory" or "OrdinaryDirectoryReply" or "LostOriginalDirectoryReply")
+    capabilities = [.. capabilities, AdapterDirectoryEffects.Capability];
 await SendAsync(new(1, "Hello", helloId, instance, session, false, JsonSerializer.SerializeToElement(new
 {
-    supportedVersions = new { minimum = 1, maximum = 2 },
+    supportedVersions = new { minimum = mode == "RejectedHello" ? 2 : 1, maximum = 2 },
     capabilities,
 })));
 ControlFrameEnvelope ready = await ReadAsync();
+if (mode == "RejectedHello") await Task.Delay(Timeout.InfiniteTimeSpan);
 if (ready.MessageType != "Ready" || !ready.IsResponse || ready.RequestId != helloId) return;
+string[] selectedCapabilities = ready.ProtocolVersion == 2
+    ? ready.Payload.GetProperty("capabilities").EnumerateArray().Select(value => value.GetString()!).ToArray()
+    : [];
 if (ready.ProtocolVersion == 2)
 {
     JsonElement[] roots = ready.Payload.GetProperty("roots").EnumerateArray().ToArray();
@@ -41,7 +85,42 @@ var acceptedOperations = new Dictionary<Guid, (string Signature, string? Revisio
 while (true)
 {
     ControlFrameEnvelope request = await ReadAsync();
-    if (request.MessageType == "Stop") return;
+    if (request.MessageType == "Stop")
+    {
+        if (mode == "IgnoreStopWithOpenFile") await Task.Delay(Timeout.InfiniteTimeSpan);
+        return;
+    }
+    if (request.MessageType == AdapterDirectoryRetirementWire.RequestMessage)
+    {
+        var retirement = AdapterDirectoryRetirementWire.ReadRequest(new(request.ProtocolVersion, request.MessageType,
+            request.RequestId, instance.Value, session.Value, request.IsResponse, request.Payload), selectedCapabilities);
+        var original = retirement.Retirement.OriginalDirectory;
+        if (mode == "OrdinaryDirectoryReply")
+        {
+            await SendAsync(new(2, "MutationComplete", request.RequestId, instance, session, true,
+                JsonSerializer.SerializeToElement(new { rootKey = original.Directory.RootKey, operationId = retirement.Operation.OperationId })));
+            continue;
+        }
+        var receipt = new AdapterOwnedChildEffectReceipt(1, instance.Value, original.AdmissionId, Guid.NewGuid(),
+            retirement.Operation.OperationId, retirement.OperationKind, retirement.RequestFingerprint, original.Directory,
+            mode == "WrongOriginalDirectory" ? "later-generation" : original.Generation, null,
+            retirement.OriginalParents.Select(parent => new AdapterOwnedParentTransition(parent, parent.OriginalRevision,
+                "after-retirement", null, "AQID")).ToArray());
+        if (mode == "LostOriginalDirectoryReply")
+        {
+            string receiptPath = Path.Combine(workerState ?? throw new InvalidDataException("WorkerStateGrantRequired"), ".mp-original-directory-fixture-receipt");
+            if (!File.Exists(receiptPath))
+            {
+                await File.WriteAllBytesAsync(receiptPath, AdapterProtocolJson.Encode(receipt));
+                return;
+            }
+            receipt = AdapterProtocolJson.Decode<AdapterOwnedChildEffectReceipt>(await File.ReadAllBytesAsync(receiptPath));
+            retirement.RequireAcceptedReceipt(receipt);
+        }
+        await SendAsync(new(2, AdapterDirectoryRetirementWire.ResponseMessage, request.RequestId, instance, session, true,
+            AdapterProtocolJson.ToElement(receipt)));
+        continue;
+    }
     string requestRoot = request.Payload.GetProperty("rootKey").GetString()!;
     string requestPath = request.Payload.TryGetProperty("path", out JsonElement pathElement) ? pathElement.GetString()! : "";
     if (request.MessageType == "Stat")

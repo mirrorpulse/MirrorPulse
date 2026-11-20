@@ -14,6 +14,9 @@
 
   <ItemGroup>
     <Using Include="Microsoft.VisualStudio.TestTools.UnitTesting" />
+    <Compile Include="../Shared/TransferAcknowledgementFaultSql.cs" Link="Fixtures/TransferAcknowledgementFaultSql.cs" />
+    <Compile Include="../MirrorPulse.Core.Tests/SignedWebDavV2HttpFixture.cs" Link="Fixtures/SignedWebDavV2HttpFixture.cs" />
+    <Compile Include="../MirrorPulse.Core.Tests/WorkerFailureTestDiagnostics.cs" Link="Fixtures/WorkerFailureTestDiagnostics.cs" />
   </ItemGroup>
 
   <ItemGroup>

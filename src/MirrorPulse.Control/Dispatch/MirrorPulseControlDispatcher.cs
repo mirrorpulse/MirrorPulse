@@ -97,6 +97,16 @@ public static class MirrorPulseControlErrorMapper
         ArgumentNullException.ThrowIfNull(exception);
         return exception switch
         {
+            MirrorPulse.Core.Sync.MirrorPulseTransferAdmissionBusyException => new ControlError(
+                MirrorPulseControlErrorCodes.HostBusy,
+                "Original local work must settle before a new transfer can be admitted.",
+                ErrorCategory.Native,
+                retryable: true),
+            MirrorPulse.Core.Sync.MirrorPulseRootLabelPendingRemoteBatchException => new ControlError(
+                MirrorPulseControlErrorCodes.RootLabelPendingRemoteBatch,
+                "The current remote batch must settle before preparing the root Label. Retry the preparation.",
+                ErrorCategory.Conflict,
+                retryable: true),
             OperationCanceledException => new ControlError(
                 MirrorPulseControlErrorCodes.OperationCancelled,
                 "The operation was cancelled.",

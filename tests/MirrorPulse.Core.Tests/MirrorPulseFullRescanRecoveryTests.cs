@@ -26,7 +26,7 @@ public sealed class MirrorPulseFullRescanRecoveryTests
                 await catalog.RequireRootRescanAsync(offline);
                 var recovery = new MirrorPulseFullRescanRecovery(catalog,
                     _ => cancelled ? throw new OperationCanceledException() : throw new UnauthorizedAccessException(),
-                    _ => { acknowledgements++; return ValueTask.CompletedTask; }, _ => ValueTask.CompletedTask);
+                    _ => { acknowledgements++; return ValueTask.CompletedTask; }, (_, _) => ValueTask.CompletedTask);
                 if (cancelled) await Assert.ThrowsExactlyAsync<OperationCanceledException>(() => recovery.RunAsync(new(true)).AsTask());
                 else await Assert.ThrowsExactlyAsync<UnauthorizedAccessException>(() => recovery.RunAsync(new(true)).AsTask());
                 MirrorPulseFullRescanCheckpoint checkpoint = (await catalog.ReadFullRescanAsync())!;
@@ -39,13 +39,14 @@ public sealed class MirrorPulseFullRescanRecoveryTests
             CollectionAssert.AreEqual(new[] { offline }, (await reopened.ReadDeferredRescanRootsAsync()).ToArray());
             await Assert.ThrowsExactlyAsync<InvalidOperationException>(() => reopened.CompleteFullRescanAsync(Guid.NewGuid()));
             var resumed = new MirrorPulseFullRescanRecovery(reopened, _ => ValueTask.FromResult(1),
-                _ => { acknowledgements++; return ValueTask.CompletedTask; }, _ => ValueTask.CompletedTask);
+                _ => { acknowledgements++; return ValueTask.CompletedTask; }, (_, _) => ValueTask.CompletedTask);
             Assert.IsTrue((await resumed.RunAsync(new(false))).WasRequired);
             Assert.AreEqual(1, acknowledgements);
             Assert.IsNull(await reopened.ReadFullRescanAsync());
             // Completing the online scan cannot discard the offline root's obligation.
             CollectionAssert.AreEqual(new[] { offline }, (await reopened.ReadDeferredRescanRootsAsync()).ToArray());
-            await reopened.CompleteRootRescanAsync(offline);
+            MirrorPulseRootRescanRequest request = (await reopened.ReadRootRescanRequestsAsync()).Single();
+            Assert.IsTrue(await reopened.CompleteRootRescanAsync(offline, request.Generation));
             Assert.IsEmpty(await reopened.ReadDeferredRescanRootsAsync());
         }
         finally { Directory.Delete(root, true); }
@@ -76,13 +77,13 @@ public sealed class MirrorPulseFullRescanRecoveryTests
             await using (var catalog = await MirrorPulseProductCatalog.OpenAsync(paths))
             {
                 var recovery = new MirrorPulseFullRescanRecovery(catalog, token => Scan(catalog, token),
-                    _ => { acknowledgements++; return ValueTask.CompletedTask; }, _ => throw new IOException("Projection unavailable."));
+                    _ => { acknowledgements++; return ValueTask.CompletedTask; }, (_, _) => throw new IOException("Projection unavailable."));
                 await Assert.ThrowsExactlyAsync<IOException>(() => recovery.RunAsync(new(true)).AsTask());
                 Assert.AreEqual(MirrorPulseFullRescanPhase.Acknowledging, (await catalog.ReadFullRescanAsync())!.Phase);
             }
             await using var reopened = await MirrorPulseProductCatalog.OpenAsync(paths);
             var resumed = new MirrorPulseFullRescanRecovery(reopened, token => Scan(reopened, token),
-                _ => { acknowledgements++; return ValueTask.CompletedTask; }, _ => ValueTask.CompletedTask);
+                _ => { acknowledgements++; return ValueTask.CompletedTask; }, (_, _) => ValueTask.CompletedTask);
             await resumed.RunAsync(new(false));
             Assert.AreEqual(2, discoveries);
             Assert.AreEqual(2, acknowledgements);

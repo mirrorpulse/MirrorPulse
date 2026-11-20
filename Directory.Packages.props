@@ -5,14 +5,14 @@
 
   <ItemGroup>
     <PackageVersion Include="MSTest" Version="4.0.2" />
-    <PackageVersion Include="CfSharp" Version="0.1.0-preview.3" />
-    <PackageVersion Include="CfSharp.Storage.Sqlite" Version="0.1.0-preview.3" />
+    <PackageVersion Include="CfSharp" Version="0.1.0-preview.15" />
+    <PackageVersion Include="CfSharp.Storage.Sqlite" Version="0.1.0-preview.15" />
     <PackageVersion Include="FluentFTP" Version="54.2.1" />
     <PackageVersion Include="SSH.NET" Version="2026.0.0" />
     <PackageVersion Include="Microsoft.Data.Sqlite" Version="8.0.31" />
     <PackageVersion Include="Microsoft.WindowsAppSDK" Version="2.5.1" />
     <PackageVersion Include="Microsoft.Windows.SDK.BuildTools" Version="10.0.28000.2705" />
     <PackageVersion Include="Microsoft.Windows.SDK.BuildTools.WinApp" Version="0.7.1" />
-    <PackageVersion Include="MirrorPulse.Adapter.Sdk" Version="[0.2.0]" />
+    <PackageVersion Include="MirrorPulse.Adapter.Sdk" Version="[0.3.1]" />
   </ItemGroup>
 </Project>

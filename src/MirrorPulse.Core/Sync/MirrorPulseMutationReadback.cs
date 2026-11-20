@@ -23,9 +23,27 @@ public sealed class MirrorPulseMutationReadback(IMirrorPulseWorkerStatTransport 
         {
             string? source = await stats.StatAsync(new(intent.InstanceId, intent.PreviousRelativePath!, intent.PreviousRootKey ?? intent.RootKey), cancellationToken).ConfigureAwait(false);
             if (record.AcceptedRevision is not null && revision == record.AcceptedRevision && source is null)
+            {
+                if (intent.IsDirectory)
+                {
+                    if (directories is null) return new(MirrorPulseMutationProofKind.Unknown, revision);
+                    var moved = await ReadMetadataAsync(intent, cancellationToken).ConfigureAwait(false);
+                    if (moved is null || moved.IsDeleted || !string.Equals(moved.ItemKind, "Directory", StringComparison.OrdinalIgnoreCase) ||
+                        moved.RemoteRevision != revision) return new(MirrorPulseMutationProofKind.Unknown, revision);
+                }
                 return new(MirrorPulseMutationProofKind.Verified, revision);
+            }
             return new(revision is not null && revision != record.AcceptedRevision
                 ? MirrorPulseMutationProofKind.Conflict : MirrorPulseMutationProofKind.Unknown, revision);
+        }
+        if (intent.IsDirectory && intent.Kind == MirrorPulseWorkerChangeKind.Create)
+        {
+            if (record.State != MirrorPulseMutationState.RemoteAccepted || revision is null || directories is null)
+                return new(MirrorPulseMutationProofKind.Unknown, revision);
+            MirrorPulseWorkerDirectoryEntry? directory = await ReadMetadataAsync(intent, cancellationToken).ConfigureAwait(false);
+            if (directory is null || directory.IsDeleted || !string.Equals(directory.ItemKind, "Directory", StringComparison.OrdinalIgnoreCase) || directory.RemoteRevision != revision)
+                return new(MirrorPulseMutationProofKind.Unknown, revision);
+            return new(revision == record.AcceptedRevision ? MirrorPulseMutationProofKind.Verified : MirrorPulseMutationProofKind.Conflict, revision);
         }
         if (ranges is null || directories is null || revision is null || intent.ContentSha256 is null || intent.ContentLength is null)
             return new(MirrorPulseMutationProofKind.Unknown, revision);

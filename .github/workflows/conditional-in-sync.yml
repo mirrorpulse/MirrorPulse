@@ -28,8 +28,11 @@ jobs:
           global-json-file: global.json
 
       - name: Restore locked test dependencies
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           pwsh ./eng/restore-adapter-sdk.ps1
+          if ($LASTEXITCODE -ne 0) { throw 'Pinned Adapter SDK acquisition failed.' }
           dotnet restore tests/MirrorPulse.CloudFiles.CfSharp.Tests --locked-mode
 
       - name: Build native test boundary

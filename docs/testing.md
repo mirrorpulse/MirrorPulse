@@ -1,10 +1,78 @@
 # Test boundaries
 
+The disposable CLI integration fixture preserves completed execution observations
+before teardown, separately from its final successful report. Cleanup failure remains
+a gate failure and retains its own original error. After authenticating the entire
+bounded temporary namespace and restoring its permissions, the cleanup probe disposes
+all object leases and its SDK session, then unregisters that synthetic Cloud Files
+root before ordinary recursive deletion. Unprotected managed fixtures do not invoke
+Cloud Files registration APIs. This teardown is restricted to the exact temporary
+fixture and never applies to a user's registered sync root.
+
 Prepare the isolated SFTP fixture with `pwsh ./eng/setup-test-environment.ps1`
 before running the managed solution tests. Environment-dependent tests report
 inconclusive results when prerequisites are absent. `eng/verify-test-results.ps1`
 checks executed counts and requires every named test in a dedicated suite.
 Ordinary CfSharp tests are not all native Cloud Files tests.
+
+The x64 native gate selects names containing `Native`, plus its explicit retained
+handle alias case. That filter can also select managed simulations. Read the
+individual tests and original reports before claiming that a selected case
+performed native Cloud Files operations; the selected count alone proves no such
+boundary. Bind required-case coverage to the suite policy from the executed source.
+
+The x64 native and ARM64 namespace suites both require the real NTFS retained
+handle alias test. It checks rejection of an existing or newly observed hard
+link, retention of original permissions and latest bytes, and handle cleanup
+without ACL writes. It does not register Cloud Files and does not prove that a
+retained handle prevents new links. A separate Cloud Files test exercises
+CfSharp's public content-preserving conversion while the original object lease
+is retained, then attempts links inside and outside the root before and after
+the lease is released and after the official SQLite owner restarts. It requires
+the original file ID, permissions and latest unaccepted bytes to remain intact,
+without marking content in sync or reading an Adapter source. Existing aliased
+ordinary files must refuse conversion without changing their permissions or
+bytes. This is a component boundary test; it does not enable whole-tree
+protection in the Host. The namespace report requires every named test in
+`required.namespace` in [the suite policy](../eng/test-suites.json) to pass exactly once,
+without skips; missing, repeated, or
+partially executed results fail the gate.
+
+The ARM64 job also runs the same required namespace suite as a fresh local user in the built-in
+Users group, with a loaded Windows profile and an actual non-administrator token.
+`eng/verify-namespace-nonadmin.ps1` is restricted to disposable GitHub-hosted Windows
+runners. It copies the compiled test payload to a marked temporary workspace;
+credentials and the runner's private profile are not exposed to the test child.
+The password stays in memory, and the child receives a restricted environment.
+It does not build or restore packages as the test user.
+
+Original context and TRX results are uploaded separately as
+`namespace-nonadmin-arm64-test-results`. The ordinary-user check does not increase
+the elevated namespace suite's counts. Evidence requires every declared namespace test without
+skips, matching source and digests, and successful account, profile and workspace
+cleanup. `eng/verify-ci-evidence.ps1 -RequireNonAdminNamespace` rejects missing or
+partial evidence. This component gate does not establish installed Host identity
+or enable strict protection and controlled operations in the product.
+
+The sync-root guard probe retains the root and its ancestors throughout a short
+session. It requires root and ancestor rename attempts to fail while controlled
+child creation, rename and deletion succeed. Original root permissions and native
+binding are retained and restored through the product coordinator. The test never
+writes ancestor permissions, and it does not establish the Host's lifetime guard
+or controlled-operation durability.
+
+The normal-user transport tests exercise the actual Windows execution identities
+through directory enumeration, hydration range reads, uploads, stats and mutations.
+Lazy range bodies are read and disposed before leaving the normal-user context;
+only a detached buffer within the Worker range limit is returned. Source failures,
+cancellation and owner disposal must retain this identity boundary. These tests
+do not establish the identity of a remote Worker process or enable Host protection.
+
+The native source-context probe requires ordinary directory enumeration to populate
+a child under closed parent ACLs and a subsequent cold read to hydrate through the
+normal-user transport. Both callbacks, inherited deletion protection, lazy body
+disposal, unchanged parent descriptors and retained root binding must be observed.
+This isolated callback probe does not establish product operation recovery.
 
 ## Independent Adapter template gate
 
@@ -49,7 +117,7 @@ before or after each of these real persistence boundaries:
 | Product catalog | Product catalog command write | Old/new durable command state |
 | Pending remote batch | Host catalog opaque replay intent and candidate snapshot | No record before save, identical batch/snapshot after save |
 | Conflict copy | Flushed staging/hash/manifest save | Original untouched; incomplete intent before commit, verified copy after manifest commit |
-| Full rescan | Product scan generation/phase commit | Stable pending generation across process exit, with no copied Cloud Files journal |
+| Full rescan | Product scan generation/phase and captured root request commit | Stable pending generation across process exit; old scan completion preserves newer root requests, with no copied Cloud Files journal |
 
 All 28 combinations execute in the managed suite. The probe requires a fixture
 marker. It does not register a sync root, open user files, or install packages.
@@ -173,3 +241,43 @@ Omit `-RequireNative` and `-RequireInstalled` for a push/PR run, which does not 
 those gates. Omit `-RequireOfficialCandidate` only for historical reports produced
 before the shared-candidate contract.
 The three reports must name the same expected commit and their job-specific RID.
+
+Each atomic commit remains independently reviewable and passes its relevant
+local restore, Release build, tests, formatting, and ownership checks. Related
+commits may be pushed together for one CI run, with one full manual native and
+installed verification for that batch when required. A later successful run does
+not erase a failed run; preserve the original failure and investigate it without
+relaxing checks or adding unconditional retries.
+
+Worker startup regression tests launch real isolated child processes and verify
+early exit, a missing pipe connection, a silent Hello, an invalid first frame,
+an invalid executable, a rejected version negotiation, and requested shutdown. Official package failures include
+the Host's sanitized stage and process facts in the original TRX failure output.
+These tests preserve the production connection and Hello deadlines.
+
+## Ordinary-user controller diagnostics
+
+The disposable account controller budgets the complete required namespace catalog:
+two minutes of process overhead plus fifteen seconds per selected test, with a
+ten-minute minimum and a maximum selection of 100 tests. Individual native case
+deadlines and all required results remain unchanged. A larger selection requires
+an explicit policy review rather than an unbounded controller timeout.
+
+After a failed or interrupted child stops, its bounded original context, TRX and
+synthetic stdout/stderr are copied before account, profile or workspace cleanup.
+Credential configuration is excluded. Controller failures retain the primary
+failure and each cleanup failure independently; cleanup failure cannot turn the
+run green or erase the original diagnostic. Successful execution still requires
+all existing ordinary-user identity and cleanup evidence.
+
+## Installed Shell failure observations
+
+When the installed App does not finish its Shell probe, verification retains
+`installed-shell-failure-arm64` from the same source and run. The bounded report
+records whether the original process is running, exited or unavailable, its
+observed exit code, and a classified result with an optional native HRESULT.
+Unavailable observations remain unknown. Arbitrary probe text, paths, labels and
+exception messages are excluded. Observation runs only after failure; the original
+two-minute deadline, required `success` result and installation cleanup remain.
+This diagnostic cannot establish successful Shell registration or installed
+acceptance.

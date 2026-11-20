@@ -12,6 +12,14 @@ namespace MirrorPulse.CloudFiles.CfSharp.Tests;
 public sealed class MirrorPulseAdapterRemoteBatchMapperTests
 {
     [TestMethod]
+    public void WorkerCannotSelectTheHostPollingCursorNamespace()
+    {
+        var instance = InstanceId.New();
+        var batch = new AdapterRemoteChangeBatch("poll-root/worker-selected", ReadOnlyMemory<byte>.Empty, [], new byte[] { 1 });
+        Assert.ThrowsExactly<InvalidDataException>(() => MirrorPulseAdapterRemoteBatchMapper.Map(instance, CreateRoots(instance), batch));
+    }
+
+    [TestMethod]
     public void MapsFiveRemoteKindsIntoOneCfSharpBatchWithInstanceScopedIdentity()
     {
         var instance = InstanceId.New();

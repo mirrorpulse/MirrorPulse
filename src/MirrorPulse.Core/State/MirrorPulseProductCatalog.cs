@@ -2,6 +2,7 @@ using Microsoft.Data.Sqlite;
 using MirrorPulse.Core.Configuration;
 using MirrorPulse.Core.Conflicts;
 using MirrorPulse.Core.Contracts;
+using MirrorPulse.Core.Diagnostics;
 using MirrorPulse.Core.Sync;
 
 namespace MirrorPulse.Core.State;
@@ -41,16 +42,20 @@ public sealed record MirrorPulseInstanceRuntimeState(
 /// </summary>
 public sealed partial class MirrorPulseProductCatalog : IAsyncDisposable
 {
+    public const long CurrentSchemaVersion = 121;
     private readonly FileStream _owner;
     private readonly SqliteConnection _connection;
+    internal string WorkerStateRootPath { get; }
     private readonly SemaphoreSlim _gate = new(1, 1);
     internal SemaphoreSlim CredentialGate { get; } = new(1, 1);
+    internal MirrorPulseInstanceScheduler CoalescingScheduler { get; } = new();
     private bool _disposed;
 
-    private MirrorPulseProductCatalog(FileStream owner, SqliteConnection connection)
+    private MirrorPulseProductCatalog(FileStream owner, SqliteConnection connection, MirrorPulseStoragePaths paths)
     {
         _owner = owner;
         _connection = connection;
+        WorkerStateRootPath = Path.Combine(paths.DataRootPath, "state", "workers");
     }
 
     public static async Task<MirrorPulseProductCatalog> OpenAsync(
@@ -58,6 +63,7 @@ public sealed partial class MirrorPulseProductCatalog : IAsyncDisposable
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(paths);
+        var openObservation = MirrorPulseCatalogOpenObservation.Begin();
         string path = paths.ProductCatalogDatabasePath;
         if (string.Equals(path, paths.CfSharpStateDatabasePath, StringComparison.OrdinalIgnoreCase))
         {
@@ -66,6 +72,7 @@ public sealed partial class MirrorPulseProductCatalog : IAsyncDisposable
 
         string directory = Path.GetDirectoryName(path)
             ?? throw new InvalidDataException("The product catalog has no parent directory.");
+        openObservation.Mark(MirrorPulseCatalogOpenPhase.OwnerLeaseOpening);
         Directory.CreateDirectory(directory);
         FileStream owner = new(
             path + ".owner",
@@ -74,9 +81,14 @@ public sealed partial class MirrorPulseProductCatalog : IAsyncDisposable
             FileShare.None,
             1,
             FileOptions.DeleteOnClose);
+        openObservation.Mark(MirrorPulseCatalogOpenPhase.OwnerLeaseOpened);
         SqliteConnection? connection = null;
         try
         {
+            // CreateNew proves this process supplied an empty file. An existing file, including
+            // an empty or partial older catalog, always follows the original migration path.
+            using FileStream? freshCatalog = cancellationToken.IsCancellationRequested || File.Exists(path) ? null : new FileStream(path,
+                FileMode.CreateNew, FileAccess.ReadWrite, FileShare.ReadWrite, 1, FileOptions.None);
             var settings = new SqliteConnectionStringBuilder
             {
                 DataSource = path,
@@ -86,7 +98,10 @@ public sealed partial class MirrorPulseProductCatalog : IAsyncDisposable
                 ForeignKeys = true,
             };
             connection = new SqliteConnection(settings.ToString());
+            openObservation.Mark(MirrorPulseCatalogOpenPhase.ConnectionOpening);
             await connection.OpenAsync(cancellationToken).ConfigureAwait(false);
+            openObservation.Mark(MirrorPulseCatalogOpenPhase.ConnectionOpened);
+            openObservation.Mark(MirrorPulseCatalogOpenPhase.JournalModeSelecting);
             await using (SqliteCommand mode = connection.CreateCommand())
             {
                 mode.CommandText = "PRAGMA journal_mode=WAL;";
@@ -97,19 +112,32 @@ public sealed partial class MirrorPulseProductCatalog : IAsyncDisposable
                 }
             }
 
+            openObservation.Mark(MirrorPulseCatalogOpenPhase.JournalModeSelected);
+            openObservation.Mark(MirrorPulseCatalogOpenPhase.SchemaVersionReading);
+            long currentVersion;
             await using (SqliteCommand version = connection.CreateCommand())
             {
                 version.CommandText = "PRAGMA user_version;";
-                long currentVersion = (long)(await version.ExecuteScalarAsync(cancellationToken)
+                currentVersion = (long)(await version.ExecuteScalarAsync(cancellationToken)
                     .ConfigureAwait(false) ?? 0L);
-                if (currentVersion > 15)
+                if (currentVersion > CurrentSchemaVersion)
                 {
                     throw new InvalidDataException("The MP product catalog schema is newer than this Host supports.");
                 }
             }
 
+            openObservation.Mark(MirrorPulseCatalogOpenPhase.SchemaVersionRead);
+            openObservation.Mark(MirrorPulseCatalogOpenPhase.BaseSchemaCreating);
+            if (freshCatalog is not null)
+            {
+                if (currentVersion != 0) throw new InvalidDataException("A newly created product catalog unexpectedly contains a schema version.");
+                await CreateFreshCatalogSchemaAsync(connection, cancellationToken).ConfigureAwait(false);
+                currentVersion = FreshCatalogSchemaVersion;
+            }
+            using (SqliteTransaction initialSchema = connection.BeginTransaction())
             await using (SqliteCommand schema = connection.CreateCommand())
             {
+                schema.Transaction = initialSchema;
                 schema.CommandText = """
                     CREATE TABLE IF NOT EXISTS full_rescan_checkpoint (
                         singleton INTEGER PRIMARY KEY CHECK (singleton=1),
@@ -144,7 +172,8 @@ public sealed partial class MirrorPulseProductCatalog : IAsyncDisposable
                         payload BLOB NOT NULL,
                         state INTEGER NOT NULL,
                         accepted_revision TEXT NULL,
-                        updated_utc TEXT NOT NULL
+                        updated_utc TEXT NOT NULL,
+                        execution_started INTEGER NULL CHECK (execution_started IN (0,1))
                     );
                     CREATE TABLE IF NOT EXISTS content_acceptance_proofs (
                         operation_id TEXT PRIMARY KEY REFERENCES mutation_intents(operation_id),
@@ -195,6 +224,172 @@ public sealed partial class MirrorPulseProductCatalog : IAsyncDisposable
                         id INTEGER PRIMARY KEY CHECK (id = 1),
                         payload TEXT NOT NULL
                     );
+                    CREATE TABLE IF NOT EXISTS managed_root_names (
+                        directory_name TEXT PRIMARY KEY COLLATE NOCASE,
+                        root_id TEXT NOT NULL
+                    );
+                    CREATE TABLE IF NOT EXISTS managed_root_renames (
+                        root_id TEXT PRIMARY KEY,
+                        payload TEXT NOT NULL
+                    );
+                    CREATE TABLE IF NOT EXISTS managed_root_rename_history (
+                        operation_id TEXT PRIMARY KEY,
+                        root_id TEXT NOT NULL,
+                        payload TEXT NOT NULL,
+                        proof TEXT NULL,
+                        observation TEXT NULL
+                    );
+                    CREATE TABLE IF NOT EXISTS journal_coalescing_plans (
+                        plan_id TEXT PRIMARY KEY,
+                        payload TEXT NOT NULL
+                    );
+                    CREATE TABLE IF NOT EXISTS journal_coalescing_members (
+                        operation_id TEXT PRIMARY KEY,
+                        plan_id TEXT NOT NULL REFERENCES journal_coalescing_plans(plan_id)
+                    );
+                    CREATE TABLE IF NOT EXISTS journal_coalescing_executions (
+                        plan_id TEXT PRIMARY KEY REFERENCES journal_coalescing_plans(plan_id),
+                        payload BLOB NOT NULL,
+                        fingerprint BLOB NOT NULL
+                    );
+                    CREATE TABLE IF NOT EXISTS journal_coalescing_steps (
+                        operation_id TEXT PRIMARY KEY,
+                        plan_id TEXT NOT NULL REFERENCES journal_coalescing_executions(plan_id),
+                        ordinal INTEGER NOT NULL CHECK (ordinal IN (0,1)),
+                        UNIQUE(plan_id, ordinal)
+                    );
+                    CREATE TABLE IF NOT EXISTS journal_coalescing_retries (
+                        sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+                        command_id TEXT NOT NULL UNIQUE REFERENCES user_commands(command_id),
+                        operation_id TEXT NOT NULL UNIQUE,
+                        plan_id TEXT NOT NULL REFERENCES journal_coalescing_executions(plan_id),
+                        ordinal INTEGER NOT NULL CHECK (ordinal IN (0,1)),
+                        payload BLOB NOT NULL,
+                        fingerprint BLOB NOT NULL,
+                        followup_operation_id TEXT NULL
+                    );
+                    CREATE INDEX IF NOT EXISTS ix_journal_coalescing_retries_step
+                        ON journal_coalescing_retries(plan_id, ordinal, sequence);
+                    CREATE INDEX IF NOT EXISTS ix_upload_conflicts_original_status
+                        ON upload_conflicts(change_id, status);
+                    CREATE INDEX IF NOT EXISTS ix_upload_conflicts_operation_epoch
+                        ON upload_conflicts(change_id, instance_id, conflict_id);
+                    CREATE TABLE IF NOT EXISTS namespace_permission_baselines (
+                        evidence_id TEXT PRIMARY KEY,
+                        volume_serial TEXT NOT NULL,
+                        sync_root_file_id TEXT NOT NULL,
+                        local_file_id TEXT NOT NULL,
+                        payload TEXT NOT NULL,
+                        UNIQUE(volume_serial, sync_root_file_id, local_file_id)
+                    );
+                    CREATE TABLE IF NOT EXISTS namespace_permission_changes (
+                        operation_id TEXT PRIMARY KEY,
+                        evidence_id TEXT NOT NULL REFERENCES namespace_permission_baselines(evidence_id),
+                        phase INTEGER NOT NULL CHECK (phase IN (0,1,2,3)),
+                        payload TEXT NOT NULL
+                    );
+                    CREATE UNIQUE INDEX IF NOT EXISTS namespace_permission_pending_object
+                        ON namespace_permission_changes(evidence_id) WHERE phase IN (0,1,3);
+                    CREATE TABLE IF NOT EXISTS namespace_permission_local_identities (
+                        evidence_id TEXT PRIMARY KEY REFERENCES namespace_permission_baselines(evidence_id),
+                        operation_id TEXT NOT NULL UNIQUE REFERENCES namespace_permission_changes(operation_id),
+                        item_id TEXT NOT NULL UNIQUE,
+                        payload BLOB NOT NULL,
+                        fingerprint BLOB NOT NULL
+                    );
+                    CREATE TABLE IF NOT EXISTS namespace_birth_intents (
+                        operation_id TEXT PRIMARY KEY,
+                        parent_evidence_id TEXT NOT NULL REFERENCES namespace_permission_baselines(evidence_id),
+                        parent_operation_id TEXT NOT NULL REFERENCES namespace_permission_changes(operation_id),
+                        relative_path_key TEXT NOT NULL,
+                        payload BLOB NOT NULL,
+                        fingerprint BLOB NOT NULL CHECK (length(fingerprint)=32)
+                    );
+                    CREATE TABLE IF NOT EXISTS namespace_birth_reservations (
+                        parent_evidence_id TEXT NOT NULL REFERENCES namespace_permission_baselines(evidence_id),
+                        child_name_key TEXT NOT NULL,
+                        operation_id TEXT NOT NULL UNIQUE REFERENCES namespace_birth_intents(operation_id),
+                        PRIMARY KEY(parent_evidence_id,child_name_key)
+                    );
+                    CREATE TABLE IF NOT EXISTS namespace_birth_plans (
+                        operation_id TEXT PRIMARY KEY REFERENCES namespace_birth_intents(operation_id),
+                        item_id TEXT NOT NULL UNIQUE,
+                        payload BLOB NOT NULL,
+                        fingerprint BLOB NOT NULL CHECK (length(fingerprint)=32)
+                    );
+                    CREATE TABLE IF NOT EXISTS namespace_birth_starts (
+                        operation_id TEXT PRIMARY KEY REFERENCES namespace_birth_plans(operation_id),
+                        payload BLOB NOT NULL,
+                        fingerprint BLOB NOT NULL CHECK (length(fingerprint)=32)
+                    );
+                    CREATE TABLE IF NOT EXISTS namespace_birth_observations (
+                        operation_id TEXT PRIMARY KEY REFERENCES namespace_birth_starts(operation_id),
+                        volume_serial TEXT NOT NULL,
+                        sync_root_file_id TEXT NOT NULL,
+                        local_file_id TEXT NOT NULL,
+                        item_id TEXT NOT NULL UNIQUE,
+                        payload BLOB NOT NULL,
+                        fingerprint BLOB NOT NULL CHECK (length(fingerprint)=32),
+                        UNIQUE(volume_serial,sync_root_file_id,local_file_id)
+                    );
+                    CREATE TABLE IF NOT EXISTS namespace_birth_conversions (
+                        operation_id TEXT PRIMARY KEY REFERENCES namespace_birth_starts(operation_id),
+                        volume_serial TEXT NOT NULL,
+                        sync_root_file_id TEXT NOT NULL,
+                        local_file_id TEXT NOT NULL,
+                        payload BLOB NOT NULL,
+                        fingerprint BLOB NOT NULL CHECK (length(fingerprint)=32),
+                        UNIQUE(volume_serial,sync_root_file_id,local_file_id)
+                    );
+                    CREATE TABLE IF NOT EXISTS namespace_birth_protections (
+                        sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+                        protection_id TEXT NOT NULL UNIQUE,
+                        birth_operation_id TEXT NOT NULL REFERENCES namespace_birth_observations(operation_id),
+                        previous_protection_id TEXT NULL UNIQUE REFERENCES namespace_birth_protections(protection_id),
+                        parent_permission_operation_id TEXT NOT NULL REFERENCES namespace_permission_changes(operation_id),
+                        payload BLOB NOT NULL,
+                        fingerprint BLOB NOT NULL CHECK (length(fingerprint)=32)
+                    );
+                    CREATE INDEX IF NOT EXISTS namespace_birth_latest_protection
+                        ON namespace_birth_protections(birth_operation_id,sequence DESC);
+                    CREATE TABLE IF NOT EXISTS namespace_permission_trees (
+                        manifest_id TEXT PRIMARY KEY,
+                        root_id TEXT NOT NULL,
+                        volume_serial TEXT NOT NULL,
+                        sync_root_file_id TEXT NOT NULL,
+                        payload TEXT NOT NULL,
+                        phase INTEGER NOT NULL CHECK (phase IN (0,1)),
+                        captured_count INTEGER NOT NULL CHECK (captured_count >= 0),
+                        seal TEXT NULL
+                    );
+                    CREATE INDEX IF NOT EXISTS namespace_permission_tree_capture_scope
+                        ON namespace_permission_trees(volume_serial, sync_root_file_id, root_id) WHERE phase=0;
+                    CREATE TABLE IF NOT EXISTS namespace_permission_tree_cancellations (
+                        manifest_id TEXT PRIMARY KEY REFERENCES namespace_permission_trees(manifest_id),
+                        payload TEXT NOT NULL
+                    );
+                    CREATE TABLE IF NOT EXISTS namespace_permission_tree_members (
+                        manifest_id TEXT NOT NULL REFERENCES namespace_permission_trees(manifest_id),
+                        sequence INTEGER NOT NULL CHECK (sequence >= 0),
+                        evidence_id TEXT NOT NULL,
+                        operation_id TEXT NOT NULL UNIQUE,
+                        volume_serial TEXT NOT NULL,
+                        sync_root_file_id TEXT NOT NULL,
+                        local_file_id TEXT NOT NULL,
+                        relative_path TEXT NOT NULL,
+                        relative_path_key TEXT NOT NULL,
+                        parent_evidence_id TEXT NULL,
+                        payload TEXT NOT NULL,
+                        fingerprint BLOB NOT NULL CHECK (length(fingerprint) = 32),
+                        PRIMARY KEY(manifest_id, sequence),
+                        UNIQUE(manifest_id, evidence_id),
+                        UNIQUE(manifest_id, volume_serial, sync_root_file_id, local_file_id),
+                        UNIQUE(manifest_id, relative_path_key),
+                        FOREIGN KEY(manifest_id, parent_evidence_id)
+                            REFERENCES namespace_permission_tree_members(manifest_id, evidence_id)
+                    );
+                    INSERT OR IGNORE INTO managed_root_rename_history (operation_id, root_id, payload)
+                        SELECT json_extract(payload, '$.OperationId'), root_id, payload FROM managed_root_renames;
                     CREATE TABLE IF NOT EXISTS notification_snoozes (
                         conflict_id TEXT PRIMARY KEY,
                         snoozed_utc TEXT NOT NULL
@@ -206,8 +401,12 @@ public sealed partial class MirrorPulseProductCatalog : IAsyncDisposable
                     );
                     """;
                 await schema.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+                await EnsureConflictPageIndexesAsync(connection, initialSchema, cancellationToken).ConfigureAwait(false);
+                initialSchema.Commit();
             }
 
+            openObservation.Mark(MirrorPulseCatalogOpenPhase.BaseSchemaCreated);
+            openObservation.Mark(MirrorPulseCatalogOpenPhase.LegacyColumnsChecking);
             await using (SqliteCommand column = connection.CreateCommand())
             {
                 column.CommandText = "SELECT 1 FROM pragma_table_info('instance_runtime') WHERE name = 'last_error_code';";
@@ -237,7 +436,19 @@ public sealed partial class MirrorPulseProductCatalog : IAsyncDisposable
                 }
             }
 
-            await using (SqliteCommand version = connection.CreateCommand())
+            // Legacy Prepared records may already have dispatched before returning to Prepared.
+            // NULL preserves the absence of historical evidence instead of inventing a never-sent witness.
+            await using (SqliteCommand column = connection.CreateCommand())
+            {
+                column.CommandText = "SELECT 1 FROM pragma_table_info('mutation_intents') WHERE name = 'execution_started';";
+                if (await column.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is null)
+                {
+                    await using SqliteCommand alter = connection.CreateCommand();
+                    alter.CommandText = "ALTER TABLE mutation_intents ADD COLUMN execution_started INTEGER NULL CHECK (execution_started IN (0,1));";
+                    await alter.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+                }
+            }
+
             {
                 await using SqliteCommand column = connection.CreateCommand();
                 column.CommandText = "SELECT 1 FROM pragma_table_info('worker_requests') WHERE name = 'stable_fingerprint';";
@@ -247,11 +458,111 @@ public sealed partial class MirrorPulseProductCatalog : IAsyncDisposable
                     alter.CommandText = "ALTER TABLE worker_requests ADD COLUMN stable_fingerprint BLOB NULL;";
                     await alter.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
                 }
-                version.CommandText = "PRAGMA user_version=15;";
-                await version.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+                openObservation.Mark(MirrorPulseCatalogOpenPhase.LegacyColumnsChecked);
+                openObservation.Mark(MirrorPulseCatalogOpenPhase.NamespaceSchemaPreparing);
+                await EnsureNamespaceBirthParentSchemaAsync(connection, cancellationToken).ConfigureAwait(false);
+                await EnsureNamespaceBirthRecoveryActionSchemaAsync(connection, cancellationToken).ConfigureAwait(false);
+                await EnsureNamespaceBirthRecoveryVerificationSchemaAsync(connection, cancellationToken).ConfigureAwait(false);
+                await EnsureNamespaceBirthContentSchemaAsync(connection, cancellationToken).ConfigureAwait(false);
+                await EnsureNamespaceMemberSchemaAsync(connection, cancellationToken).ConfigureAwait(false);
+                await EnsureNamespaceMemberMoveSchemaAsync(connection, cancellationToken).ConfigureAwait(false);
+                await EnsureNamespaceRemoteMoveSchemaAsync(connection, cancellationToken).ConfigureAwait(false);
+                await EnsureNamespaceMemberMoveFactSchemaAsync(connection, cancellationToken).ConfigureAwait(false);
+                await EnsureNamespaceMemberMoveChainSchemaAsync(connection, cancellationToken).ConfigureAwait(false);
+                await EnsureNamespaceMoveRejectionSchemaAsync(connection, currentVersion, cancellationToken).ConfigureAwait(false);
+                await EnsureNamespaceIdentityAcceptanceSchemaAsync(connection, cancellationToken).ConfigureAwait(false);
+                await EnsureNamespaceReplacementSchemaAsync(connection, cancellationToken).ConfigureAwait(false);
+                await EnsureNamespaceReplacementExecutionSchemaAsync(connection, cancellationToken).ConfigureAwait(false);
+                await EnsureNamespaceReplacementContentSchemaAsync(connection, cancellationToken).ConfigureAwait(false);
+                await EnsureNamespaceReplacementRestorationSchemaAsync(connection, cancellationToken).ConfigureAwait(false);
+                await EnsureNamespaceReplacementRoleSchemaAsync(connection, cancellationToken).ConfigureAwait(false);
+                await EnsureRootRescanGenerationSchemaAsync(connection, currentVersion, cancellationToken).ConfigureAwait(false);
+                await EnsureNamespaceReplacementCompletionSchemaAsync(connection, cancellationToken).ConfigureAwait(false);
+                await EnsureNamespaceInitializationSchemaAsync(connection, cancellationToken).ConfigureAwait(false);
+                await EnsureBornMemberRecoverySchemaAsync(connection, cancellationToken).ConfigureAwait(false);
+                await EnsureConflictDeletionSchemaAsync(connection, cancellationToken).ConfigureAwait(false);
+                await EnsureConflictDeletionRetrySchemaAsync(connection, cancellationToken).ConfigureAwait(false);
+                await EnsureCoalescingMoveContentSchemaAsync(connection, cancellationToken).ConfigureAwait(false);
+                await EnsureConflictLocalRemovalSchemaAsync(connection, cancellationToken).ConfigureAwait(false);
+                await EnsureNamespaceRemoteFileMoveProtocolSchemaAsync(connection, cancellationToken).ConfigureAwait(false);
+                await EnsureRootRemotePollingSchemaAsync(connection, cancellationToken).ConfigureAwait(false);
+                await EnsureRetainedRemoteBatchSchemaAsync(connection, cancellationToken).ConfigureAwait(false);
+                await EnsureNamespaceRemoteBirthSchemaAsync(connection, cancellationToken).ConfigureAwait(false);
+                await EnsureNamespaceRemoteRetirementSchemaAsync(connection, cancellationToken).ConfigureAwait(false);
+                await EnsureNamespaceRemoteRetirementTreeSchemaAsync(connection, cancellationToken).ConfigureAwait(false);
+                await EnsureNamespaceRemoteRetirementTreeStartsSchemaAsync(connection, cancellationToken).ConfigureAwait(false);
+                await EnsureRemoteTreeSettlementSchemaAsync(connection, cancellationToken).ConfigureAwait(false);
+                await EnsureRemoteTreeStatusIndexAsync(connection, cancellationToken).ConfigureAwait(false);
+                await EnsureConflictKeepBothSchemaAsync(connection, cancellationToken).ConfigureAwait(false);
             }
 
-            return new(owner, connection);
+            openObservation.Mark(MirrorPulseCatalogOpenPhase.NamespaceSchemaPrepared);
+            openObservation.Mark(MirrorPulseCatalogOpenPhase.TransferSchemaPreparing);
+            await EnsureNamespaceTransferSchemaAsync(connection, stampVersion: false, requireExisting: currentVersion >= 80, cancellationToken).ConfigureAwait(false);
+            await EnsureNamespaceTransferBirthSchemaAsync(connection, requireExisting: currentVersion >= 81, stampVersion: false, cancellationToken).ConfigureAwait(false);
+            await EnsureNamespaceTransferJournalSchemaAsync(connection, requireExisting: currentVersion >= 82, stampVersion: false, cancellationToken).ConfigureAwait(false);
+            await EnsureNamespaceNameEpochSchemaAsync(connection, currentVersion, cancellationToken).ConfigureAwait(false);
+            await EnsureRetiredTransferObservationSchemaAsync(connection, currentVersion, stampVersion: false, cancellationToken).ConfigureAwait(false);
+            await EnsureRootLabelJournalSchemaAsync(connection, currentVersion, stampVersion: false, cancellationToken).ConfigureAwait(false);
+            await EnsureRootLabelCancellationSchemaAsync(connection, currentVersion, stampVersion: false, cancellationToken).ConfigureAwait(false);
+            await EnsureUnsealedRootLabelCancellationSchemaAsync(connection, currentVersion, stampVersion: false, cancellationToken).ConfigureAwait(false);
+            openObservation.Mark(MirrorPulseCatalogOpenPhase.TransferSchemaPrepared);
+            openObservation.Mark(MirrorPulseCatalogOpenPhase.RecoverySchemaPreparing);
+            var catalog = new MirrorPulseProductCatalog(owner, connection, paths);
+            await EnsureNamespaceRemoteUpdateSchemaAsync(connection, cancellationToken).ConfigureAwait(false);
+            await EnsureRemoteDeleteResolutionSchemaAsync(connection, cancellationToken, stampVersion: false).ConfigureAwait(false);
+            await catalog.UpgradeRemoteTreeSettlementOwnersAsync(currentVersion, cancellationToken).ConfigureAwait(false);
+            await EnsureRemoteConflictActionSchemaAsync(connection, cancellationToken).ConfigureAwait(false);
+            await EnsureRemoteDeleteResolutionSchemaAsync(connection, cancellationToken, stampVersion: currentVersion < 78).ConfigureAwait(false);
+            await EnsureNamespaceRemoteUpdateSchemaAsync(connection, cancellationToken, stampVersion: currentVersion < 79).ConfigureAwait(false);
+            await EnsureNamespaceTransferSchemaAsync(connection, stampVersion: currentVersion < 80, requireExisting: false, cancellationToken).ConfigureAwait(false);
+            await EnsureNamespaceTransferBirthSchemaAsync(connection, requireExisting: false, stampVersion: currentVersion < 81, cancellationToken).ConfigureAwait(false);
+            await EnsureNamespaceTransferJournalSchemaAsync(connection, requireExisting: false, stampVersion: currentVersion < 82, cancellationToken).ConfigureAwait(false);
+            await catalog.EnsureNamespaceTransferStateSchemaAsync(currentVersion, cancellationToken).ConfigureAwait(false);
+            await EnsureRetiredTransferObservationSchemaAsync(connection, currentVersion, stampVersion: true, cancellationToken).ConfigureAwait(false);
+            await EnsureRemoteIdentityGenerationSchemaAsync(connection, currentVersion, cancellationToken).ConfigureAwait(false);
+            await EnsureAdapterRemoteProjectionSchemaAsync(connection, currentVersion, cancellationToken).ConfigureAwait(false);
+            await EnsureRemoteRetirementGenerationSchemaAsync(connection, currentVersion, cancellationToken).ConfigureAwait(false);
+            await EnsureNamespaceTransferRootReadIndexesAsync(connection, cancellationToken).ConfigureAwait(false);
+            await EnsureControlledRetirementGenerationSchemaAsync(connection, currentVersion, cancellationToken).ConfigureAwait(false);
+            await EnsureRootLabelJournalSchemaAsync(connection, currentVersion, stampVersion: true, cancellationToken).ConfigureAwait(false);
+            await EnsureRootLabelCancellationSchemaAsync(connection, currentVersion, stampVersion: true, cancellationToken).ConfigureAwait(false);
+            await EnsureUnsealedRootLabelCancellationSchemaAsync(connection, currentVersion, stampVersion: true, cancellationToken).ConfigureAwait(false);
+            await EnsureConflictRemoteObservationSchemaAsync(connection, currentVersion, cancellationToken).ConfigureAwait(false);
+            await EnsureConflictKeepRemoteSchemaAsync(connection, currentVersion, cancellationToken).ConfigureAwait(false);
+            await EnsureKeepRemoteJournalBindingSchemaAsync(connection, currentVersion, cancellationToken).ConfigureAwait(false);
+            await EnsureKeepRemoteFileStartSchemaAsync(connection, currentVersion, cancellationToken).ConfigureAwait(false);
+            await EnsureKeepRemoteFileActionSchemaAsync(connection, currentVersion, cancellationToken).ConfigureAwait(false);
+            await EnsureKeepRemoteFileContentSchemaAsync(connection, currentVersion, cancellationToken).ConfigureAwait(false);
+            await EnsureKeepRemoteFileNativeSchemaAsync(connection, currentVersion, cancellationToken).ConfigureAwait(false);
+            await EnsureKeepRemoteFileRestoreSchemaAsync(connection, currentVersion, cancellationToken).ConfigureAwait(false);
+            await EnsureKeepRemoteFileRoleSchemaAsync(connection, currentVersion, cancellationToken).ConfigureAwait(false);
+            await EnsureKeepRemoteAcknowledgementSchemaAsync(connection, currentVersion, cancellationToken).ConfigureAwait(false);
+            await EnsureRemoteDeleteRejectionSchemaAsync(connection, currentVersion, cancellationToken).ConfigureAwait(false);
+            await EnsureDirectoryAcceptanceSchemaAsync(connection, currentVersion, cancellationToken).ConfigureAwait(false);
+            await EnsureOriginalDirectoryRetirementSchemaAsync(connection, currentVersion, cancellationToken).ConfigureAwait(false);
+            await EnsureOriginalDirectoryPlanSchemaAsync(connection, currentVersion, cancellationToken).ConfigureAwait(false);
+            await EnsureAtomicDirectoryBatchSchemaAsync(connection, currentVersion, cancellationToken).ConfigureAwait(false);
+            await EnsureAtomicDirectoryJournalSchemaAsync(connection, currentVersion, cancellationToken).ConfigureAwait(false);
+            await EnsureJournalDirectoryMoveSchemaAsync(connection, currentVersion, cancellationToken).ConfigureAwait(false);
+            await EnsureNamespaceIdentityMoveLinksSchemaAsync(connection, currentVersion, cancellationToken).ConfigureAwait(false);
+            await EnsureDirectoryTransferAdmissionSchemaAsync(connection, currentVersion, cancellationToken).ConfigureAwait(false);
+            await EnsureDirectoryTransferBirthSchemaAsync(connection, currentVersion, cancellationToken).ConfigureAwait(false);
+            await EnsureDirectoryTransferSourceDeletionSchemaAsync(connection, currentVersion, cancellationToken).ConfigureAwait(false);
+            await EnsureDirectoryTransferRetirementSchemaAsync(connection, currentVersion, cancellationToken).ConfigureAwait(false);
+            await EnsureDirectoryTransferSettlementSchemaAsync(connection, currentVersion, cancellationToken).ConfigureAwait(false);
+            await UpgradeDirectoryTransferIdentityGenerationSchemaAsync(connection, currentVersion, cancellationToken).ConfigureAwait(false);
+            await EnsureDirectoryTransferDurableCopySchemaAsync(connection, currentVersion, cancellationToken).ConfigureAwait(false);
+            await EnsureDirectoryTransferStartRecoverySchemaAsync(connection, currentVersion, cancellationToken).ConfigureAwait(false);
+            if (currentVersion < 121)
+            {
+                await using var replacementRecoveryVersion = connection.CreateCommand();
+                replacementRecoveryVersion.CommandText = "PRAGMA user_version=121;";
+                await replacementRecoveryVersion.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+            }
+            openObservation.Mark(MirrorPulseCatalogOpenPhase.RecoverySchemaPrepared);
+            openObservation.Mark(MirrorPulseCatalogOpenPhase.Completed);
+            return catalog;
         }
         catch
         {
@@ -292,6 +603,8 @@ public sealed partial class MirrorPulseProductCatalog : IAsyncDisposable
         try
         {
             ThrowIfDisposed();
+            await RequireNotNamespaceTransferOwnerAsync(operationId, null, cancellationToken).ConfigureAwait(false);
+            await RequirePreparedCoalescingFollowupAsync(operationId, instanceId, cancellationToken).ConfigureAwait(false);
             await using SqliteCommand insert = _connection.CreateCommand();
             insert.CommandText = """
                 INSERT INTO worker_requests (operation_id, instance_id, fingerprint, stable_fingerprint)
@@ -377,7 +690,10 @@ public sealed partial class MirrorPulseProductCatalog : IAsyncDisposable
                 VALUES ($id, $action, $target, $state)
                 ON CONFLICT(command_id) DO UPDATE SET state = excluded.state
                 WHERE user_commands.action = excluded.action
-                  AND user_commands.target_id = excluded.target_id;
+                  AND user_commands.target_id = excluded.target_id
+                  AND NOT EXISTS(SELECT 1 FROM remote_conflict_actions a
+                    WHERE a.command_id=user_commands.command_id AND
+                      (a.outcome_payload IS NOT NULL AND excluded.state<>'resolved' OR a.outcome_payload IS NULL AND excluded.state='resolved'));
                 """;
             insert.Parameters.AddWithValue("$id", command.CommandId.ToString("D"));
             insert.Parameters.AddWithValue("$action", command.Action);
@@ -601,6 +917,7 @@ public sealed partial class MirrorPulseProductCatalog : IAsyncDisposable
             return;
         }
 
+        await CoalescingScheduler.DisposeAsync().ConfigureAwait(false);
         await _gate.WaitAsync().ConfigureAwait(false);
         try
         {

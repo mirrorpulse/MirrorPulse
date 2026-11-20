@@ -1,0 +1,193 @@
+using System.Text.Json;
+using Microsoft.Data.Sqlite;
+
+namespace MirrorPulse.Core.State;
+
+/// <summary>Captured at the original path before allowing a native rename.</summary>
+public sealed record MirrorPulseRootRenameProof(Guid ItemId, MirrorPulseLocalFileBinding LocalObject,
+    string PlaceholderIdentity, DateTimeOffset CapturedAt, string? DirectoryMoveEvidence = null);
+
+/// <summary>The same object inspected at the intended destination after native rename.</summary>
+public sealed record MirrorPulseRootRenameObservation(MirrorPulseLocalFileBinding LocalObject,
+    string PlaceholderIdentity, string DirectoryName, DateTimeOffset ObservedAt);
+
+public sealed record MirrorPulseRootRenameHistory(MirrorPulseRootRenameIntent Intent,
+    MirrorPulseRootRenameProof? Proof, MirrorPulseRootRenameObservation? Observation);
+
+public sealed partial class MirrorPulseProductCatalog
+{
+    /// <summary>Reads one original operation without enumerating other roots or historical receipts.</summary>
+    public async Task<MirrorPulseRootRenameHistory?> ReadManagedRootRenameHistoryAsync(Guid operationId,
+        CancellationToken cancellationToken = default)
+    {
+        if (operationId == Guid.Empty) throw new ArgumentException("A root rename operation ID is required.", nameof(operationId));
+        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            ThrowIfDisposed();
+            return await FindManagedRootRenameHistoryCoreAsync(operationId, cancellationToken).ConfigureAwait(false);
+        }
+        finally { _gate.Release(); }
+    }
+
+    public async Task<IReadOnlyList<MirrorPulseRootRenameHistory>> ReadManagedRootRenameHistoryAsync(
+        CancellationToken cancellationToken = default)
+    {
+        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            ThrowIfDisposed();
+            await using SqliteCommand query = _connection.CreateCommand();
+            query.CommandText = "SELECT payload, proof, observation, root_id, operation_id FROM managed_root_rename_history ORDER BY rowid;";
+            await using SqliteDataReader reader = await query.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+            var result = new List<MirrorPulseRootRenameHistory>();
+            while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false)) result.Add(ReadRenameHistory(reader));
+            return result.AsReadOnly();
+        }
+        finally { _gate.Release(); }
+    }
+
+    private async Task<MirrorPulseRootRenameHistory> ReadManagedRootRenameHistoryCoreAsync(Guid operationId,
+        CancellationToken token, SqliteTransaction? transaction = null) =>
+        await FindManagedRootRenameHistoryCoreAsync(operationId, token, transaction).ConfigureAwait(false)
+        ?? throw new FileNotFoundException("The root rename history is not registered.");
+
+    private async Task<MirrorPulseRootRenameHistory?> FindManagedRootRenameHistoryCoreAsync(Guid operationId,
+        CancellationToken token, SqliteTransaction? transaction = null)
+    {
+        token.ThrowIfCancellationRequested();
+        NamespaceRecoveryReadSnapshot? snapshot = null;
+        if (transaction is not null) _namespaceRecoveryReadSnapshots.TryGetValue(transaction, out snapshot);
+        if (snapshot?.RootRenameHistories.TryGetValue(operationId, out var retained) == true) return retained;
+        await using SqliteCommand query = _connection.CreateCommand();
+        query.Transaction = transaction;
+        query.CommandText = "SELECT payload, proof, observation, root_id, operation_id FROM managed_root_rename_history WHERE operation_id=$operation;";
+        query.Parameters.AddWithValue("$operation", operationId.ToString());
+        await using SqliteDataReader reader = await query.ExecuteReaderAsync(token).ConfigureAwait(false);
+        if (!await reader.ReadAsync(token).ConfigureAwait(false)) return null;
+        var result = ReadRenameHistory(reader);
+        if (snapshot is not null) snapshot.RootRenameHistories[operationId] = result;
+        return result;
+    }
+
+    private static MirrorPulseRootRenameHistory ReadRenameHistory(SqliteDataReader reader)
+    {
+        MirrorPulseRootRenameIntent intent = ReadRootRenameIntent(reader.GetString(0), reader.GetString(3), reader.GetString(4));
+        try
+        {
+            var proof = reader.IsDBNull(1) ? null : JsonSerializer.Deserialize<MirrorPulseRootRenameProof>(reader.GetString(1), TopologyJsonOptions)
+                ?? throw new InvalidDataException("The retained root rename proof is invalid.");
+            var observation = reader.IsDBNull(2) ? null : JsonSerializer.Deserialize<MirrorPulseRootRenameObservation>(reader.GetString(2), TopologyJsonOptions)
+                ?? throw new InvalidDataException("The retained root rename observation is invalid.");
+            if (proof is not null) ValidateRootRenameProof(proof);
+            if (observation is not null && (proof is null || observation.LocalObject != proof.LocalObject ||
+                observation.PlaceholderIdentity != proof.PlaceholderIdentity || observation.DirectoryName != intent.TargetName ||
+                observation.ObservedAt < proof.CapturedAt || intent.Phase is MirrorPulseRootRenamePhase.Prepared or MirrorPulseRootRenamePhase.Cancelled))
+                throw new InvalidDataException("The retained root rename observation does not match its original proof.");
+            // Missing legacy proof remains readable and fenced; it grants no authority
+            // to acquire a replacement identity from the current path.
+            return new(intent, proof, observation);
+        }
+        catch (Exception failure) when (failure is JsonException or ArgumentException)
+        {
+            throw new InvalidDataException("The retained root rename evidence is invalid.", failure);
+        }
+    }
+
+    public async Task SaveManagedRootRenameProofAsync(Guid operationId, MirrorPulseRootRenameProof proof,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(proof);
+        ValidateRootRenameProof(proof);
+        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            ThrowIfDisposed();
+            MirrorPulseRootRenameHistory history = await ReadManagedRootRenameHistoryCoreAsync(operationId, cancellationToken).ConfigureAwait(false);
+            if (history.Proof is not null)
+            {
+                if (history.Proof != proof) throw new InvalidOperationException("The original root rename proof is immutable.");
+                return;
+            }
+            if (history.Intent.Phase != MirrorPulseRootRenamePhase.Prepared)
+                throw new InvalidOperationException("A historical rename cannot adopt the current object's identity as its original proof.");
+            await using SqliteCommand command = _connection.CreateCommand();
+            command.CommandText = "UPDATE managed_root_rename_history SET proof=$proof WHERE operation_id=$operation;";
+            command.Parameters.AddWithValue("$operation", operationId.ToString());
+            command.Parameters.AddWithValue("$proof", JsonSerializer.Serialize(proof, TopologyJsonOptions));
+            await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        }
+        finally { _gate.Release(); }
+    }
+
+    public async Task<MirrorPulseRootRenameIntent> ObserveManagedRootRenameAsync(Guid operationId,
+        MirrorPulseRootRenameObservation observation, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(observation);
+        ValidateRenameBinding(observation.LocalObject, observation.PlaceholderIdentity);
+        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            ThrowIfDisposed();
+            using SqliteTransaction transaction = _connection.BeginTransaction();
+            MirrorPulseRootRenameHistory history = await ReadManagedRootRenameHistoryCoreAsync(operationId, cancellationToken, transaction).ConfigureAwait(false);
+            if (history.Proof is not { } proof || observation.LocalObject != proof.LocalObject ||
+                observation.PlaceholderIdentity != proof.PlaceholderIdentity || observation.DirectoryName != history.Intent.TargetName ||
+                observation.ObservedAt < proof.CapturedAt)
+                throw new InvalidOperationException("The native rename observation does not match the original object and intended destination.");
+            if (history.Observation is not null)
+            {
+                if (history.Observation != observation) throw new InvalidOperationException("The native rename observation is immutable.");
+                return history.Intent;
+            }
+            if (history.Intent.Phase != MirrorPulseRootRenamePhase.Prepared)
+                throw new InvalidOperationException("The root rename is not awaiting native observation.");
+            MirrorPulseRootRenameIntent updated = history.Intent with { Phase = MirrorPulseRootRenamePhase.NativeObserved, UpdatedAt = DateTimeOffset.UtcNow };
+            await using SqliteCommand command = _connection.CreateCommand();
+            command.Transaction = transaction;
+            command.CommandText = "UPDATE managed_root_rename_history SET observation=$observation WHERE operation_id=$operation;";
+            command.Parameters.AddWithValue("$operation", operationId.ToString());
+            command.Parameters.AddWithValue("$observation", JsonSerializer.Serialize(observation, TopologyJsonOptions));
+            await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+            await SaveManagedRootRenameCoreAsync(updated, cancellationToken, transaction).ConfigureAwait(false);
+            transaction.Commit();
+            return updated;
+        }
+        finally { _gate.Release(); }
+    }
+
+    private static void ValidateRootRenameProof(MirrorPulseRootRenameProof proof)
+    {
+        ValidateRenameBinding(proof.LocalObject, proof.PlaceholderIdentity);
+        ValidateDirectoryMoveEvidence(proof.DirectoryMoveEvidence);
+        if (proof.ItemId == Guid.Empty || proof.CapturedAt == default) throw new ArgumentException("The original root proof is incomplete.", nameof(proof));
+    }
+
+    private static void ValidateRenameBinding(MirrorPulseLocalFileBinding binding, string identity)
+    {
+        if (binding is null || binding.VolumeSerialNumber == 0 || binding.SyncRootFileId == Guid.Empty || binding.LocalFileId == Guid.Empty)
+            throw new ArgumentException("The root's native object binding is invalid.");
+        byte[] bytes;
+        try { bytes = Convert.FromBase64String(identity); }
+        catch (Exception exception) when (exception is FormatException or ArgumentNullException)
+        { throw new ArgumentException("The root's placeholder identity is invalid.", exception); }
+        if (bytes.Length is 0 or > 4096 || Convert.ToBase64String(bytes) != identity)
+            throw new ArgumentException("The exact root placeholder identity is required.");
+    }
+
+    private static void ValidateDirectoryMoveEvidence(string? evidence)
+    {
+        // Core preserves the public library's encoded proof as opaque bytes.
+        // Only the CfSharp integration can decode and establish its provenance.
+        // Null keeps older observations readable; it does not grant rename authority.
+        if (evidence is null) return;
+        if (evidence.Length is 0 or > 174764)
+            throw new ArgumentException("The encoded directory move evidence is outside its size bound.");
+        byte[] bytes;
+        try { bytes = Convert.FromBase64String(evidence); }
+        catch (FormatException exception)
+        { throw new ArgumentException("The encoded directory move evidence is invalid.", exception); }
+        if (bytes.Length is 0 or > 131072 || Convert.ToBase64String(bytes) != evidence)
+            throw new ArgumentException("The exact encoded directory move evidence is required.");
+    }
+}

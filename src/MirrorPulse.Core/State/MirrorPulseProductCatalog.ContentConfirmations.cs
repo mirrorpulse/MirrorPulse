@@ -1,4 +1,7 @@
 using System.Text.Json;
+using System.Text.Json.Serialization;
+using Microsoft.Data.Sqlite;
+using MirrorPulse.Core.Sync;
 
 namespace MirrorPulse.Core.State;
 
@@ -7,10 +10,17 @@ public sealed record MirrorPulseLocalFileBinding(ulong VolumeSerialNumber, Guid 
 
 public enum MirrorPulseContentPreparation { None, ConvertRegularFile, ReplacePlaceholderIdentity }
 
+/// <summary>The registered identity selected before uploading a file that became ordinary.</summary>
+/// <remarks>This is product lineage, not a fabricated native placeholder identity or current path lookup.</remarks>
+public sealed record MirrorPulseNamespaceUploadIdentity(Guid MemberId, Guid ItemId, string RemoteId, Guid? AcceptanceOperationId);
+
 /// <summary>Captured before upload, including the exact previous identity when replacement is needed.</summary>
 public sealed record MirrorPulseUploadBinding(MirrorPulseLocalFileBinding LocalObject,
     MirrorPulseContentPreparation Preparation, string? PreviousPlaceholderIdentity = null)
 {
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public MirrorPulseNamespaceUploadIdentity? NamespaceIdentity { get; init; }
+
     internal void Validate()
     {
         if (LocalObject is null || LocalObject.VolumeSerialNumber == 0 || LocalObject.SyncRootFileId == Guid.Empty ||
@@ -26,6 +36,10 @@ public sealed record MirrorPulseUploadBinding(MirrorPulseLocalFileBinding LocalO
         }
         else if (PreviousPlaceholderIdentity is not null)
             throw new ArgumentException("A previous identity is only valid for explicit replacement.");
+        if (NamespaceIdentity is { } identity && (Preparation != MirrorPulseContentPreparation.ConvertRegularFile ||
+            identity.MemberId == Guid.Empty || identity.ItemId == Guid.Empty || identity.AcceptanceOperationId == Guid.Empty ||
+            string.IsNullOrWhiteSpace(identity.RemoteId) || identity.RemoteId.Length > 16_384))
+            throw new ArgumentException("An ordinary member upload requires complete retained product identity lineage.");
     }
 }
 
@@ -79,6 +93,12 @@ public sealed partial class MirrorPulseProductCatalog
                 !string.Equals(record.Intent.ContentSha256, proof.Sha256, StringComparison.OrdinalIgnoreCase) ||
                 record.AcceptedRevision != proof.AcceptedRevision)
                 throw new InvalidDataException("The proof does not match the durable remote acceptance and upload intent.");
+            if (record.Intent.Kind == MirrorPulseWorkerChangeKind.Move)
+            {
+                using var validation = _connection.BeginTransaction(deferred: true);
+                await RequireObservedMoveContentProofAsync(record, proof, validation, cancellationToken).ConfigureAwait(false);
+                validation.Commit();
+            }
             await using var command = _connection.CreateCommand();
             command.CommandText = """
                 INSERT INTO content_acceptance_proofs(operation_id,payload,receipt)
@@ -130,19 +150,27 @@ public sealed partial class MirrorPulseProductCatalog
         try
         {
             ThrowIfDisposed();
-            await using var command = _connection.CreateCommand();
-            command.CommandText = "SELECT receipt FROM content_acceptance_proofs WHERE operation_id=$operation;";
-            command.Parameters.AddWithValue("$operation", operationId.ToString("D"));
-            object? payload = await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
-            return payload is byte[] bytes ? JsonSerializer.Deserialize<MirrorPulseContentConfirmationReceipt>(bytes, TopologyJsonOptions)
-                ?? throw new InvalidDataException("The confirmation receipt is empty.") : null;
+            return await ReadContentConfirmationReceiptCoreAsync(operationId, null, cancellationToken).ConfigureAwait(false);
         }
         finally { _gate.Release(); }
     }
 
-    private async Task<MirrorPulseContentAcceptanceProof?> ReadContentAcceptanceProofCoreAsync(Guid operationId, CancellationToken token)
+    private async Task<MirrorPulseContentConfirmationReceipt?> ReadContentConfirmationReceiptCoreAsync(Guid operationId,
+        SqliteTransaction? transaction, CancellationToken token)
+    {
+        await using var command = _connection.CreateCommand(); command.Transaction = transaction;
+        command.CommandText = "SELECT receipt FROM content_acceptance_proofs WHERE operation_id=$operation;";
+        command.Parameters.AddWithValue("$operation", operationId.ToString("D"));
+        object? payload = await command.ExecuteScalarAsync(token).ConfigureAwait(false);
+        return payload is byte[] bytes ? JsonSerializer.Deserialize<MirrorPulseContentConfirmationReceipt>(bytes, TopologyJsonOptions)
+            ?? throw new InvalidDataException("The confirmation receipt is empty.") : null;
+    }
+
+    private async Task<MirrorPulseContentAcceptanceProof?> ReadContentAcceptanceProofCoreAsync(Guid operationId, CancellationToken token,
+        SqliteTransaction? transaction = null)
     {
         await using var command = _connection.CreateCommand();
+        command.Transaction = transaction;
         command.CommandText = "SELECT payload FROM content_acceptance_proofs WHERE operation_id=$operation;";
         command.Parameters.AddWithValue("$operation", operationId.ToString("D"));
         object? payload = await command.ExecuteScalarAsync(token).ConfigureAwait(false);
@@ -150,7 +178,14 @@ public sealed partial class MirrorPulseProductCatalog
         MirrorPulseContentAcceptanceProof proof = JsonSerializer.Deserialize<MirrorPulseContentAcceptanceProof>(bytes, TopologyJsonOptions)
             ?? throw new InvalidDataException("The content acceptance proof is empty.");
         if (proof.OperationId != operationId) throw new InvalidDataException("The proof has a different operation identity.");
-        proof.UploadBinding.Validate();
-        return proof;
+        try
+        {
+            if (proof.UploadBinding is null || proof.AcceptedItemId == Guid.Empty || string.IsNullOrWhiteSpace(proof.RemoteId) ||
+                proof.Length < 0 || proof.Sha256 is null || proof.Sha256.Length != 64 || !proof.Sha256.All(Uri.IsHexDigit))
+                throw new ArgumentException("The retained upload acceptance proof is incomplete.");
+            proof.UploadBinding.Validate();
+            return proof;
+        }
+        catch (ArgumentException error) { throw new InvalidDataException("The retained upload acceptance proof is invalid.", error); }
     }
 }

@@ -1,0 +1,293 @@
+using System.Security.Cryptography;
+using System.Text.Json;
+using CfSharp;
+using MirrorPulse.Core.CloudFiles;
+using MirrorPulse.Core.Conflicts;
+using MirrorPulse.Core.State;
+using MirrorPulse.Core.Sync;
+
+namespace MirrorPulse.CloudFiles.CfSharp;
+
+internal enum MirrorPulseJournalCoalescingCheckpoint { AfterEffectsCompleted, AfterOriginalsAcknowledged, BeforeDirectoryCurrentWindow, DirectoryCurrentWindowRejected, DirectoryEffectsDeferred }
+
+public sealed partial class MirrorPulseJournalUploadPump
+{
+    private MirrorPulseJournalUploadBatch? _planningBatch;
+    private readonly HashSet<Guid> _completedCoalescedOriginals = [];
+    internal Func<MirrorPulseJournalCoalescingCheckpoint, CancellationToken, ValueTask>? CoalescingCheckpoint { get; init; }
+
+    private async ValueTask<bool?> TryDispatchCoalescedAsync(MirrorPulseWorkerChangeCommand command, CancellationToken token)
+    {
+        var plan = await _catalog.ReadJournalCoalescingOwnerAsync(command.OperationId, token).ConfigureAwait(false);
+        if (plan is null && (_mutations is null || _fileSystem is null || command.ItemId is null ||
+            _planningBatch?.CompleteWindow is not { Count: > 1 } || _planningBatch.WindowUpperSequence <= 0)) return null;
+        try
+        {
+            if (plan is null)
+            {
+                var window = _planningBatch!.CompleteWindow!;
+                var committed = new HashSet<Guid>();
+                var unstarted = new Dictionary<Guid, MirrorPulseMutationIntent>();
+                foreach (var observation in window.Where(observation => observation.ItemId == command.ItemId))
+                {
+                    var existing = await _catalog.ReadMutationAsync(observation.OperationId, token).ConfigureAwait(false);
+                    if (await _catalog.ReadJournalCoalescingOwnerAsync(observation.OperationId, token).ConfigureAwait(false) is not null)
+                        committed.Add(observation.OperationId);
+                    else if (existing is
+                    {
+                        State: MirrorPulseMutationState.Prepared,
+                        ExecutionEvidence: MirrorPulseMutationExecutionEvidence.NeverStarted, Intent.Origin: MirrorPulseMutationOrigin.Journal
+                    })
+                        unstarted.Add(observation.OperationId, existing.Intent);
+                    else if (existing is not null) committed.Add(observation.OperationId);
+                }
+                plan = command.IsDirectory
+                    ? _namespaceWork is null ? null : MirrorPulseJournalDirectoryCoalescingPlanner.TryPlan(window, command.ItemId!.Value,
+                        _planningBatch.WindowUpperSequence, committed)
+                    : MirrorPulseJournalCoalescingPlanner.TryPlan(window, command.ItemId!.Value, _planningBatch.WindowUpperSequence, committed);
+                if (plan is null || plan.Members[0].OperationId != command.OperationId) return null;
+                if (plan.IsDirectory && plan.Effect is not (MirrorPulseCoalescedEffect.CreateDirectory or MirrorPulseCoalescedEffect.VerifyDirectoryAbsence)) return null;
+                var ready = _planningBatch.ReadyCommands.Select(candidate => candidate.OperationId).ToHashSet();
+                if (plan.Members.Any(member => !ready.Contains(member.OperationId))) return null;
+                if (plan.IsDirectory) await RequireDirectoryGroupAsync(plan, token).ConfigureAwait(false);
+                var originals = plan.Members.Where(member => unstarted.ContainsKey(member.OperationId))
+                    .Select(member => unstarted[member.OperationId]).ToArray();
+                string localPath = _router.ResolveUploadPath(plan.InstanceId, plan.RootKey, plan.FinalPath);
+                string relative = Path.GetRelativePath(_syncRootPath, localPath).Replace(Path.DirectorySeparatorChar, '/');
+                string? baseline = originals.Length > 0 ? originals[0].ExpectedRevision :
+                    await MirrorPulseJournalUploadRevisionGuard.ReadAcknowledgedRevisionAsync(_state.OpenStore, command, relative,
+                    allowTombstone: plan.Effect is MirrorPulseCoalescedEffect.DeleteFile or MirrorPulseCoalescedEffect.VerifyRemoteAbsence or MirrorPulseCoalescedEffect.VerifyDirectoryAbsence,
+                    cancellationToken: token).ConfigureAwait(false);
+                CloudItem item = plan.IsDirectory ? _fileSystem!.GetDirectory(relative) : _fileSystem!.GetFile(relative);
+                var initial = await item.InspectAsync(token).ConfigureAwait(false);
+                if (originals.Length == 0 && (plan.Effect == MirrorPulseCoalescedEffect.CreateFile ||
+                    plan.Effect == MirrorPulseCoalescedEffect.UpdateFile && (initial.ContentAvailability != CloudContentAvailability.FullyAvailable ||
+                        window.Where(observation => observation.ItemId == plan.ItemId).All(observation => observation.Kind != MirrorPulseWorkerChangeKind.Move))) &&
+                    MirrorPulseJournalContentPolicy.IsAcceptedObservation(initial, _router.GetRegistration(plan.InstanceId, plan.RootKey), baseline))
+                {
+                    // Retain the existing observation-only policy for already
+                    // accepted content. A notification chain must not turn a
+                    // repeated hydration/read into another remote upload.
+                    await _feed.AcknowledgeAsync(plan.Members.Select(member =>
+                        new CloudLocalChangeAcknowledgement(member.OperationId, baseline)), token).ConfigureAwait(false);
+                    foreach (var member in plan.Members) _completedCoalescedOriginals.Add(member.OperationId);
+                    return true;
+                }
+                MirrorPulseCoalescingContent? final = null;
+                MirrorPulseCoalescingObservedContent? observed = null;
+                bool uploads = plan.Effect is MirrorPulseCoalescedEffect.CreateFile or MirrorPulseCoalescedEffect.UpdateFile or MirrorPulseCoalescedEffect.MoveAndUpdateFile;
+                bool observeMove = plan.Effect == MirrorPulseCoalescedEffect.MoveFile && originals.Length == 0 && baseline is not null &&
+                    initial.IsPlaceholder && initial.ItemId == plan.ItemId && initial.ContentAvailability == CloudContentAvailability.FullyAvailable;
+                if (uploads || observeMove)
+                {
+                    await using var content = new FileStream(localPath, FileMode.Open, FileAccess.Read, FileShare.Read,
+                        64 * 1024, FileOptions.Asynchronous);
+                    var file = _fileSystem!.GetFile(relative);
+                    var binding = await _contentConfirmation.CaptureUploadBindingAsync(file,
+                        await file.InspectAsync(token).ConfigureAwait(false), token).ConfigureAwait(false);
+                    var captured = new MirrorPulseCoalescingContent(content.Length,
+                        Convert.ToHexString(await SHA256.HashDataAsync(content, token).ConfigureAwait(false)), binding);
+                    var after = await file.InspectAsync(token).ConfigureAwait(false);
+                    if (after.Length != captured.Length || await _contentConfirmation.CaptureUploadBindingAsync(file, after, token).ConfigureAwait(false) != binding)
+                        throw new InvalidDataException("The guarded coalesced object changed during content capture.");
+                    if (uploads) final = captured;
+                    if (originals.Length == 0 && plan.Effect is MirrorPulseCoalescedEffect.UpdateFile or MirrorPulseCoalescedEffect.MoveAndUpdateFile or MirrorPulseCoalescedEffect.MoveFile && baseline is not null)
+                        observed = await TryObserveAcceptedContentAsync(plan, after, captured, baseline, token).ConfigureAwait(false);
+                    if (observed is null && originals.Length == 0 && plan.Effect == MirrorPulseCoalescedEffect.UpdateFile &&
+                        MirrorPulseJournalContentPolicy.IsAcceptedObservation(after, _router.GetRegistration(plan.InstanceId, plan.RootKey), baseline))
+                    {
+                        await _feed.AcknowledgeAsync(plan.Members.Select(member => new CloudLocalChangeAcknowledgement(member.OperationId, baseline)), token).ConfigureAwait(false);
+                        foreach (var member in plan.Members) _completedCoalescedOriginals.Add(member.OperationId);
+                        return true;
+                    }
+                }
+                if (observed is not null)
+                    _ = await _catalog.PrepareJournalCoalescingObservedExecutionAsync(plan, window, baseline!, observed, token).ConfigureAwait(false);
+                else if (originals.Length == 0)
+                    _ = await _catalog.PrepareJournalCoalescingAndExecutionAsync(plan, window, baseline, final, token).ConfigureAwait(false);
+                else
+                    _ = await _catalog.PrepareJournalCoalescingAndExecutionWithUnstartedIntentsAsync(plan, window, originals,
+                        baseline, final, token).ConfigureAwait(false);
+            }
+            RequireOriginalObservation(plan, command);
+            if (_mutations is null || _fileSystem is null)
+                throw new NotSupportedException("The retained coalesced execution requires the production mutation and Cloud Files boundaries.");
+            if (plan.IsDirectory) await RequireDirectoryGroupAsync(plan, token).ConfigureAwait(false);
+            var execution = await _catalog.ReadJournalCoalescingExecutionAsync(plan.PlanId, token).ConfigureAwait(false)
+                ?? throw new MirrorPulseMutationAmbiguousException("The owned journal group has no immutable execution preparation.");
+            var preservationCommands = await _catalog.ReadCurrentCoalescingKeepBothCommandsAsync(plan.PlanId, token).ConfigureAwait(false);
+            if (preservationCommands.Count != 0 && _conflictActions is null)
+                throw new NotSupportedException("Preserved remote choices require the Host's verified private-copy retention boundary.");
+            await using var preservedCopies = preservationCommands.Count == 0 ? null :
+                await _conflictActions!.RetainKeepBothCopiesForEffectsAsync(preservationCommands, token).ConfigureAwait(false);
+            var executor = new MirrorPulseJournalCoalescingExecutor(_catalog, _stats, _uploads, _mutations, _readback);
+            var results = await executor.ExecuteAsync(plan.PlanId,
+                (content, stop) => OpenCoalescedContentAsync(plan, content, stop),
+                async (accepted, stop) =>
+                {
+                    if (accepted.Intent.Kind == MirrorPulseWorkerChangeKind.MetadataUpdate && execution.ObservedContent is not null)
+                        await ReconfirmObservedEffectAsync(plan, execution, accepted, stop).ConfigureAwait(false);
+                    await AcknowledgeAsync(accepted.Intent.OperationId, accepted.AcceptedRevision, stop,
+                        acknowledgeJournal: false, originalItemId: plan.IsDirectory ? plan.ItemId : null).ConfigureAwait(false);
+                }, token).ConfigureAwait(false);
+            var dispatch = await _catalog.ReadJournalCoalescingDispatchAsync(plan.PlanId, token).ConfigureAwait(false);
+            if (results.Count != dispatch.Steps.Count || results.Any(result => result.State != MirrorPulseMutationState.Acknowledged))
+                throw new MirrorPulseMutationAmbiguousException("Every owned effect must complete before the original journal group is acknowledged.");
+            string? revision = plan.Effect is MirrorPulseCoalescedEffect.DeleteFile or MirrorPulseCoalescedEffect.VerifyRemoteAbsence or MirrorPulseCoalescedEffect.VerifyDirectoryAbsence
+                ? null : results[^1].AcceptedRevision;
+            if (CoalescingCheckpoint is not null)
+                await CoalescingCheckpoint(MirrorPulseJournalCoalescingCheckpoint.AfterEffectsCompleted, token).ConfigureAwait(false);
+            if (plan.IsDirectory) await RequireDirectoryGroupAsync(plan, token).ConfigureAwait(false);
+            // One official transaction settles only the immutable original IDs. A
+            // later notification for the same file remains independently pending.
+            await _feed.AcknowledgeAsync(plan.Members.Select(member =>
+                new CloudLocalChangeAcknowledgement(member.OperationId, revision)), token).ConfigureAwait(false);
+            await _catalog.CompleteJournalCoalescingRetryCommandsAsync(plan.PlanId, token).ConfigureAwait(false);
+            _runner.ClearCoalescingRecoveryFault(plan.PlanId);
+            foreach (var member in plan.Members)
+            {
+                _completedCoalescedOriginals.Add(member.OperationId);
+                _runner.ClearRecoveredFault(member.OperationId);
+            }
+            if (CoalescingCheckpoint is not null)
+                await CoalescingCheckpoint(MirrorPulseJournalCoalescingCheckpoint.AfterOriginalsAcknowledged, token).ConfigureAwait(false);
+            return true;
+        }
+        catch (MirrorPulseUploadConflictException conflict)
+        {
+            await LogDispatchBoundaryAsync(command, "CoalescedExecution", conflict, token).ConfigureAwait(false);
+            if (plan?.IsDirectory == true) return await DeferDirectoryGroupAsync(plan, token).ConfigureAwait(false);
+            return await DeferCoalescedConflictAsync(command, plan, conflict.ExpectedRevision, conflict.ActualRevision, token).ConfigureAwait(false);
+        }
+        catch (MirrorPulseWorkerMutationConflictException conflict)
+        {
+            await LogDispatchBoundaryAsync(command, "CoalescedExecution", conflict, token).ConfigureAwait(false);
+            if (plan?.IsDirectory == true) return await DeferDirectoryGroupAsync(plan, token).ConfigureAwait(false);
+            return await DeferCoalescedConflictAsync(command, plan, conflict.ExpectedRevision, conflict.ActualRevision, token).ConfigureAwait(false);
+        }
+        catch (Exception error) when (error is not OperationCanceledException)
+        {
+            await LogDispatchBoundaryAsync(command, "CoalescedExecution", error, token).ConfigureAwait(false);
+            if (error is not MirrorPulseJournalAcknowledgementException)
+                await _completion.DeferFailedUploadAsync(command.OperationId, DateTimeOffset.UtcNow, token).ConfigureAwait(false);
+            throw;
+        }
+    }
+
+    private async ValueTask RequireDirectoryGroupAsync(MirrorPulseJournalCoalescingPlan plan, CancellationToken token)
+    {
+        if (_namespaceWork is null || _fileSystem is null)
+            throw new InvalidOperationException("Directory groups require the retained root work admission and a complete current observation window.");
+        // The instance scheduler is already held. A prior controlled operation may
+        // have completed after the runner's first scan; reread the public bounded
+        // source so even a transient child cannot disappear from the admission facts.
+        if (CoalescingCheckpoint is not null)
+            await CoalescingCheckpoint(MirrorPulseJournalCoalescingCheckpoint.BeforeDirectoryCurrentWindow, token).ConfigureAwait(false);
+        try
+        {
+            var current = await _source.ReadPendingAsync(token).ConfigureAwait(false);
+            if (current.CompleteWindow is not { } window)
+                throw new InvalidOperationException("Directory settlement requires a freshly completed official journal window.");
+            await _directoryConfirmation.RequireJournalGroupAsync(_fileSystem, plan, window, current.WindowUpperSequence, token).ConfigureAwait(false);
+        }
+        catch (Exception error) when (error is InvalidDataException or InvalidOperationException)
+        {
+            if (CoalescingCheckpoint is not null)
+                await CoalescingCheckpoint(MirrorPulseJournalCoalescingCheckpoint.DirectoryCurrentWindowRejected, token).ConfigureAwait(false);
+            throw;
+        }
+    }
+
+    private async ValueTask<bool> DeferDirectoryGroupAsync(MirrorPulseJournalCoalescingPlan plan, CancellationToken token)
+    {
+        // Directory conflicts retain their typed effect and all originals. File content
+        // choices cannot authorize recursive deletion, upload or native directory replacement.
+        foreach (var member in plan.Members)
+            await _completion.DeferFailedUploadAsync(member.OperationId, DateTimeOffset.UtcNow, token).ConfigureAwait(false);
+        if (CoalescingCheckpoint is not null)
+            await CoalescingCheckpoint(MirrorPulseJournalCoalescingCheckpoint.DirectoryEffectsDeferred, token).ConfigureAwait(false);
+        return false;
+    }
+
+    private static void RequireOriginalObservation(MirrorPulseJournalCoalescingPlan plan, MirrorPulseWorkerChangeCommand command)
+    {
+        var member = plan.Members.SingleOrDefault(member => member.OperationId == command.OperationId);
+        if (member is null || plan.InstanceId != command.InstanceId || plan.RootKey != command.RootKey ||
+            command.ItemId is { } item && item != plan.ItemId || command.Sequence != member.Sequence ||
+            Convert.ToHexString(SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(command with { ItemId = plan.ItemId }))) != member.Fingerprint)
+            throw new InvalidDataException("A retained journal group cannot adopt another original observation.");
+    }
+
+    private async ValueTask<Stream> OpenCoalescedContentAsync(MirrorPulseJournalCoalescingPlan plan,
+        MirrorPulseCoalescingContent expected, CancellationToken token)
+    {
+        string path = _router.ResolveUploadPath(plan.InstanceId, plan.RootKey, plan.FinalPath);
+        var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 64 * 1024, FileOptions.Asynchronous);
+        try
+        {
+            string relative = Path.GetRelativePath(_syncRootPath, path).Replace(Path.DirectorySeparatorChar, '/');
+            var file = _fileSystem!.GetFile(relative);
+            var binding = await _contentConfirmation.CaptureUploadBindingAsync(file,
+                await file.InspectAsync(token).ConfigureAwait(false), token).ConfigureAwait(false);
+            if (binding != expected.UploadBinding || stream.Length != expected.Length ||
+                !string.Equals(Convert.ToHexString(await SHA256.HashDataAsync(stream, token).ConfigureAwait(false)), expected.Sha256, StringComparison.OrdinalIgnoreCase))
+                throw new MirrorPulseMutationAmbiguousException("The final content no longer matches the retained upload-time object and bytes.");
+            stream.Position = 0; return stream;
+        }
+        catch { await stream.DisposeAsync().ConfigureAwait(false); throw; }
+    }
+
+    private async ValueTask<bool> DeferCoalescedConflictAsync(MirrorPulseWorkerChangeCommand command,
+        MirrorPulseJournalCoalescingPlan? plan, string? expected, string? actual, CancellationToken token)
+    {
+        if (plan is null || await _catalog.ReadJournalCoalescingOwnerAsync(command.OperationId, token).ConfigureAwait(false) is null)
+        {
+            string path = _router.ResolveUploadPath(command.InstanceId, command.RootKey, plan?.FinalPath ?? command.RelativePath);
+            return await DeferConflictAsync(command, Path.GetRelativePath(_syncRootPath, path).Replace(Path.DirectorySeparatorChar, '/'), expected, actual, token).ConfigureAwait(false);
+        }
+        var execution = await _catalog.ReadJournalCoalescingDispatchAsync(plan.PlanId, token).ConfigureAwait(false);
+        var rejected = new List<MirrorPulseMutationRecord>();
+        for (int ordinal = 0; ordinal < execution.Steps.Count; ordinal++)
+        {
+            var record = await _catalog.PrepareJournalCoalescingMutationAsync(plan.PlanId, ordinal, token).ConfigureAwait(false);
+            if (record.State == MirrorPulseMutationState.Conflict) { rejected.Add(record); break; }
+            if (record.State != MirrorPulseMutationState.Acknowledged) break;
+        }
+        if (rejected.Count != 1) throw new InvalidDataException("A rejected group requires the actual current effect conflict.");
+        var retainedObservation = await _catalog.ReadCoalescedConflictRemoteObservationAsync(rejected[0].Intent.OperationId, token).ConfigureAwait(false);
+        if (retainedObservation is not null)
+        {
+            // Retrying the rejected program must not recreate dismissed error epochs
+            // or overwrite their original nullable response facts and detection times.
+            if (OperatingSystem.IsWindowsVersionAtLeast(10, 0, 26100) && _remoteObservationRecovery is not null)
+                await _remoteObservationRecovery.PublishAsync(retainedObservation, token).ConfigureAwait(false);
+            foreach (var member in plan.Members)
+                await _completion.DeferFailedUploadAsync(member.OperationId, DateTimeOffset.UtcNow, token).ConfigureAwait(false);
+            return false;
+        }
+        Guid entryConflict = Guid.Empty;
+        foreach (var member in plan.Members)
+        {
+            string path = _router.ResolveUploadPath(plan.InstanceId, plan.RootKey, plan.FinalPath);
+            byte[] epoch = SHA256.HashData(System.Text.Encoding.UTF8.GetBytes("MirrorPulse.Coalescing.Conflict.v1/" +
+                rejected[0].Intent.OperationId.ToString("D") + "/" + member.OperationId.ToString("D")));
+            var conflict = new MirrorPulseConflictRecord(new Guid(epoch.AsSpan(0, 16)), plan.InstanceId, member.OperationId.ToString("D"),
+                Path.GetRelativePath(_syncRootPath, path).Replace(Path.DirectorySeparatorChar, '/'),
+                MirrorPulseConflictReason.StaleRemoteRevision, MirrorPulseVersionComparison.Diverged, expected, actual, DateTimeOffset.UtcNow);
+            await _catalog.SaveUploadConflictAsync(conflict, token).ConfigureAwait(false);
+            if (entryConflict == Guid.Empty) entryConflict = conflict.ConflictId;
+            _conflicts?.Upsert(conflict);
+            if (_notifications is not null)
+            {
+                try { await _notifications.NotifyAsync(conflict, token).ConfigureAwait(false); }
+                catch (Exception notificationFailure) when (notificationFailure is not OperationCanceledException) { }
+            }
+            await _completion.DeferFailedUploadAsync(member.OperationId, DateTimeOffset.UtcNow, token).ConfigureAwait(false);
+        }
+        if (OperatingSystem.IsWindowsVersionAtLeast(10, 0, 26100) && _remoteObservationRecovery is not null && entryConflict != Guid.Empty)
+            _ = await _remoteObservationRecovery.TryObserveAdmittedAsync(entryConflict,
+                _router.GetRegistration(plan.InstanceId, plan.RootKey).RootId, token).ConfigureAwait(false);
+        return false;
+    }
+
+}

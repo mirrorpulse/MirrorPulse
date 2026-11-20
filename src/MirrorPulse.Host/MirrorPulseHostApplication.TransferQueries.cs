@@ -1,0 +1,108 @@
+using MirrorPulse.Control.Contracts;
+using MirrorPulse.Control.Dispatch;
+using MirrorPulse.Core.Contracts;
+using MirrorPulse.Core.Diagnostics;
+using MirrorPulse.Core.State;
+using MirrorPulse.Core.Sync;
+
+namespace MirrorPulse.Host;
+
+public sealed partial class MirrorPulseHostApplication
+{
+    private void RegisterTransferQueries(MirrorPulseControlDispatcher dispatcher)
+    {
+        dispatcher.Register<NamespaceTransferPrepareArguments, MirrorPulseControlTransferStatus>(
+            MirrorPulseControlCommands.NamespaceTransferPrepare, async (arguments, token) =>
+            {
+                await PrepareNamespaceTransferAsync(arguments.OperationId, arguments.SourceMemberId,
+                    arguments.TargetParentMemberId, arguments.TargetName, token).ConfigureAwait(false);
+                return await ReadNamespaceTransferStatusAsync(arguments.OperationId, token).ConfigureAwait(false);
+            });
+        dispatcher.Register<NamespaceTransferMoveArguments, MirrorPulseControlTransferStatus>(
+            MirrorPulseControlCommands.NamespaceTransferMove, async (arguments, token) =>
+            {
+                await PrepareNamespaceTransferAsync(arguments.OperationId, arguments.SourceMemberId,
+                    arguments.TargetParentMemberId, arguments.TargetName, token).ConfigureAwait(false);
+                return await ResumeNamespaceTransferAsync(arguments.OperationId, token).ConfigureAwait(false);
+            });
+        dispatcher.Register<NamespaceTransferResumeArguments, MirrorPulseControlTransferStatus>(
+            MirrorPulseControlCommands.NamespaceTransferResume, (arguments, token) => ResumeNamespaceTransferAsync(arguments.OperationId, token));
+        dispatcher.Register<NamespaceTransferStatusArguments, MirrorPulseControlTransferStatus>(
+            MirrorPulseControlCommands.NamespaceTransferStatus, (arguments, token) => ReadNamespaceTransferStatusAsync(arguments.OperationId, token));
+        dispatcher.Register<NamespaceTransfersArguments, MirrorPulseControlTransfers>(
+            MirrorPulseControlCommands.NamespaceTransfers, async (arguments, token) =>
+            {
+                var values = await _catalog.ReadPendingNamespaceTransferStatusesAsync(new RootId(arguments.RootId), token).ConfigureAwait(false);
+                return new(values.Select(ToControlTransferStatus).ToArray());
+            });
+    }
+
+    private async ValueTask PrepareNamespaceTransferAsync(Guid operationId, Guid sourceMemberId, Guid targetParentMemberId,
+        string targetName, CancellationToken token)
+    {
+        if (operationId == Guid.Empty || sourceMemberId == Guid.Empty || targetParentMemberId == Guid.Empty)
+            throw new ArgumentException("Transfer operation, source member and target parent IDs are required.");
+        await MirrorPulseTransferAdmissionRetry.RunAsync(stop =>
+            RunTransferPhaseAsync(operationId, MirrorPulseTransferCommandPhase.Prepare, async () =>
+            {
+                if (await _session.PrepareDirectoryNamespaceTransferAsync(operationId, sourceMemberId,
+                    targetParentMemberId, targetName, stop).ConfigureAwait(false)) return true;
+                _ = await _session.PrepareNamespaceTransferAsync(operationId, sourceMemberId, targetParentMemberId,
+                    targetName, stop).ConfigureAwait(false);
+                return true;
+            }), token).ConfigureAwait(false);
+    }
+
+    private async ValueTask<MirrorPulseControlTransferStatus> ReadNamespaceTransferStatusAsync(Guid operationId, CancellationToken token) =>
+        ToControlTransferStatus(await _catalog.ReadNamespaceTransferStatusAsync(operationId, token).ConfigureAwait(false)
+            ?? throw new FileNotFoundException("The original transfer is not registered."));
+
+    private async ValueTask<MirrorPulseControlTransferStatus> ResumeNamespaceTransferAsync(Guid operationId, CancellationToken token)
+    {
+        if (operationId == Guid.Empty) throw new ArgumentException("An original transfer operation ID is required.", nameof(operationId));
+        if (await RunTransferPhaseAsync(operationId, MirrorPulseTransferCommandPhase.Complete,
+            () => _session.ResumeDirectoryNamespaceTransferAsync(operationId, token)).ConfigureAwait(false))
+            return ToControlTransferStatus(await _catalog.ReadNamespaceTransferStatusAsync(operationId, token).ConfigureAwait(false)
+                ?? throw new InvalidDataException("The original directory transfer lost its durable status."));
+        var copy = await RunTransferPhaseAsync(operationId, MirrorPulseTransferCommandPhase.Read,
+            () => _session.ReadNamespaceTransferAsync(operationId, token)).ConfigureAwait(false);
+        if (copy.Acknowledgement?.AcknowledgedAt is null)
+        {
+            await RunTransferPhaseAsync(operationId, MirrorPulseTransferCommandPhase.Copy,
+                () => _session.CopyNamespaceTransferAsync(operationId, token)).ConfigureAwait(false);
+            await RunTransferPhaseAsync(operationId, MirrorPulseTransferCommandPhase.VerifyTarget,
+                () => _session.VerifyNamespaceTransferTargetAsync(operationId, token)).ConfigureAwait(false);
+            await RunTransferPhaseAsync(operationId, MirrorPulseTransferCommandPhase.PrepareTargetBirth,
+                () => _session.PrepareNamespaceTransferTargetBirthAsync(operationId, token)).ConfigureAwait(false);
+            await RunTransferPhaseAsync(operationId, MirrorPulseTransferCommandPhase.PublishTarget,
+                () => _session.PublishNamespaceTransferTargetAsync(operationId, token)).ConfigureAwait(false);
+            await RunTransferPhaseAsync(operationId, MirrorPulseTransferCommandPhase.RetireSource,
+                () => _session.RetireNamespaceTransferSourceAsync(operationId, token)).ConfigureAwait(false);
+            await RunTransferPhaseAsync(operationId, MirrorPulseTransferCommandPhase.Complete,
+                () => _session.CompleteNamespaceTransferAsync(operationId, token)).ConfigureAwait(false);
+        }
+        return ToControlTransferStatus(await RunTransferPhaseAsync<MirrorPulseNamespaceTransferStatus?>(operationId,
+            MirrorPulseTransferCommandPhase.ReadStatus, () => new(_catalog.ReadNamespaceTransferStatusAsync(operationId, token))).ConfigureAwait(false)
+            ?? throw new InvalidDataException("The original transfer lost its durable status."));
+    }
+
+    private ValueTask<T> RunTransferPhaseAsync<T>(Guid operationId, MirrorPulseTransferCommandPhase phase, Func<ValueTask<T>> action) =>
+        MirrorPulseTransferFailureDiagnostics.RunAsync(operationId, phase, action, WriteTransferFailureAsync);
+
+    private async ValueTask WriteTransferFailureAsync(LogEntry entry)
+    {
+        using var log = new LocalRollingLogWriter(Path.Combine(_paths.DataRootPath, "logs", "transfers"));
+        await log.WriteAsync(entry, CancellationToken.None).ConfigureAwait(false);
+    }
+
+    private static MirrorPulseControlTransferStatus ToControlTransferStatus(MirrorPulseNamespaceTransferStatus value) =>
+        new(value.OperationId, value.SourceRootId.Value, value.TargetRootId.Value, value.SourceInstanceId.Value, value.TargetInstanceId.Value,
+            value.SourceMemberId, value.TargetMemberId, value.SourceRelativePath, value.TargetRelativePath, value.Stage, value.PreparedAt,
+            value.CopyStartedAt, value.CopyAcceptedAt, value.SourceDeleteStartedAt, value.SourceDeleteAcceptedAt, value.SourceNativeRetiredAt,
+            value.SourceNameSettledAt, value.RootsFenced, value.JournalAcknowledged, value.Completed)
+        {
+            IsDirectory = value.IsDirectory,
+            SourceAbsenceObservedAt = value.SourceAbsenceObservedAt,
+            PendingTargetBinding = value.PendingTargetBinding is { } binding ? new(binding.BirthOperationId, binding.StartedAt) : null
+        };
+}

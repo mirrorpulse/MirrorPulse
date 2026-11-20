@@ -14,6 +14,7 @@ public sealed class MirrorPulseRemoteBatchCoordinator
     private readonly CloudFileSystem _fileSystem;
     private readonly MirrorPulseCfSharpStateSession _state;
     private readonly MirrorPulseRemoteConflictProjector? _conflicts;
+    private readonly MirrorPulseRemoteNamespaceBatchDriver? _namespaceDriver;
 
     public MirrorPulseRemoteBatchCoordinator(
         CloudFileSystem fileSystem,
@@ -27,7 +28,12 @@ public sealed class MirrorPulseRemoteBatchCoordinator
         _conflicts = conflicts;
     }
 
-    public async ValueTask<CloudRemoteApplyResult> ApplyAsync(
+    [SupportedOSPlatform("windows10.0.26100")]
+    internal MirrorPulseRemoteBatchCoordinator(CloudFileSystem fileSystem, MirrorPulseCfSharpStateSession state,
+        MirrorPulseRemoteConflictProjector? conflicts, MirrorPulseRemoteNamespaceBatchDriver namespaceDriver)
+        : this(fileSystem, state, conflicts) => _namespaceDriver = namespaceDriver;
+
+    public async ValueTask<MirrorPulseRemoteBatchResult> ApplyAsync(
         InstanceId instanceId,
         CloudRemoteChangeBatch batch,
         CloudRemoteApplyOptions? options = null,
@@ -39,7 +45,8 @@ public sealed class MirrorPulseRemoteBatchCoordinator
             throw new InvalidDataException("A remote batch must be scoped to its Adapter instance.");
         }
 
-        string checkpointName = GetCheckpointName(instanceId);
+        RootId? pollingRoot = MirrorPulseRemotePollBatchScope.Read(instanceId, batch);
+        string checkpointName = pollingRoot is { } root ? GetCheckpointName(instanceId, root) : GetCheckpointName(instanceId);
         await using (ICloudStateTransaction preflight = await _state.OpenStore
             .BeginTransactionAsync(cancellationToken).ConfigureAwait(false))
         {
@@ -63,12 +70,16 @@ public sealed class MirrorPulseRemoteBatchCoordinator
             await preflight.RollbackAsync(cancellationToken).ConfigureAwait(false);
         }
 
-        CloudRemoteApplyResult result = await _fileSystem.ApplyRemoteChangesAsync(
-            batch, options ?? CloudRemoteApplyOptions.Default, cancellationToken).ConfigureAwait(false);
-        if (_conflicts is not null)
+        if (_namespaceDriver is not null && !OperatingSystem.IsWindowsVersionAtLeast(10, 0, 26100))
+            throw new PlatformNotSupportedException("Managed remote entries require Windows 11 24H2 or later.");
+        MirrorPulseRemoteBatchResult result;
+        if (_namespaceDriver is null)
         {
-            await _conflicts.CaptureResultAsync(instanceId, result, cancellationToken).ConfigureAwait(false);
+            var applied = await _fileSystem.ApplyRemoteChangesAsync(batch, options ?? CloudRemoteApplyOptions.Default, cancellationToken).ConfigureAwait(false);
+            if (_conflicts is not null) await _conflicts.CaptureResultAsync(instanceId, applied, cancellationToken).ConfigureAwait(false);
+            result = MirrorPulseRemoteBatchResult.FromSdk(applied);
         }
+        else result = await _namespaceDriver.ApplyAsync(instanceId, batch, options ?? CloudRemoteApplyOptions.Default, _conflicts, cancellationToken).ConfigureAwait(false);
 
         if (result.RequiresRetry || result.Status != CloudRemoteBatchStatus.Applied)
         {
@@ -92,15 +103,25 @@ public sealed class MirrorPulseRemoteBatchCoordinator
     public async ValueTask<ReadOnlyMemory<byte>?> ReadCursorAsync(
         InstanceId instanceId,
         CancellationToken cancellationToken = default)
+        => await ReadCursorCoreAsync(GetCheckpointName(instanceId), cancellationToken).ConfigureAwait(false);
+
+    public ValueTask<ReadOnlyMemory<byte>?> ReadCursorAsync(InstanceId instanceId, RootId rootId,
+        CancellationToken cancellationToken = default) => ReadCursorCoreAsync(GetCheckpointName(instanceId, rootId), cancellationToken);
+
+    private async ValueTask<ReadOnlyMemory<byte>?> ReadCursorCoreAsync(string name, CancellationToken cancellationToken)
     {
         await using ICloudStateTransaction transaction = await _state.OpenStore
             .BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
         CloudStateCheckpoint? checkpoint = await transaction.Checkpoints
-            .GetAsync(GetCheckpointName(instanceId), cancellationToken).ConfigureAwait(false);
+            .GetAsync(name, cancellationToken).ConfigureAwait(false);
         await transaction.RollbackAsync(cancellationToken).ConfigureAwait(false);
-        return checkpoint?.Value.ToArray();
+        if (checkpoint is null) return null;
+        return new ReadOnlyMemory<byte>(checkpoint.Value.ToArray());
     }
 
     public static string GetCheckpointName(InstanceId instanceId) =>
         $"mirrorpulse/adapter/{instanceId}/remote-cursor";
+
+    public static string GetCheckpointName(InstanceId instanceId, RootId rootId) =>
+        $"mirrorpulse/adapter/{instanceId}/roots/{rootId}/poll-cursor";
 }

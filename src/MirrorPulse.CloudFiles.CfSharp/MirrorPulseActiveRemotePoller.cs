@@ -3,8 +3,10 @@ using System.Collections.ObjectModel;
 using System.Runtime.Versioning;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
 using CfSharp;
 using MirrorPulse.Core.Contracts;
+using MirrorPulse.Core.Diagnostics;
 using MirrorPulse.Core.Sync;
 
 namespace MirrorPulse.CloudFiles.CfSharp;
@@ -16,22 +18,31 @@ namespace MirrorPulse.CloudFiles.CfSharp;
 /// batch.
 /// </summary>
 [SupportedOSPlatform("windows10.0.16299")]
-public sealed class MirrorPulseActiveRemotePoller : IAsyncDisposable
+public sealed partial class MirrorPulseActiveRemotePoller : IAsyncDisposable
 {
     private readonly IMirrorPulseDirectoryPageSource _source;
     private readonly IReadOnlyList<InstanceId> _instances;
     private readonly Dictionary<InstanceId, IReadOnlyList<RootRegistration>> _roots;
+    private readonly Func<IReadOnlyList<RootRegistration>>? _currentRoots;
     private readonly Func<InstanceId, CloudRemoteChangeBatch, CancellationToken, ValueTask<MirrorPulseRemotePollApplyOutcome>> _apply;
+    private readonly Func<InstanceId, CloudRemoteChangeBatch, MirrorPulseNamespaceWorkAdmission.WorkLease, CancellationToken,
+        ValueTask<MirrorPulseRemotePollApplyOutcome>>? _applyAdmitted;
     private readonly TimeSpan _interval;
     private readonly int _pageSize;
     private readonly int _maximumPages;
     private readonly IMirrorPulseRemotePollSnapshotStore? _snapshotStore;
     private readonly IMirrorPulseRemotePollPendingStore? _pendingStore;
-    private readonly ConcurrentDictionary<InstanceId, IReadOnlyDictionary<string, SnapshotEntry>> _snapshots = new();
+    private readonly Func<RootRegistration, CancellationToken, ValueTask<bool>>? _mayPoll;
+    private readonly ConcurrentDictionary<(InstanceId, RootId, string), IReadOnlyDictionary<string, SnapshotEntry>> _snapshots = new();
+    private readonly ConcurrentDictionary<InstanceId, RootId> _lastRoot = new(); // Different instance schedules can run concurrently.
     private readonly MirrorPulseInstanceScheduler _scheduler;
     private readonly bool _ownsScheduler;
+    private readonly MirrorPulseNamespaceWorkAdmission? _namespaceWork;
+    private readonly Func<RootRegistration, CloudRemoteChangeBatch, CancellationToken, ValueTask<bool>>? _mayReplay;
     private readonly CancellationTokenSource _shutdown = new();
     private Task? _loop;
+    private readonly LocalRollingLogWriter? _failureLog;
+    private readonly MirrorPulseRemoteIdentityResolver? _identityResolver;
 
     public MirrorPulseActiveRemotePoller(
         IMirrorPulseDirectoryPageSource source,
@@ -43,20 +54,30 @@ public sealed class MirrorPulseActiveRemotePoller : IAsyncDisposable
         int maximumPages = 2048,
         IMirrorPulseRemotePollSnapshotStore? snapshotStore = null,
         IMirrorPulseRemotePollPendingStore? pendingStore = null,
-        MirrorPulseInstanceScheduler? scheduler = null)
+        MirrorPulseInstanceScheduler? scheduler = null,
+        Func<RootRegistration, CancellationToken, ValueTask<bool>>? mayPoll = null,
+        Func<IReadOnlyList<RootRegistration>>? currentRoots = null,
+        MirrorPulseNamespaceWorkAdmission? namespaceWork = null,
+        Func<RootRegistration, CloudRemoteChangeBatch, CancellationToken, ValueTask<bool>>? mayReplay = null,
+        string? diagnosticsDirectory = null,
+        MirrorPulseRemoteIdentityResolver? identityResolver = null,
+        Func<InstanceId, CloudRemoteChangeBatch, MirrorPulseNamespaceWorkAdmission.WorkLease, CancellationToken,
+            ValueTask<MirrorPulseRemotePollApplyOutcome>>? applyAdmitted = null)
     {
         _source = source ?? throw new ArgumentNullException(nameof(source));
         ArgumentNullException.ThrowIfNull(instances);
         ArgumentNullException.ThrowIfNull(roots);
         _apply = apply ?? throw new ArgumentNullException(nameof(apply));
+        if (applyAdmitted is not null && namespaceWork is null)
+            throw new ArgumentException("Admitted polling requires the Host root-work owner.", nameof(namespaceWork));
+        _applyAdmitted = applyAdmitted;
         if (pageSize is < 1 or > 512) throw new ArgumentOutOfRangeException(nameof(pageSize));
         ArgumentOutOfRangeException.ThrowIfLessThan(maximumPages, 1);
         if (interval is { } value && value <= TimeSpan.Zero) throw new ArgumentOutOfRangeException(nameof(interval));
 
         _instances = instances.Where(instance => instance.Enabled)
             .Select(instance => instance.InstanceId).Distinct().ToArray();
-        _roots = roots.Where(root => root.State == RootRegistrationState.Active)
-            .GroupBy(root => root.InstanceId)
+        _roots = roots.GroupBy(root => root.InstanceId)
             .ToDictionary(group => group.Key,
                 group => (IReadOnlyList<RootRegistration>)group
                     .OrderBy(root => root.DirectoryName, StringComparer.OrdinalIgnoreCase)
@@ -67,10 +88,16 @@ public sealed class MirrorPulseActiveRemotePoller : IAsyncDisposable
         _maximumPages = maximumPages;
         _snapshotStore = snapshotStore;
         _pendingStore = pendingStore;
+        _mayPoll = mayPoll;
+        _currentRoots = currentRoots;
         _ownsScheduler = scheduler is null;
         _scheduler = scheduler ?? new MirrorPulseInstanceScheduler();
+        _namespaceWork = namespaceWork;
+        _mayReplay = mayReplay;
+        _identityResolver = identityResolver;
         if (pendingStore is not null && snapshotStore is null)
             throw new ArgumentException("Pending batches require a durable snapshot store.", nameof(snapshotStore));
+        if (diagnosticsDirectory is not null) _failureLog = new(diagnosticsDirectory);
     }
 
     public async Task StartAsync(CancellationToken cancellationToken = default)
@@ -80,95 +107,178 @@ public sealed class MirrorPulseActiveRemotePoller : IAsyncDisposable
         await Task.Yield();
     }
 
-    /// <summary>Runs one deterministic poll for an enabled instance.</summary>
-    public ValueTask<bool> PollOnceAsync(InstanceId instanceId, CancellationToken cancellationToken = default) =>
-        _scheduler.RunAsync(instanceId, token => PollCoreAsync(instanceId, token), cancellationToken);
+    /// <summary>Runs one bounded root turn for an enabled instance, rotating even after a blocked or failed turn.</summary>
+    public async ValueTask<bool> PollOnceAsync(InstanceId instanceId, CancellationToken cancellationToken = default)
+    {
+        var stage = MirrorPulseRemotePollStage.RootSelection;
+        try { return await _scheduler.RunAsync(instanceId, token => PollCoreAsync(instanceId, value => stage = value, token), cancellationToken).ConfigureAwait(false); }
+        catch (Exception error) when (error is not OperationCanceledException and not OutOfMemoryException)
+        {
+            if (_failureLog is not null)
+            {
+                try
+                {
+                    await _failureLog.WriteAsync(new(LogLevel.Warning, "sync", "RemotePollFailed", DateTimeOffset.UtcNow,
+                        [new("instanceId", instanceId.ToString()), new("hresult", error.HResult.ToString("X8", System.Globalization.CultureInfo.InvariantCulture)),
+                            new("failureCategory", SafeDiagnosticPolicy.ClassifyFailure(error)),
+                            new("remotePollStage", stage.ToString()),
+                            new("remoteFailureBoundary", MirrorPulseRemoteFailureClassifier.ReadBoundary(error).ToString())]), CancellationToken.None).ConfigureAwait(false);
+                }
+                catch (Exception observation) when (observation is not OutOfMemoryException)
+                {
+                    // Diagnostics cannot replace the original polling failure or
+                    // change the retained snapshot, intent or public retry behavior.
+                }
+            }
+            throw;
+        }
+    }
 
-    private async ValueTask<bool> PollCoreAsync(InstanceId instanceId, CancellationToken cancellationToken)
+    private async ValueTask<bool> PollCoreAsync(InstanceId instanceId, Action<MirrorPulseRemotePollStage> reportStage, CancellationToken cancellationToken)
     {
         if (!_instances.Contains(instanceId)) return false;
-        if (!_roots.TryGetValue(instanceId, out IReadOnlyList<RootRegistration>? roots) || roots.Count != 1)
-        {
-            // A multi-root Adapter needs an explicit remote-root mapping before an active
-            // snapshot can be attributed to one first-level Cloud Files directory. Demand
-            // hydration remains available for every root; skip the ambiguous background poll.
-            return false;
-        }
-
-        RootRegistration root = roots[0];
-
-        MirrorPulsePendingRemotePoll? pending = _pendingStore is null ? null :
-            await _pendingStore.LoadAsync(instanceId, cancellationToken).ConfigureAwait(false);
+        IReadOnlyList<RootRegistration>? configured = _currentRoots is null
+            ? _roots.GetValueOrDefault(instanceId)
+            : _currentRoots().Where(root => root.InstanceId == instanceId).ToArray();
+        var roots = configured?.Where(root => root.State == RootRegistrationState.Active)
+            .OrderBy(root => root.RootId.ToString(), StringComparer.Ordinal).ToArray() ?? [];
+        if (roots.Length == 0) return false;
+        bool scoped = (_snapshotStore is null or IMirrorPulseRootRemotePollSnapshotStore) &&
+            (_pendingStore is null or IMirrorPulseRootRemotePollPendingStore);
+        if (!scoped && configured!.Count != 1)
+            throw new NotSupportedException("Multiple roots require root-scoped polling stores.");
+        if (!scoped && _identityResolver is not null)
+            throw new NotSupportedException("Generation selection requires root-scoped polling stores.");
+        if (configured!.Count > 1 && configured.Any(value => value.IdentityScope != RootIdentityScope.InstanceRoot))
+            throw new InvalidDataException("Several roots require independent logical item identity scopes.");
+        var root = _lastRoot.TryGetValue(instanceId, out var last)
+            ? roots.FirstOrDefault(candidate => string.CompareOrdinal(candidate.RootId.ToString(), last.ToString()) > 0) ?? roots[0]
+            : roots[0];
+        _lastRoot[instanceId] = root.RootId;
+        var key = (instanceId, root.RootId, root.UniquenessKey);
+        reportStage(MirrorPulseRemotePollStage.RetainedIntent);
+        var legacy = _pendingStore is null ? null : await _pendingStore.LoadAsync(instanceId, cancellationToken).ConfigureAwait(false);
+        var legacySnapshot = scoped && _snapshotStore is not null
+            ? await _snapshotStore.LoadAsync(instanceId, cancellationToken).ConfigureAwait(false) : null;
+        if (scoped && configured!.Count != 1 && (legacy is not null || legacySnapshot is not null))
+            throw new InvalidDataException("An unscoped legacy poll cannot be attributed to several roots; retain the original mapping first.");
+        MirrorPulsePendingRemotePoll? pending = legacy ?? (scoped && _pendingStore is IMirrorPulseRootRemotePollPendingStore rootPending
+            ? await rootPending.LoadAsync(root, cancellationToken).ConfigureAwait(false) : null);
         if (pending is not null)
         {
-            if (!string.Equals(root.DirectoryName, pending.RootDirectoryName, StringComparison.Ordinal))
-                throw new InvalidDataException("A pending batch belongs to a different root mapping.");
-            IReadOnlyDictionary<string, SnapshotEntry> prior = FromDurableSnapshot(pending.Previous);
-            IReadOnlyDictionary<string, SnapshotEntry> candidate = FromDurableSnapshot(pending.Candidate);
-            CloudRemoteChangeBatch replay = CreateBatch(instanceId, root, prior, candidate);
-            if (replay.BatchId != pending.BatchId || !replay.Fingerprint.Span.SequenceEqual(pending.Fingerprint))
-                throw new InvalidDataException("The pending poll intent does not recreate its immutable batch.");
+            var (replay, candidate) = RestoreOriginalCore(instanceId, root, pending);
+            bool allowed = _mayReplay is not null
+                ? await _mayReplay(root, replay, cancellationToken).ConfigureAwait(false)
+                : _mayPoll is null || await _mayPoll(root, cancellationToken).ConfigureAwait(false);
+            if (!allowed) return false;
+            MirrorPulseNamespaceWorkAdmission.WorkLease? replayAdmission = null;
+            if (_namespaceWork is not null && !_namespaceWork.TryEnter([root.RootId], out replayAdmission)) return false;
+            using var retainedReplayAdmission = replayAdmission;
             // Do not enumerate a newer remote tree until this exact batch has converged.
-            return await ApplyAndCommitAsync(instanceId, replay, candidate, cancellationToken).ConfigureAwait(false);
+            return await ApplyAndCommitAsync(root, replay, candidate, scoped, legacy is not null, replayAdmission, reportStage, cancellationToken).ConfigureAwait(false);
         }
 
-        IReadOnlyDictionary<string, SnapshotEntry> current = await ReadSnapshotAsync(
-            instanceId, root.UniquenessKey, cancellationToken).ConfigureAwait(false);
-        if (!_snapshots.TryGetValue(instanceId, out IReadOnlyDictionary<string, SnapshotEntry>? previous))
+        if (_mayPoll is not null && !await _mayPoll(root, cancellationToken).ConfigureAwait(false)) return false;
+        MirrorPulseNamespaceWorkAdmission.WorkLease? admission = null;
+        if (_namespaceWork is not null && !_namespaceWork.TryEnter([root.RootId], out admission)) return false;
+        using var retainedAdmission = admission;
+
+        reportStage(MirrorPulseRemotePollStage.SnapshotRead);
+        if (!_snapshots.TryGetValue(key, out IReadOnlyDictionary<string, SnapshotEntry>? previous))
         {
             IReadOnlyDictionary<string, MirrorPulseRemoteSnapshotEntry>? persisted =
                 _snapshotStore is null
                     ? null
+                    : scoped ? await ((IMirrorPulseRootRemotePollSnapshotStore)_snapshotStore).LoadAsync(root, cancellationToken).ConfigureAwait(false) ?? legacySnapshot
                     : await _snapshotStore.LoadAsync(instanceId, cancellationToken).ConfigureAwait(false);
             if (persisted is not null)
             {
                 previous = FromDurableSnapshot(persisted);
-                _snapshots[instanceId] = previous;
-            }
-            else
-            {
-                await SaveSnapshotAsync(instanceId, current, cancellationToken).ConfigureAwait(false);
-                _snapshots[instanceId] = current;
-                return false;
+                _snapshots[key] = previous;
             }
         }
 
-        if (SnapshotsEqual(previous!, current))
+        reportStage(MirrorPulseRemotePollStage.WorkerEnumeration);
+        IReadOnlyDictionary<string, SnapshotEntry> current = await ReadSnapshotAsync(
+            instanceId, root.UniquenessKey, cancellationToken).ConfigureAwait(false);
+        reportStage(MirrorPulseRemotePollStage.IdentitySelection);
+        if (_identityResolver is not null)
         {
-            // Re-saving a loaded snapshot repairs a stale temporary file without changing the
-            // CfSharp cursor or creating another remote batch.
-            await SaveSnapshotAsync(instanceId, current, cancellationToken).ConfigureAwait(false);
+            var selected = await CaptureIdentitiesAsync(root, current, cancellationToken).ConfigureAwait(false);
+            if (selected is null) return false;
+            current = selected;
+        }
+        else if (previous?.Values.Any(entry => entry.PublicIdentity is not null) == true)
+            throw new InvalidOperationException("A captured generation snapshot requires its original identity resolver.");
+        reportStage(MirrorPulseRemotePollStage.Projection);
+        if (previous is null)
+        {
+            await SaveSnapshotAsync(root, current, scoped, cancellationToken).ConfigureAwait(false);
+            _snapshots[key] = current;
             return false;
         }
 
-        CloudRemoteChangeBatch batch = CreateBatch(instanceId, root, previous!, current);
+        if (SnapshotsEqual(root, previous!, current))
+        {
+            // Re-saving a loaded snapshot repairs a stale temporary file without changing the
+            // CfSharp cursor or creating another remote batch.
+            await SaveSnapshotAsync(root, current, scoped, cancellationToken).ConfigureAwait(false);
+            return false;
+        }
+
+        int projectionVersion = _identityResolver is not null ? 4 : scoped ? 3 : 2;
+        CloudRemoteChangeBatch batch = CreateBatch(instanceId, root, previous!, current, projectionVersion);
         if (_pendingStore is not null)
-            await _pendingStore.SaveAsync(instanceId, new(batch.BatchId, batch.Fingerprint.ToArray(), root.DirectoryName,
-                ToDurableSnapshot(previous!), ToDurableSnapshot(current)), cancellationToken).ConfigureAwait(false);
-        return await ApplyAndCommitAsync(instanceId, batch, current, cancellationToken).ConfigureAwait(false);
+        {
+            reportStage(MirrorPulseRemotePollStage.RetainIntent);
+            var captured = new MirrorPulsePendingRemotePoll(batch.BatchId, batch.Fingerprint.ToArray(), root.DirectoryName,
+                ToDurableSnapshot(previous!), ToDurableSnapshot(current), projectionVersion)
+            { RootId = scoped ? root.RootId : null, RootKey = scoped ? root.UniquenessKey : null };
+            if (scoped) await ((IMirrorPulseRootRemotePollPendingStore)_pendingStore).SaveAsync(root, captured, cancellationToken).ConfigureAwait(false);
+            else await _pendingStore.SaveAsync(instanceId, captured, cancellationToken).ConfigureAwait(false);
+        }
+        return await ApplyAndCommitAsync(root, batch, current, scoped, false, admission, reportStage, cancellationToken).ConfigureAwait(false);
     }
 
-    private async ValueTask<bool> ApplyAndCommitAsync(InstanceId instanceId, CloudRemoteChangeBatch batch,
-        IReadOnlyDictionary<string, SnapshotEntry> current, CancellationToken cancellationToken)
+    private async ValueTask<bool> ApplyAndCommitAsync(RootRegistration root, CloudRemoteChangeBatch batch,
+        IReadOnlyDictionary<string, SnapshotEntry> current, bool scoped, bool legacy, MirrorPulseNamespaceWorkAdmission.WorkLease? admission,
+        Action<MirrorPulseRemotePollStage> reportStage, CancellationToken cancellationToken)
     {
-        MirrorPulseRemotePollApplyOutcome outcome = await _apply(instanceId, batch, cancellationToken).ConfigureAwait(false);
+        reportStage(MirrorPulseRemotePollStage.ApplyAndCommit);
+        MirrorPulseRemotePollApplyOutcome outcome = _applyAdmitted is null
+            ? await _apply(root.InstanceId, batch, cancellationToken).ConfigureAwait(false)
+            : await _applyAdmitted(root.InstanceId, batch, admission ??
+                throw new InvalidOperationException("The current poll lost its root-work admission."), cancellationToken).ConfigureAwait(false);
         if (!outcome.Completed) return false;
+        reportStage(MirrorPulseRemotePollStage.CheckpointValidation);
         if (!outcome.SafeCursor.Span.SequenceEqual(batch.FinalCursor.Span))
             throw new InvalidDataException("A completed remote poll batch must have its final safe cursor.");
-        await SaveSnapshotAsync(instanceId, current, cancellationToken).ConfigureAwait(false);
-        _snapshots[instanceId] = current;
+        reportStage(MirrorPulseRemotePollStage.SnapshotCommit);
+        await SaveSnapshotAsync(root, current, scoped, cancellationToken).ConfigureAwait(false);
+        _snapshots[(root.InstanceId, root.RootId, root.UniquenessKey)] = current;
         if (_pendingStore is not null)
-            await _pendingStore.ClearAsync(instanceId, batch.BatchId, cancellationToken).ConfigureAwait(false);
+        {
+            reportStage(MirrorPulseRemotePollStage.IntentCompletion);
+            if (scoped && !legacy) await ((IMirrorPulseRootRemotePollPendingStore)_pendingStore).ClearAsync(root, batch.BatchId, cancellationToken).ConfigureAwait(false);
+            else await _pendingStore.ClearAsync(root.InstanceId, batch.BatchId, cancellationToken).ConfigureAwait(false);
+        }
         return true;
     }
 
     private async ValueTask SaveSnapshotAsync(
-        InstanceId instanceId,
+        RootRegistration root,
         IReadOnlyDictionary<string, SnapshotEntry> snapshot,
+        bool scoped,
         CancellationToken cancellationToken)
     {
         if (_snapshotStore is null) return;
-        await _snapshotStore.SaveAsync(instanceId, ToDurableSnapshot(snapshot), cancellationToken).ConfigureAwait(false);
+        if (scoped)
+        {
+            var store = (IMirrorPulseRootRemotePollSnapshotStore)_snapshotStore;
+            await store.SaveAsync(root, ToDurableSnapshot(snapshot), cancellationToken).ConfigureAwait(false);
+            await store.ClearLegacyAsync(root.InstanceId, cancellationToken).ConfigureAwait(false);
+        }
+        else await _snapshotStore.SaveAsync(root.InstanceId, ToDurableSnapshot(snapshot), cancellationToken).ConfigureAwait(false);
     }
 
     private static Dictionary<string, MirrorPulseRemoteSnapshotEntry> ToDurableSnapshot(
@@ -176,7 +286,8 @@ public sealed class MirrorPulseActiveRemotePoller : IAsyncDisposable
             item => item.Key,
             item => new MirrorPulseRemoteSnapshotEntry(item.Value.RemoteId,
                 item.Value.RemoteRevision, item.Value.ItemKind, item.Value.RelativePath,
-                item.Value.Length, ToSnapshotMetadata(item.Value.Metadata)),
+                item.Value.Length, ToSnapshotMetadata(item.Value.Metadata))
+            { PublicIdentity = item.Value.PublicIdentity },
             StringComparer.Ordinal);
 
     private static Dictionary<string, SnapshotEntry> FromDurableSnapshot(
@@ -272,21 +383,42 @@ public sealed class MirrorPulseActiveRemotePoller : IAsyncDisposable
         return new ReadOnlyDictionary<string, SnapshotEntry>(entries);
     }
 
+    internal static CloudRemoteChangeBatch RestoreOriginalBatch(InstanceId instance, RootRegistration root, MirrorPulsePendingRemotePoll pending)
+        => RestoreOriginalCore(instance, root, pending).Batch;
+
+    private static (CloudRemoteChangeBatch Batch, IReadOnlyDictionary<string, SnapshotEntry> Candidate) RestoreOriginalCore(
+        InstanceId instance, RootRegistration root, MirrorPulsePendingRemotePoll pending)
+    {
+        if (root.InstanceId != instance || root.DirectoryName != pending.RootDirectoryName ||
+            pending.RootId is { } originalRoot && originalRoot != root.RootId || pending.RootKey is { } originalKey && originalKey != root.UniquenessKey)
+            throw new InvalidDataException("A pending batch belongs to a different original root mapping.");
+        var candidate = FromDurableSnapshot(pending.Candidate);
+        var batch = CreateBatch(instance, root, FromDurableSnapshot(pending.Previous), candidate, pending.ProjectionVersion);
+        if (batch.BatchId != pending.BatchId || !batch.Fingerprint.Span.SequenceEqual(pending.Fingerprint))
+            throw new InvalidDataException("The pending poll intent does not recreate its immutable batch.");
+        return (batch, candidate);
+    }
+
     private static CloudRemoteChangeBatch CreateBatch(
         InstanceId instanceId,
         RootRegistration root,
         IReadOnlyDictionary<string, SnapshotEntry> previous,
-        IReadOnlyDictionary<string, SnapshotEntry> current)
+        IReadOnlyDictionary<string, SnapshotEntry> current,
+        int projectionVersion)
     {
-        byte[] initialCursor = Fingerprint(previous);
-        byte[] finalCursor = Fingerprint(current);
+        if (projectionVersion is not (1 or 2 or 3 or 4))
+            throw new InvalidDataException("The remote poll projection version is unsupported.");
+        if (projectionVersion == 4) ValidateCapturedSnapshots(root, previous, current);
+        byte[] initialCursor = projectionVersion >= 3 ? RootFingerprint(root, previous, projectionVersion) : Fingerprint(previous);
+        byte[] finalCursor = projectionVersion >= 3 ? RootFingerprint(root, current, projectionVersion) : Fingerprint(current);
         var changes = new List<CloudRemoteChange>();
         foreach ((string id, SnapshotEntry entry) in current.OrderBy(item => item.Key, StringComparer.Ordinal))
         {
-            if (!previous.TryGetValue(id, out SnapshotEntry? prior))
+            if (!previous.TryGetValue(id, out SnapshotEntry? prior) ||
+                projectionVersion == 4 && !SamePublicIdentity(root, prior, entry))
             {
                 changes.Add(ToChange(instanceId, root, entry, UpsertKind(entry.ItemKind),
-                    previousRevision: null, previousPath: null, finalCursor));
+                    previousRevision: null, previousPath: null, finalCursor, projectionVersion));
                 continue;
             }
 
@@ -295,22 +427,27 @@ public sealed class MirrorPulseActiveRemotePoller : IAsyncDisposable
                 : prior.RelativePath != entry.RelativePath
                     ? CloudRemoteChangeKind.Move
                     : UpsertKind(entry.ItemKind);
+            // Each enumeration builds new metadata objects. Reference equality
+            // invalidated unchanged file bytes whenever an unrelated object changed.
+            // Version 2 follows the content policy: metadata alone is not a content
+            // revision. Keep version 1 only to reproduce an already captured intent.
             if ((kind is CloudRemoteChangeKind.FileUpsert or CloudRemoteChangeKind.DirectoryUpsert) &&
-                prior.RemoteRevision == entry.RemoteRevision && prior.Length == entry.Length &&
-                Equals(prior.Metadata, entry.Metadata)) continue;
+                prior.ItemKind == entry.ItemKind && prior.RemoteRevision == entry.RemoteRevision && prior.Length == entry.Length &&
+                (projectionVersion >= 2 || Equals(prior.Metadata, entry.Metadata))) continue;
             changes.Add(ToChange(instanceId, root, entry, kind, prior.RemoteRevision,
-                kind == CloudRemoteChangeKind.Move ? prior.RelativePath : null, finalCursor));
+                kind == CloudRemoteChangeKind.Move ? prior.RelativePath : null, finalCursor, projectionVersion));
         }
 
         foreach ((string id, SnapshotEntry entry) in previous.OrderBy(item => item.Key, StringComparer.Ordinal))
         {
             if (current.ContainsKey(id)) continue;
             changes.Add(ToChange(instanceId, root, entry, CloudRemoteChangeKind.Delete,
-                previousRevision: null, previousPath: null, finalCursor));
+                previousRevision: null, previousPath: null, finalCursor, projectionVersion));
         }
 
         return new CloudRemoteChangeBatch(
-            $"{instanceId}/{Convert.ToHexString(initialCursor)}/{Convert.ToHexString(finalCursor)}",
+            (projectionVersion >= 3 ? MirrorPulseRemotePollBatchScope.Prefix(root) : instanceId + "/") +
+                $"{Convert.ToHexString(initialCursor)}/{Convert.ToHexString(finalCursor)}",
             initialCursor,
             changes,
             finalCursor);
@@ -328,14 +465,16 @@ public sealed class MirrorPulseActiveRemotePoller : IAsyncDisposable
         CloudRemoteChangeKind kind,
         string? previousRevision,
         string? previousPath,
-        ReadOnlyMemory<byte> cursor)
+        ReadOnlyMemory<byte> cursor, int projectionVersion)
     {
         CloudItemKind itemKind = entry.ItemKind;
         CloudPlaceholderMetadata metadata = entry.Metadata;
         string path = root.DirectoryName + "\\" + entry.RelativePath.Replace('/', '\\');
-        CloudPlaceholderIdentity identity = MirrorPulsePlaceholderIdentity.CreateForRoot(root, entry.RemoteId, entry.RemoteRevision).ToCfSharp();
+        CloudPlaceholderIdentity identity = projectionVersion == 4 ? CapturedIdentity(root, entry) :
+            MirrorPulsePlaceholderIdentity.CreateForRoot(root, entry.RemoteId, entry.RemoteRevision).ToCfSharp();
         return new CloudRemoteChange(
-            $"{instanceId}/{entry.RemoteId}/{Convert.ToHexString(cursor.Span)}",
+            (projectionVersion >= 3 ? MirrorPulseRemotePollBatchScope.Prefix(root) : instanceId + "/") +
+                $"{entry.RemoteId}/{Convert.ToHexString(cursor.Span)}",
             kind,
             identity.RemoteId,
             entry.RemoteRevision,
@@ -350,9 +489,32 @@ public sealed class MirrorPulseActiveRemotePoller : IAsyncDisposable
     }
 
     private static bool SnapshotsEqual(
+        RootRegistration root,
         IReadOnlyDictionary<string, SnapshotEntry> left,
         IReadOnlyDictionary<string, SnapshotEntry> right) =>
-        left.Count == right.Count && Fingerprint(left).AsSpan().SequenceEqual(Fingerprint(right));
+        left.Count == right.Count && GenerationFingerprint(root, left).AsSpan().SequenceEqual(GenerationFingerprint(root, right));
+
+    private static byte[] RootFingerprint(RootRegistration root, IReadOnlyDictionary<string, SnapshotEntry> snapshot, int projectionVersion) =>
+        SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(new[]
+        { root.InstanceId.ToString(), root.RootId.ToString(), root.UniquenessKey,
+            Convert.ToHexString(projectionVersion == 4 ? GenerationFingerprint(root, snapshot) : CanonicalFingerprint(snapshot)) }));
+
+    private static byte[] CanonicalFingerprint(IReadOnlyDictionary<string, SnapshotEntry> snapshot)
+    {
+        using var buffer = new MemoryStream();
+        using var writer = new Utf8JsonWriter(buffer);
+        writer.WriteStartArray();
+        foreach (var pair in snapshot.OrderBy(item => item.Key, StringComparer.Ordinal))
+        {
+            var entry = pair.Value;
+            writer.WriteStartArray(); writer.WriteStringValue(pair.Key); writer.WriteStringValue(entry.RemoteRevision);
+            writer.WriteNumberValue((int)entry.ItemKind); writer.WriteStringValue(entry.RelativePath);
+            if (entry.Length is { } length) writer.WriteNumberValue(length); else writer.WriteNullValue();
+            writer.WriteEndArray();
+        }
+        writer.WriteEndArray(); writer.Flush();
+        return SHA256.HashData(buffer.GetBuffer().AsSpan(0, checked((int)buffer.Length)));
+    }
 
     private static byte[] Fingerprint(IReadOnlyDictionary<string, SnapshotEntry> snapshot)
     {
@@ -389,11 +551,13 @@ public sealed class MirrorPulseActiveRemotePoller : IAsyncDisposable
 
         _shutdown.Dispose();
         if (_ownsScheduler) await _scheduler.DisposeAsync().ConfigureAwait(false);
+        _failureLog?.Dispose();
     }
 
     private static SnapshotEntry FromSnapshotEntry(MirrorPulseRemoteSnapshotEntry entry) =>
         new(entry.RemoteId, entry.RemoteRevision, entry.ItemKind, entry.RelativePath, entry.Length,
-            FromSnapshotMetadata(entry.Metadata));
+            FromSnapshotMetadata(entry.Metadata))
+        { PublicIdentity = entry.PublicIdentity };
 
     private static MirrorPulseRemoteSnapshotMetadata ToSnapshotMetadata(CloudPlaceholderMetadata metadata) =>
         new(metadata.Kind, metadata.Attributes, metadata.CreationTime, metadata.LastAccessTime,
@@ -419,5 +583,8 @@ public sealed class MirrorPulseActiveRemotePoller : IAsyncDisposable
         CloudItemKind ItemKind,
         string RelativePath,
         long? Length,
-        CloudPlaceholderMetadata Metadata);
+        CloudPlaceholderMetadata Metadata)
+    {
+        public MirrorPulseRemoteSnapshotIdentity? PublicIdentity { get; init; }
+    }
 }

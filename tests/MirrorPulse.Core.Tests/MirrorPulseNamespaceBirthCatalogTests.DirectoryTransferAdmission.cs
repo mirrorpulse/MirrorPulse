@@ -1,0 +1,478 @@
+using System.Security.Cryptography;
+using Microsoft.Data.Sqlite;
+using MirrorPulse.Core.Caching;
+using MirrorPulse.Core.CloudFiles;
+using MirrorPulse.Core.Contracts;
+using MirrorPulse.Core.State;
+using MirrorPulse.Core.Sync;
+
+namespace MirrorPulse.Core.Tests;
+
+public sealed partial class MirrorPulseNamespaceBirthCatalogTests
+{
+    [TestMethod]
+    public async Task DirectoryTransferDiscoveryValidatesReservationsInBoundedOwnerPages()
+    {
+        using var fixture = new Fixture();
+        await using var catalog = await MirrorPulseProductCatalog.OpenAsync(fixture.Paths);
+        var first = await PrepareDirectoryTransferFixtureAsync(catalog, commandId: OwnerPageId(8, 1));
+        await catalog.PrepareNamespaceDirectoryTransferAsync(first);
+        var seed = (await catalog.ReadAdapterTopologyAsync()).Roots.Single(root => root.RootId == first.SourceRoute.RootId);
+        var anchor = await catalog.ReadNamespaceMemberAsync(first.SourceParent.Context.Member.ParentMemberId!.Value);
+        Assert.IsNotNull(anchor);
+        var originals = new List<MirrorPulseDirectoryTransferAdmission> { first };
+        for (int index = 1; index < 17; index++)
+        {
+            string sourceDirectory = $"Docs {index}";
+            var source = new RootRegistration(seed.AdapterId, seed.InstanceId, RootId.New(), seed.UniquenessKey,
+                sourceDirectory, sourceDirectory, false, seed.State, seed.RegisteredAt, seed.IdentityScope);
+            var pair = await PrepareTransferFixtureAsync(catalog, directory: true, sourceRegistration: source, anchor: anchor,
+                targetDirectory: $"Archive {index}");
+            var plan = await PrepareDirectoryTransferFixtureAsync(catalog, setup: pair, commandId: OwnerPageId(8, index + 1));
+            await catalog.PrepareNamespaceDirectoryTransferAsync(plan);
+            originals.Add(plan);
+        }
+
+        var expected = originals.SelectMany(plan => new[] { plan.SourceRoute.RootId, plan.TargetRoute.RootId })
+            .OrderBy(root => root.Value).ToArray();
+        var statements = (await TraceOwnerReadsAsync(catalog, async () =>
+            CollectionAssert.AreEqual(expected, (await catalog.ReadNamespaceDispatchFencedRootsAsync()).ToArray()))).ToArray();
+        var admissions = statements.Where(sql => sql.Contains("SELECT a.operation_id,a.source_root_id,a.target_root_id,a.payload,a.fingerprint", StringComparison.Ordinal)
+            && sql.Contains("ORDER BY a.operation_id", StringComparison.Ordinal)).ToArray();
+        var reservations = statements.Where(sql => sql.Contains("SELECT i.operation_id,i.transfer_id,i.journal_original", StringComparison.Ordinal)).ToArray();
+        Assert.HasCount(2, admissions);
+        Assert.IsTrue(admissions.All(sql => sql.Contains("LIMIT 16", StringComparison.Ordinal)));
+        Assert.HasCount(2, reservations);
+        string boundary = originals[15].Command.CommandId.ToString("D"), lastId = originals[^1].Command.CommandId.ToString("D");
+        Assert.Contains("a.operation_id>", admissions[1], StringComparison.Ordinal);
+        Assert.Contains("INDEXED BY namespace_directory_transfer_ids_by_transfer", reservations[1], StringComparison.Ordinal);
+        Assert.Contains("i.transfer_id IN (", reservations[1], StringComparison.Ordinal);
+        Assert.Contains(boundary, reservations[0], StringComparison.Ordinal);
+        Assert.DoesNotContain(lastId, reservations[0], StringComparison.Ordinal);
+        Assert.DoesNotContain(boundary, reservations[1], StringComparison.Ordinal);
+        Assert.Contains(lastId, reservations[1], StringComparison.Ordinal);
+        Assert.IsLessThan(Array.IndexOf(statements, admissions[1]), Array.IndexOf(statements, reservations[0]));
+        await using (var connection = Connection(fixture.Paths))
+        {
+            await connection.OpenAsync();
+            await using var explain = connection.CreateCommand();
+            explain.CommandText = "EXPLAIN QUERY PLAN " + reservations[0];
+            await using var reader = await explain.ExecuteReaderAsync();
+            Assert.IsTrue(await reader.ReadAsync());
+            Assert.Contains("SEARCH i USING INDEX namespace_directory_transfer_ids_by_transfer", reader.GetString(3), StringComparison.Ordinal);
+            Assert.IsFalse(await reader.ReadAsync());
+        }
+
+        var last = originals[^1];
+        var pending = new MirrorPulseNamespacePendingOperation(last.Command.CommandId, last.TargetRoute.RootId, MirrorPulseNamespacePendingOperationKind.Transfer);
+        Assert.AreEqual(pending, (await catalog.ReadNamespacePendingOperationsAsync(last.TargetRoute.RootId)).Single());
+        Guid lostJournal = last.Originals.Members.Single().OperationId;
+        await ExecuteSqlAsync(fixture.Paths, $"UPDATE namespace_directory_transfer_ids SET journal_original=0 WHERE operation_id='{lostJournal:D}';");
+        await Assert.ThrowsExactlyAsync<InvalidDataException>(() => catalog.ReadNamespaceDispatchFencedRootsAsync());
+        await Assert.ThrowsExactlyAsync<InvalidDataException>(() => catalog.ReadNamespacePendingOperationsAsync(first.SourceRoute.RootId));
+        Assert.AreEqual(first.Originals, (await catalog.ReadNamespaceDirectoryTransferAsync(first.Command.CommandId))?.Originals);
+    }
+
+    [TestMethod]
+    [DataRow(false)]
+    [DataRow(true)]
+    public async Task DirectoryTransferRestartsOnEitherSideOfItsDurableStartAfterWorkerPreparation(bool afterHostStart)
+    {
+        using var fixture = new Fixture();
+        var inputs = new MirrorPulseLocalTransferContentStore(fixture.Paths);
+        var worker = new DirectoryTransferCopyWorker { Durable = true, PreparesDurable = true };
+        MirrorPulseDirectoryTransferAdmission plan;
+        MirrorPulseDirectoryTransferCopyStep interrupted;
+        await using (var catalog = await MirrorPulseProductCatalog.OpenAsync(fixture.Paths))
+        {
+            plan = await PrepareDirectoryTransferFixtureAsync(catalog, TransferBytes);
+            worker.Plan = plan;
+            string sourcePath = Path.Combine(fixture.Paths.DataRootPath, "prepared-transfer-content.bin");
+            await File.WriteAllBytesAsync(sourcePath, TransferBytes);
+            await using (var source = new FileStream(sourcePath, FileMode.Open, FileAccess.Read, FileShare.Read))
+                await inputs.StageRetainedAsync(plan.Members[1].PrivateContentId!.Value, source);
+            await catalog.PrepareNamespaceDirectoryTransferAsync(plan);
+            var cut = afterHostStart ? MirrorPulseDirectoryTransferCopyCheckpoint.BeforeDispatch :
+                MirrorPulseDirectoryTransferCopyCheckpoint.AfterPreparation;
+            var executor = new MirrorPulseDirectoryTransferCopyExecutor(catalog, inputs, worker, worker,
+                new TransferClock(plan.PreparedAt.AddSeconds(1)))
+            {
+                Checkpoint = (checkpoint, ordinal, _) => checkpoint == cut && ordinal == 0
+                    ? ValueTask.FromException(new IOException("Interrupted copy startup.")) : ValueTask.CompletedTask
+            };
+            await Assert.ThrowsExactlyAsync<IOException>(() => executor.CopyAsync(plan.Command.CommandId, default));
+            interrupted = (await catalog.ReadNamespaceDirectoryTransferCopyAsync(plan.Command.CommandId, default)).Steps[0];
+            Assert.AreEqual(afterHostStart, interrupted.StartedAt is not null);
+            Assert.AreEqual(afterHostStart, interrupted.Durable);
+            Assert.IsTrue(interrupted.PreparationSelected);
+            Assert.IsNull(interrupted.AcceptedAt);
+            Assert.HasCount(1, worker.Preparations);
+            Assert.AreEqual(0, worker.Creates);
+            Assert.AreEqual(0, worker.Uploads);
+            Assert.HasCount(2, await catalog.ReadNamespaceDispatchFencedRootsAsync());
+        }
+
+        await using var reopened = await MirrorPulseProductCatalog.OpenAsync(fixture.Paths);
+        var retry = new MirrorPulseDirectoryTransferCopyExecutor(reopened, inputs, worker, worker,
+            new TransferClock(plan.PreparedAt.AddSeconds(2)));
+        worker.PreparesDurable = false;
+        if (afterHostStart)
+        {
+            worker.Durable = false;
+            await Assert.ThrowsExactlyAsync<MirrorPulseMutationAmbiguousException>(() => retry.CopyAsync(plan.Command.CommandId, default));
+        }
+        else
+        {
+            // A root that still supports legacy durable Start cannot replace a selected preparation.
+            await Assert.ThrowsExactlyAsync<NotSupportedException>(() => retry.CopyAsync(plan.Command.CommandId, default));
+            await Assert.ThrowsExactlyAsync<MirrorPulseMutationAmbiguousException>(() => reopened.StartNamespaceDirectoryTransferCopyAsync(
+                plan, 0, plan.PreparedAt.AddSeconds(2), default, durable: true));
+            worker.Durable = false;
+            await Assert.ThrowsExactlyAsync<NotSupportedException>(() => retry.CopyAsync(plan.Command.CommandId, default));
+        }
+        Assert.HasCount(1, worker.Preparations);
+        Assert.AreEqual(0, worker.Creates);
+        Assert.AreEqual(0, worker.Uploads);
+        Assert.AreEqual(interrupted, (await reopened.ReadNamespaceDirectoryTransferCopyAsync(plan.Command.CommandId, default)).Steps[0]);
+        Assert.HasCount(2, await reopened.ReadNamespaceDispatchFencedRootsAsync());
+        worker.Durable = true;
+        worker.PreparesDurable = true;
+        var resumed = await retry.CopyAsync(plan.Command.CommandId, default);
+        Assert.HasCount(afterHostStart ? 2 : 3, worker.Preparations);
+        Assert.AreEqual(1, worker.Creates);
+        Assert.AreEqual(1, worker.Uploads);
+        Assert.IsTrue(resumed.Steps.All(step => step.PreparationSelected && step.Durable && step.AcceptedAt is not null));
+        if (afterHostStart) Assert.AreEqual(interrupted.StartedAt, resumed.Steps[0].StartedAt);
+        Assert.HasCount(2, await reopened.ReadNamespaceDispatchFencedRootsAsync());
+    }
+
+    [TestMethod]
+    [DataRow(false, false)]
+    [DataRow(true, false)]
+    [DataRow(true, true)]
+    public async Task DirectoryTransferCopiesParentsAndPrivateBytesWithoutRepeatingAnUncertainEffect(bool interruptReceipt, bool durable)
+    {
+        using var fixture = new Fixture();
+        MirrorPulseDirectoryTransferAdmission plan;
+        var inputs = new MirrorPulseLocalTransferContentStore(fixture.Paths);
+        var worker = new DirectoryTransferCopyWorker { Durable = durable };
+        await using (var catalog = await MirrorPulseProductCatalog.OpenAsync(fixture.Paths))
+        {
+            plan = await PrepareDirectoryTransferFixtureAsync(catalog, TransferBytes);
+            worker.Plan = plan;
+            string sourcePath = Path.Combine(fixture.Paths.DataRootPath, "directory-transfer-input.bin");
+            await File.WriteAllBytesAsync(sourcePath, TransferBytes);
+            await using (var file = new FileStream(sourcePath, FileMode.Open, FileAccess.Read, FileShare.Read))
+                await inputs.StageRetainedAsync(plan.Members[1].PrivateContentId!.Value, file);
+            await catalog.PrepareNamespaceDirectoryTransferAsync(plan);
+            if (interruptReceipt)
+            {
+                await ExecuteSqlAsync(fixture.Paths, $"""
+                    CREATE TRIGGER interrupt_directory_copy_receipt
+                    BEFORE UPDATE OF accepted_revision ON namespace_directory_transfer_copy_steps
+                    WHEN NEW.effect_id='{plan.Members[1].CopyOperationId:D}'
+                    BEGIN SELECT RAISE(ABORT,'original file acceptance interrupted'); END;
+                    """);
+            }
+            var executor = new MirrorPulseDirectoryTransferCopyExecutor(catalog, inputs, worker, worker,
+                new TransferClock(plan.PreparedAt.AddSeconds(1)));
+            if (interruptReceipt)
+                await Assert.ThrowsExactlyAsync<SqliteException>(() => executor.CopyAsync(plan.Command.CommandId, default));
+            else
+                Assert.IsTrue((await executor.CopyAsync(plan.Command.CommandId, default)).Steps.All(step => step.AcceptedAt is not null));
+            Assert.AreEqual(1, worker.Creates);
+            Assert.AreEqual(1, worker.Uploads);
+            CollectionAssert.AreEqual(TransferBytes, worker.Bytes);
+            Assert.IsNull(await catalog.ReadMutationAsync(plan.Members[1].DeleteOperationId));
+        }
+
+        if (durable)
+            await ExecuteSqlAsync(fixture.Paths, """
+                DROP TABLE namespace_directory_transfer_copy_preparations;
+                PRAGMA user_version=117;
+                """);
+        await using var reopened = await MirrorPulseProductCatalog.OpenAsync(fixture.Paths);
+        var retry = new MirrorPulseDirectoryTransferCopyExecutor(reopened, inputs, worker, worker,
+            new TransferClock(plan.PreparedAt.AddSeconds(2)));
+        if (durable)
+        {
+            var started = await reopened.ReadNamespaceDirectoryTransferCopyAsync(plan.Command.CommandId, default);
+            Assert.IsTrue(started.Steps.All(step => step.Durable && !step.PreparationSelected));
+            Assert.IsNull(started.Steps[1].AcceptedAt);
+            worker.Durable = false;
+            await Assert.ThrowsExactlyAsync<MirrorPulseMutationAmbiguousException>(() => retry.CopyAsync(plan.Command.CommandId, default));
+            worker.Durable = true;
+            await ExecuteSqlAsync(fixture.Paths, "DROP TRIGGER interrupt_directory_copy_receipt;");
+            var recovered = await retry.CopyAsync(plan.Command.CommandId, default);
+            Assert.AreEqual(started.Steps[0], recovered.Steps[0]);
+            Assert.AreEqual(started.Steps[1].StartedAt, recovered.Steps[1].StartedAt);
+            Assert.AreEqual("file-upload-receipt", recovered.Steps[1].AcceptedRevision);
+        }
+        else if (interruptReceipt)
+            await Assert.ThrowsExactlyAsync<MirrorPulseMutationAmbiguousException>(() => retry.CopyAsync(plan.Command.CommandId, default));
+        else
+            Assert.IsTrue((await retry.CopyAsync(plan.Command.CommandId, default)).Steps.All(step => step.AcceptedAt is not null));
+        Assert.AreEqual(1, worker.Creates);
+        Assert.AreEqual(durable ? 2 : 1, worker.Uploads);
+        Assert.HasCount(2, await reopened.ReadNamespaceDispatchFencedRootsAsync());
+    }
+
+    [TestMethod]
+    public async Task DirectoryTransferSettlementMigrationRetainsBothOriginalFencesAndDetectsMissingReservation()
+    {
+        using var fixture = new Fixture();
+        MirrorPulseDirectoryTransferAdmission plan;
+        await using (var original = await MirrorPulseProductCatalog.OpenAsync(fixture.Paths))
+        {
+            plan = await PrepareDirectoryTransferFixtureAsync(original);
+            await original.PrepareNamespaceDirectoryTransferAsync(plan);
+        }
+        await ExecuteSqlAsync(fixture.Paths, """
+            DROP TABLE namespace_directory_transfer_late_acknowledgements;
+            DROP TABLE namespace_directory_transfer_acknowledgements;
+            DROP TABLE namespace_directory_transfer_fences;
+            DROP INDEX namespace_directory_transfer_retired_item;
+            DROP INDEX namespace_directory_transfer_source_root;
+            DROP INDEX namespace_directory_transfer_target_root;
+            CREATE UNIQUE INDEX namespace_directory_transfer_source_root ON namespace_directory_transfer_admissions(source_root_id);
+            CREATE UNIQUE INDEX namespace_directory_transfer_target_root ON namespace_directory_transfer_admissions(target_root_id);
+            PRAGMA user_version=114;
+            """);
+        await using var migrated = await MirrorPulseProductCatalog.OpenAsync(fixture.Paths);
+        CollectionAssert.AreEquivalent(new[] { plan.SourceRoute.RootId, plan.TargetRoute.RootId },
+            (await migrated.ReadNamespaceDispatchFencedRootsAsync()).ToArray());
+        Assert.AreEqual(plan.Command.CommandId, (await migrated.ReadPendingNamespaceTransferStatusesAsync(plan.TargetRoute.RootId)).Single().OperationId);
+        await ExecuteSqlAsync(fixture.Paths,
+            $"DELETE FROM namespace_directory_transfer_fences WHERE root_id='{plan.TargetRoute.RootId}';");
+        await Assert.ThrowsExactlyAsync<InvalidDataException>(() => migrated.ReadNamespaceDispatchFencedRootsAsync());
+        await Assert.ThrowsExactlyAsync<InvalidDataException>(() => migrated.ReadPendingNamespaceTransferStatusesAsync(plan.TargetRoute.RootId));
+    }
+
+    [TestMethod]
+    public async Task DirectoryTransferRetainsOnlyTheOriginalOrderedCopyReceipts()
+    {
+        using var fixture = new Fixture();
+        MirrorPulseDirectoryTransferAdmission plan;
+        DateTimeOffset started;
+        DateTimeOffset accepted;
+        await using (var catalog = await MirrorPulseProductCatalog.OpenAsync(fixture.Paths))
+        {
+            plan = await PrepareDirectoryTransferFixtureAsync(catalog);
+            await catalog.PrepareNamespaceDirectoryTransferAsync(plan);
+            started = plan.Originals.CapturedAt.AddTicks(1);
+            accepted = started.AddTicks(1);
+            await Assert.ThrowsExactlyAsync<InvalidOperationException>(() =>
+                catalog.RecordNamespaceDirectoryTransferCopyAcceptedAsync(plan.Command.CommandId, 0,
+                    plan.Members[0].CopyOperationId, "unproved", accepted, default));
+            await Assert.ThrowsExactlyAsync<MirrorPulseMutationAmbiguousException>(() =>
+                catalog.StartNamespaceDirectoryTransferCopyAsync(plan, 1, started, default));
+            var modified = plan with { Members = [plan.Members[0] with { SourceRevision = "changed-original" }, plan.Members[1]] };
+            await Assert.ThrowsExactlyAsync<MirrorPulseMutationAmbiguousException>(() =>
+                catalog.StartNamespaceDirectoryTransferCopyAsync(modified, 0, started, default));
+            await catalog.StartNamespaceDirectoryTransferCopyAsync(plan, 0, started, default);
+            await catalog.RecordNamespaceDirectoryTransferCopyAcceptedAsync(plan.Command.CommandId, 0,
+                plan.Members[0].CopyOperationId, "target-directory-receipt", accepted, default);
+            await catalog.StartNamespaceDirectoryTransferCopyAsync(plan, 1, accepted, default);
+        }
+
+        await using var reopened = await MirrorPulseProductCatalog.OpenAsync(fixture.Paths);
+        var copy = await reopened.ReadNamespaceDirectoryTransferCopyAsync(plan.Command.CommandId, default);
+        Assert.AreEqual(new MirrorPulseDirectoryTransferCopyStep(plan.Members[0].CopyOperationId, started,
+            "target-directory-receipt", accepted), copy.Steps[0]);
+        Assert.AreEqual(new MirrorPulseDirectoryTransferCopyStep(plan.Members[1].CopyOperationId, accepted, null, null), copy.Steps[1]);
+        await Assert.ThrowsExactlyAsync<MirrorPulseMutationAmbiguousException>(() =>
+            reopened.StartNamespaceDirectoryTransferCopyAsync(copy.Admission, 1, accepted.AddTicks(1), default));
+        await Assert.ThrowsExactlyAsync<InvalidOperationException>(() =>
+            reopened.RecordNamespaceDirectoryTransferCopyAcceptedAsync(plan.Command.CommandId, 0,
+                plan.Members[0].CopyOperationId, "later-revision", accepted, default));
+        await Assert.ThrowsExactlyAsync<InvalidOperationException>(() =>
+            reopened.RecordNamespaceDirectoryTransferCopyAcceptedAsync(plan.Command.CommandId, 1,
+                plan.Members[0].CopyOperationId, "different-member", accepted, default));
+        CollectionAssert.AreEquivalent(new[] { plan.SourceRoute.RootId, plan.TargetRoute.RootId },
+            (await reopened.ReadNamespaceDispatchFencedRootsAsync()).ToArray());
+    }
+
+    [TestMethod]
+    public async Task DirectoryTransferSealsEveryOriginalAndBothRootsInTheSameCommitAcrossOwners()
+    {
+        using var fixture = new Fixture();
+        MirrorPulseDirectoryTransferAdmission plan;
+        await using (var first = await MirrorPulseProductCatalog.OpenAsync(fixture.Paths))
+        {
+            plan = await PrepareDirectoryTransferFixtureAsync(first);
+            await ExecuteSqlAsync(fixture.Paths, """
+                CREATE TRIGGER interrupt_directory_transfer
+                BEFORE INSERT ON namespace_directory_transfer_ids WHEN NEW.journal_original=1
+                BEGIN SELECT RAISE(ABORT,'fixture interruption'); END;
+                """);
+            await Assert.ThrowsExactlyAsync<SqliteException>(() => first.PrepareNamespaceDirectoryTransferAsync(plan));
+            Assert.IsNull(await first.ReadNamespaceDirectoryTransferAsync(plan.Command.CommandId));
+            Assert.IsEmpty(await first.ReadNamespaceDispatchFencedRootsAsync());
+        }
+
+        await ExecuteSqlAsync(fixture.Paths, "DROP TRIGGER interrupt_directory_transfer;");
+        await using (var second = await MirrorPulseProductCatalog.OpenAsync(fixture.Paths))
+        {
+            await Assert.ThrowsExactlyAsync<ArgumentException>(() =>
+                second.PrepareNamespaceDirectoryTransferAsync(plan with { Members = plan.Members.Reverse().ToArray() }));
+            await Assert.ThrowsExactlyAsync<InvalidOperationException>(() =>
+                second.PrepareNamespaceDirectoryTransferAsync(plan with { Members = [plan.Members[0]], Originals = plan.Originals with { Members = [] } }));
+            Assert.IsEmpty(await second.ReadNamespaceDispatchFencedRootsAsync());
+            _ = await second.PrepareNamespaceDirectoryTransferAsync(plan);
+        }
+
+        await using var third = await MirrorPulseProductCatalog.OpenAsync(fixture.Paths);
+        var retained = await third.ReadNamespaceDirectoryTransferAsync(plan.Command.CommandId);
+        Assert.IsNotNull(retained);
+        CollectionAssert.AreEqual(plan.Members.ToArray(), retained.Members.ToArray());
+        Assert.AreEqual(plan.Originals, retained.Originals);
+        CollectionAssert.AreEquivalent(new[] { plan.SourceRoute.RootId, plan.TargetRoute.RootId },
+            (await third.ReadNamespaceDispatchFencedRootsAsync()).ToArray());
+        var pending = await third.ReadNamespacePendingOperationsAsync(plan.TargetRoute.RootId);
+        Assert.AreEqual(plan.Command.CommandId, pending.Single(x => x.Kind == MirrorPulseNamespacePendingOperationKind.Transfer).OperationId);
+        foreach (var parent in new[] { plan.SourceParent, plan.TargetParent })
+        {
+            var member = parent.Context.Member;
+            var intent = new MirrorPulseNamespaceBirthIntent(1, Guid.NewGuid(), member.RootId!.Value,
+                member.OriginId, parent.PermissionOperationId, member.LocalObject, member.RelativePath + "/unrelated.txt",
+                false, MirrorPulseNamespaceBirthOrigin.ControlledCreation, parent.Context.Protection.RoleSid, plan.PreparedAt.AddSeconds(1));
+            await Assert.ThrowsExactlyAsync<InvalidOperationException>(() => third.PrepareNamespaceBirthAsync(intent));
+            Assert.IsNull(await third.ReadNamespaceBirthAsync(intent.OperationId));
+        }
+        Assert.AreEqual(plan.Command, (await third.PrepareNamespaceDirectoryTransferAsync(plan)).Command);
+        await Assert.ThrowsExactlyAsync<InvalidOperationException>(() =>
+            third.PrepareNamespaceDirectoryTransferAsync(plan with
+            {
+                Members = [plan.Members[0], plan.Members[1] with { SourceRevision = "later-generation" }]
+            }));
+    }
+
+    private static async Task<MirrorPulseDirectoryTransferAdmission> PrepareDirectoryTransferFixtureAsync(
+        MirrorPulseProductCatalog catalog, byte[]? bytes = null, TransferFixture? setup = null, Guid? commandId = null)
+    {
+        setup ??= await PrepareTransferFixtureAsync(catalog, directory: true);
+        var child = await AddBornAsync(catalog, NestedBirth(setup.Source.Born, "payload.bin", false));
+        await catalog.RegisterNamespaceMemberAsync(BornMember(child, setup.Source.Member));
+        var source = await catalog.ReadNamespaceProtectedSubtreeAsync(setup.Source.Member.MemberId);
+        string originalPath = source[0].Protection.Context.Location.RelativePath;
+        var copied = source.Select(entry =>
+        {
+            bool directory = entry.Protection.Context.Member.IsDirectory;
+            return new MirrorPulseDirectoryTransferMember(entry,
+                setup.Plan.TargetRelativePath + entry.Protection.Context.Location.RelativePath[originalPath.Length..],
+                directory ? "source-directory-v1" : "source-file-v1", Guid.NewGuid(), Guid.NewGuid(),
+                directory ? null : Guid.NewGuid(), directory ? null : bytes is null
+                    ? new(setup.Plan.Length, setup.Plan.Sha256)
+                    : new(bytes.LongLength, Convert.ToHexString(SHA256.HashData(bytes))));
+        }).ToArray();
+        var prepared = source.Select(entry => entry.Protection.Context.Verification.ObservedAt)
+            .Append(setup.Plan.PreparedAt).Max().AddSeconds(1);
+        var command = new MirrorPulseNamespaceTransferCommandOrigin(1, commandId ?? Guid.NewGuid(), setup.Source.Member.MemberId,
+            setup.Plan.TargetParent.Context.Member.MemberId, "moved.txt", prepared);
+        var journal = new MirrorPulseNamespaceTransferJournalClaim(1, command.CommandId, 1, prepared,
+            [new(Guid.NewGuid(), 1, MirrorPulseWorkerChangeKind.ContentUpdate, source[1].Protection.Identity.ItemId,
+                source[1].Protection.Context.Location.RelativePath, null, false, prepared)]);
+        return new(1, command, setup.Plan.SourceRoute, setup.Plan.TargetRoute, setup.Plan.SourceParent, setup.Plan.TargetParent,
+            copied, journal, prepared);
+    }
+
+    private sealed class DirectoryTransferCopyWorker : IMirrorPulseWorkerUploadTransport, IMirrorPulseWorkerMutationTransport,
+        IMirrorPulseWorkerStatTransport, IMirrorPulseWorkerDirectoryPageSource, IMirrorPulseWorkerRangeTransport
+    {
+        internal MirrorPulseDirectoryTransferAdmission Plan = null!;
+        internal int Creates;
+        internal int Uploads;
+        internal byte[] Bytes = [];
+        internal bool ExtraTargetChild;
+        internal bool ChangedTargetDirectory;
+        internal bool DuplicateTargetIdentity;
+        internal bool Durable;
+        internal bool PreparesDurable;
+        internal List<MirrorPulseWorkerPrepareDirectoryCopyRequest> Preparations { get; } = [];
+
+        public bool SupportsDurableDirectoryCopy(Contracts.InstanceId instanceId, string rootKey) =>
+            Durable && instanceId == Plan.TargetRoute.InstanceId && rootKey == Plan.TargetRoute.RootKey;
+
+        public bool SupportsDurableDirectoryCopyPreparation(Contracts.InstanceId instanceId, string rootKey) =>
+            PreparesDurable && SupportsDurableDirectoryCopy(instanceId, rootKey);
+
+        public ValueTask PrepareDirectoryCopyAsync(MirrorPulseWorkerPrepareDirectoryCopyRequest request, CancellationToken cancellationToken)
+        {
+            var earlier = Preparations.Find(prepared => prepared.OperationId == request.OperationId);
+            if (earlier is not null) Assert.AreEqual(earlier, request);
+            Preparations.Add(request);
+            return ValueTask.CompletedTask;
+        }
+
+        public ValueTask<string?> StatAsync(MirrorPulseWorkerStatRequest request, CancellationToken token) =>
+            ValueTask.FromResult<string?>(request.NormalizedPath == "moved.txt" ? ChangedTargetDirectory ? "later-directory" : "directory-after-children" : "file-upload-receipt");
+
+        public ValueTask<Stream> ReadRangeAsync(MirrorPulseWorkerReadRangeRequest request, CancellationToken token)
+        {
+            Assert.AreEqual("file-upload-receipt", request.ExpectedRevision);
+            Assert.AreEqual("moved.txt/payload.bin", request.NormalizedPath);
+            return ValueTask.FromResult<Stream>(new MemoryStream(Bytes.AsSpan((int)request.Offset, (int)request.Length).ToArray(), writable: false));
+        }
+
+        public ValueTask<MirrorPulseWorkerDirectoryPage> ReadDirectoryPageAsync(MirrorPulseWorkerDirectoryPageRequest request, CancellationToken token)
+        {
+            Assert.IsTrue(request.ContinuationCursor.IsEmpty);
+            var directory = new MirrorPulseWorkerDirectoryEntry("directory-id", ChangedTargetDirectory ? "later-directory" : "directory-after-children",
+                "Directory", "moved.txt", null, null, null, false);
+            var file = new MirrorPulseWorkerDirectoryEntry(DuplicateTargetIdentity ? "directory-id" : "file-id",
+                "file-upload-receipt", "File", "moved.txt/payload.bin", Bytes.LongLength, null, null, false);
+            MirrorPulseWorkerDirectoryEntry[] entries = request.NormalizedPath == "" ? [directory] : ExtraTargetChild
+                ? [file, file with { RemoteId = "another-file-id", RelativePath = "moved.txt/another.bin" }]
+                : [file];
+            return ValueTask.FromResult(new MirrorPulseWorkerDirectoryPage(entries, ReadOnlyMemory<byte>.Empty, true));
+        }
+
+        public ValueTask<string> CreateDirectoryAsync(MirrorPulseWorkerCreateDirectoryRequest request, CancellationToken cancellationToken)
+        {
+            Assert.AreEqual(0, Uploads);
+            Assert.AreEqual(0, Creates++);
+            Assert.AreEqual(Plan.TargetRoute.InstanceId, request.InstanceId);
+            Assert.AreEqual(Plan.TargetRoute.RootKey, request.RootKey);
+            Assert.AreEqual("moved.txt", request.NormalizedPath);
+            Assert.AreEqual(Plan.Members[0].CopyOperationId, request.OperationId);
+            Assert.AreEqual(Durable ? PreparesDurable ? MirrorPulseDurableDirectoryCopyMode.Resume : MirrorPulseDurableDirectoryCopyMode.Start
+                : MirrorPulseDurableDirectoryCopyMode.Ordinary, request.DurableCopyMode);
+            if (PreparesDurable)
+                Assert.IsTrue(Preparations.Any(prepared => prepared.OperationId == request.OperationId && prepared.Length is null));
+            Assert.IsNull(request.DurableParentCopyOperationId);
+            Assert.IsTrue(request.MustBeAbsent);
+            return ValueTask.FromResult("directory-create-receipt");
+        }
+
+        public async ValueTask<string> UploadAsync(MirrorPulseWorkerUploadRequest request, CancellationToken cancellationToken)
+        {
+            Assert.AreEqual(1, Creates);
+            int attempt = Uploads++;
+            Assert.AreEqual(Durable ? attempt == 0 && !PreparesDurable ? MirrorPulseDurableDirectoryCopyMode.Start : MirrorPulseDurableDirectoryCopyMode.Resume
+                : MirrorPulseDurableDirectoryCopyMode.Ordinary, request.DurableCopyMode);
+            if (PreparesDurable)
+                Assert.IsTrue(Preparations.Any(prepared => prepared.OperationId == request.OperationId && prepared.Length == request.Length &&
+                    prepared.ContentSha256 == request.ExpectedContentSha256 && prepared.ParentCopyOperationId == request.DurableParentCopyOperationId));
+            Assert.AreEqual(Durable ? Plan.Members[0].CopyOperationId : (Guid?)null, request.DurableParentCopyOperationId);
+            Assert.AreEqual(Plan.TargetRoute.InstanceId, request.InstanceId);
+            Assert.AreEqual(Plan.TargetRoute.RootKey, request.RootKey);
+            Assert.AreEqual("moved.txt/payload.bin", request.NormalizedPath);
+            Assert.AreEqual(Plan.Members[1].CopyOperationId, request.OperationId);
+            Assert.IsNull(request.ExpectedRevision);
+            Assert.IsTrue(request.DestinationMustBeAbsent);
+            Assert.IsTrue(request.RequireConditionalTargetSupport);
+            Assert.IsFalse(request.Content.CanWrite);
+            using var received = new MemoryStream();
+            await request.Content.CopyToAsync(received, cancellationToken);
+            Bytes = received.ToArray();
+            Assert.AreEqual(request.ExpectedContentSha256, Convert.ToHexString(SHA256.HashData(Bytes)));
+            return "file-upload-receipt";
+        }
+
+        public ValueTask<string?> DeleteAsync(MirrorPulseWorkerDeleteRequest request, CancellationToken cancellationToken) =>
+            throw new AssertFailedException("Copy dispatch reached source deletion.");
+
+        public ValueTask<string> MoveAsync(MirrorPulseWorkerMoveRequest request, CancellationToken cancellationToken) =>
+            throw new AssertFailedException("Copy dispatch reached remote Move.");
+    }
+}

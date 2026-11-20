@@ -3,6 +3,7 @@ using System.Collections.Concurrent;
 using System.IO.Pipes;
 using System.Text;
 using System.Text.Json;
+using MirrorPulse.Adapter.Sdk;
 using MirrorPulse.Core.CloudFiles;
 using MirrorPulse.Core.Contracts;
 using MirrorPulse.Core.Diagnostics;
@@ -17,7 +18,9 @@ namespace MirrorPulse.Core.Host;
 public sealed class AdapterInstanceProcessSupervisor :
     IMirrorPulseWorkerRangeTransport, IMirrorPulseWorkerUploadTransport,
     IMirrorPulseWorkerStatTransport, IMirrorPulseWorkerDirectoryPageSource,
-    IMirrorPulseWorkerMutationTransport, IAsyncDisposable
+    IMirrorPulseWorkerMutationTransport, IMirrorPulseOriginalDirectoryRetirementTransport,
+    IMirrorPulseAtomicDirectoryDeletionTransport, IMirrorPulseDirectoryTransferDeletionTransport,
+    IAsyncDisposable
 {
     private readonly MirrorPulseProductCatalog _catalog;
     private readonly ISecureCredentialStore _credentials;
@@ -25,6 +28,7 @@ public sealed class AdapterInstanceProcessSupervisor :
     private readonly LocalRollingLogWriter? _log;
     private readonly CancellationTokenSource _shutdown = new();
     private readonly ConcurrentDictionary<InstanceId, AdapterWorkerReadRangeClient> _connected = new();
+    private readonly ConcurrentDictionary<InstanceId, AdapterWorkerReadRangeClient> _ready = new();
     private readonly ConcurrentDictionary<InstanceId, AdapterWorkerUploadClient> _uploads = new();
     private readonly ConcurrentDictionary<InstanceId, AdapterWorkerStatClient> _stats = new();
     private readonly ConcurrentDictionary<InstanceId, AdapterWorkerDirectoryPageClient> _directories = new();
@@ -53,6 +57,7 @@ public sealed class AdapterInstanceProcessSupervisor :
             throw new InvalidOperationException("The Adapter process supervisor is already running.");
         }
 
+        WorkerPersistentStateDirectory.RequireSeparateCaches(_catalog.WorkerStateRootPath, topology.Instances);
         _started = true;
         foreach (AdapterInstance instance in topology.Instances.Where(item => !item.Enabled))
         {
@@ -70,6 +75,14 @@ public sealed class AdapterInstanceProcessSupervisor :
         ArgumentNullException.ThrowIfNull(request);
         return ReadRangeCoreAsync(request, cancellationToken);
     }
+
+    /// <summary>Returns the actual connected channel version; a manifest claim cannot substitute for negotiation.</summary>
+    public int GetConnectedProtocolVersion(InstanceId instanceId) =>
+        _connected.TryGetValue(instanceId, out var channel) ? channel.ProtocolVersion :
+            throw new AdapterWorkerOperationException("Offline");
+
+    /// <summary>Observes the live negotiated Worker after its Connected frame, independently of journal/progress status.</summary>
+    public bool IsConnected(InstanceId instanceId) => !_shutdown.IsCancellationRequested && _ready.ContainsKey(instanceId);
 
     public ValueTask<string> UploadAsync(
         MirrorPulseWorkerUploadRequest request,
@@ -122,6 +135,120 @@ public sealed class AdapterInstanceProcessSupervisor :
         try { return await client.CreateDirectoryAsync(request, cancellationToken).ConfigureAwait(false); }
         finally { operation.Release(); }
     }
+
+    public async ValueTask PrepareDirectoryCopyAsync(MirrorPulseWorkerPrepareDirectoryCopyRequest request, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        if (!_mutations.TryGetValue(request.InstanceId, out var client) ||
+            !_instanceOperations.TryGetValue(request.InstanceId, out var operation))
+            throw new AdapterWorkerOperationException("Disconnected");
+        await operation.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try { await client.PrepareDirectoryCopyAsync(request, cancellationToken).ConfigureAwait(false); }
+        finally { operation.Release(); }
+    }
+
+    public async ValueTask<AdapterOwnedChildEffectReceipt> RetireOriginalDirectoryAsync(
+        AdapterDirectoryRetirementRequest request, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        var retained = await _catalog.StartOriginalDirectoryRetirementAsync(request, cancellationToken).ConfigureAwait(false);
+        if (retained.Receipt is { } accepted) return accepted;
+        Guid operationId = retained.Request.Operation.OperationId;
+        var instanceId = new InstanceId(retained.Request.Retirement.OriginalDirectory.InstanceId);
+        if (!IsConnected(instanceId) || !_mutations.TryGetValue(instanceId, out var client) ||
+            !_instanceOperations.TryGetValue(instanceId, out var operation))
+            throw new AdapterWorkerOperationException("Disconnected");
+
+        await operation.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            var current = await _catalog.ReadOriginalDirectoryRetirementAsync(operationId, cancellationToken).ConfigureAwait(false)
+                ?? throw new InvalidDataException("The original directory retirement request disappeared.");
+            if (current.Receipt is { } completed) return completed;
+            var receipt = await client.RetireOriginalDirectoryAsync(current.Request, cancellationToken).ConfigureAwait(false);
+            return await _catalog.AcceptOriginalDirectoryRetirementAsync(operationId, receipt, cancellationToken).ConfigureAwait(false);
+        }
+        finally { operation.Release(); }
+    }
+
+    bool IMirrorPulseAtomicDirectoryDeletionTransport.SupportsAtomicDirectoryDeletion(InstanceId instanceId) =>
+        SupportsAtomicDirectoryDeletion(instanceId);
+
+    ValueTask<AdapterAtomicDirectoryDeletionReceipt> IMirrorPulseAtomicDirectoryDeletionTransport.ExecuteAtomicDirectoryDeletionAsync(
+        AdapterDirectoryAdmissionRequest original, CancellationToken token,
+        IReadOnlyList<MirrorPulse.Core.Sync.MirrorPulseWorkerChangeCommand>? originals) =>
+        ExecuteAtomicDirectoryDeletionAsync(original, token, originals);
+
+    internal async ValueTask<AdapterAtomicDirectoryDeletionReceipt> ExecuteAtomicDirectoryDeletionAsync(
+        AdapterDirectoryAdmissionRequest original, CancellationToken token,
+        IReadOnlyList<MirrorPulse.Core.Sync.MirrorPulseWorkerChangeCommand>? originals = null)
+    {
+        ArgumentNullException.ThrowIfNull(original);
+        original = AdapterProtocolJson.Decode<AdapterDirectoryAdmissionRequest>(AdapterProtocolJson.Encode(original));
+        original.Validate();
+        var retained = await _catalog.ReadAtomicDirectoryBatchAsync(original.AdmissionId, token).ConfigureAwait(false);
+        if (retained is not null && retained.Request.OriginalRequest.RequestFingerprint != original.RequestFingerprint)
+            throw new InvalidDataException("The original atomic directory admission request changed.");
+        if (retained?.Receipt is { } accepted) return accepted;
+        var instanceId = new InstanceId(original.InstanceId);
+        if (!IsConnected(instanceId) || !_mutations.TryGetValue(instanceId, out var client) ||
+            !_instanceOperations.TryGetValue(instanceId, out var gate))
+            throw new AdapterWorkerOperationException("Disconnected");
+
+        await gate.WaitAsync(token).ConfigureAwait(false);
+        try
+        {
+            retained = await _catalog.ReadAtomicDirectoryBatchAsync(original.AdmissionId, token).ConfigureAwait(false);
+            if (retained is not null && retained.Request.OriginalRequest.RequestFingerprint != original.RequestFingerprint)
+                throw new InvalidDataException("The original atomic directory admission request changed.");
+            if (retained?.Receipt is { } completed) return completed;
+            client.RequireAtomicDirectorySupport(original);
+            if (retained is null)
+            {
+                var admission = await client.AdmitAtomicDirectoryAsync(original, token).ConfigureAwait(false);
+                retained = await _catalog.StartAtomicDirectoryBatchAsync(original, admission, token, originals).ConfigureAwait(false);
+            }
+            if (retained.Receipt is { } alreadyAccepted) return alreadyAccepted;
+            var receipt = await client.DeleteAtomicDirectoryAsync(retained.Request, token).ConfigureAwait(false);
+            return await _catalog.AcceptAtomicDirectoryBatchAsync(original.AdmissionId, receipt, token).ConfigureAwait(false);
+        }
+        finally { gate.Release(); }
+    }
+
+    internal bool SupportsAtomicDirectoryDeletion(InstanceId instanceId) => IsConnected(instanceId) &&
+        _mutations.TryGetValue(instanceId, out var client) && client.SupportsAtomicDirectoryDeletion;
+
+    bool IMirrorPulseDirectoryTransferDeletionTransport.SupportsDirectoryTransferDeletion(InstanceId instanceId) =>
+        SupportsAtomicDirectoryDeletion(instanceId);
+
+    ValueTask<AdapterDirectoryAdmission> IMirrorPulseDirectoryTransferDeletionTransport.AdmitDirectoryTransferSourceAsync(
+        AdapterDirectoryAdmissionRequest original, CancellationToken token) =>
+        RunDirectoryTransferSourceOperationAsync(new(original.InstanceId), (client, stop) => client.AdmitAtomicDirectoryAsync(original, stop), token);
+
+    ValueTask<AdapterAtomicDirectoryDeletionReceipt> IMirrorPulseDirectoryTransferDeletionTransport.DeleteDirectoryTransferSourceAsync(
+        AdapterAtomicDirectoryDeletionRequest original, CancellationToken token) =>
+        RunDirectoryTransferSourceOperationAsync(new(original.OriginalRequest.InstanceId),
+            (client, stop) => client.DeleteAtomicDirectoryAsync(original, stop), token);
+
+    private async ValueTask<T> RunDirectoryTransferSourceOperationAsync<T>(InstanceId instanceId,
+        Func<AdapterWorkerMutationClient, CancellationToken, ValueTask<T>> operation, CancellationToken token)
+    {
+        if (!IsConnected(instanceId) || !_mutations.TryGetValue(instanceId, out var client) ||
+            !_instanceOperations.TryGetValue(instanceId, out var gate))
+            throw new AdapterWorkerOperationException("Disconnected");
+        await gate.WaitAsync(token).ConfigureAwait(false);
+        try { return await operation(client, token).ConfigureAwait(false); }
+        finally { gate.Release(); }
+    }
+
+    public bool SupportsDurableDirectoryMove(InstanceId instanceId) => IsConnected(instanceId) &&
+        _mutations.TryGetValue(instanceId, out var client) && client.SupportsDurableDirectoryMove;
+
+    public bool SupportsDurableDirectoryCopy(InstanceId instanceId, string rootKey) => !_shutdown.IsCancellationRequested &&
+        _ready.TryGetValue(instanceId, out var channel) && channel.Protocol?.SupportsDurableDirectoryCopy(rootKey) == true;
+
+    public bool SupportsDurableDirectoryCopyPreparation(InstanceId instanceId, string rootKey) => !_shutdown.IsCancellationRequested &&
+        _ready.TryGetValue(instanceId, out var channel) && channel.Protocol?.SupportsDurableDirectoryCopyPreparation(rootKey) == true;
 
     private async ValueTask<Stream> ReadRangeCoreAsync(
         MirrorPulseWorkerReadRangeRequest request,
@@ -254,10 +381,12 @@ public sealed class AdapterInstanceProcessSupervisor :
         AdapterInstance instance,
         CancellationToken cancellationToken)
     {
+        var observation = new WorkerSessionFailureObservation();
+        WorkerSessionId sessionId = WorkerSessionId.New();
+        LogField[]? failureObservation = null;
         try
         {
             await SetPhaseAsync(instance.InstanceId, "Starting", cancellationToken).ConfigureAwait(false);
-            WorkerSessionId sessionId = WorkerSessionId.New();
             string runtimeIdentifier = System.Runtime.InteropServices.RuntimeInformation.ProcessArchitecture switch
             {
                 System.Runtime.InteropServices.Architecture.X64 => "win-x64",
@@ -270,48 +399,99 @@ public sealed class AdapterInstanceProcessSupervisor :
             AdapterInstanceWorkerPayload payload = AdapterInstanceWorkerLaunchResolver.Resolve(
                 topology, instance.InstanceId, sessionId, runtimeIdentifier, arguments);
             WorkerLaunchRequest request = payload.LaunchRequest;
+            string stateDirectory = WorkerPersistentStateDirectory.Prepare(_catalog.WorkerStateRootPath, instance.InstanceId);
             request = new WorkerLaunchRequest(request.InstanceId, request.WorkerSessionId,
                 request.ExecutablePath, request.WorkingDirectory, request.Arguments,
-                new Dictionary<string, string> { ["MP_TRANSFER_CACHE_DIR"] = instance.TransferCacheDirectory });
+                new Dictionary<string, string>
+                {
+                    ["MP_TRANSFER_CACHE_DIR"] = instance.TransferCacheDirectory,
+                    ["MP_WORKER_STATE_DIR"] = stateDirectory,
+                });
             Directory.CreateDirectory(instance.TransferCacheDirectory);
             int selectedVersion = 1;
+            observation.Advance(WorkerSessionStage.CreatePipe);
             await using var pipe = SecureNamedPipeServerFactory.Create(new NamedPipeServerOptions(pipeName)
             {
                 PipeOptions = PipeOptions.Asynchronous | PipeOptions.FirstPipeInstance,
             });
+            observation.Advance(WorkerSessionStage.CreateJob);
             using var job = WorkerJobObject.Create();
+            observation.Advance(WorkerSessionStage.StartProcess);
             using WorkerProcessHandle worker = WorkerProcessLauncher.Start(request);
+            bool jobAttached = false;
             try
             {
+                observation.Advance(WorkerSessionStage.AttachJob);
                 job.Attach(worker.Process);
+                jobAttached = true;
                 using var connectionTimeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
                 connectionTimeout.CancelAfter(TimeSpan.FromSeconds(15));
-                await pipe.WaitForConnectionAsync(connectionTimeout.Token).ConfigureAwait(false);
+                observation.Advance(WorkerSessionStage.AwaitPipe);
+                try
+                {
+                    await pipe.WaitForConnectionAsync(connectionTimeout.Token).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException) when (connectionTimeout.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
+                {
+                    observation.DeadlineExpired = true;
+                    throw;
+                }
+                observation.Advance(WorkerSessionStage.ValidatePeer);
                 if (worker.Process.HasExited)
                 {
                     throw new UnauthorizedAccessException("The launched Worker exited before its pipe handshake.");
                 }
                 NamedPipePeerIdentity.ValidateClient(pipe, worker.ProcessId, worker.Process.SessionId);
                 await ServeWorkerAsync(pipe, topology, instance, sessionId, version => selectedVersion = version,
+                    observation, () => observation.Capture(sessionId, worker.Process, pipe),
                     cancellationToken).ConfigureAwait(false);
+            }
+            catch
+            {
+                failureObservation = observation.Capture(sessionId, worker.Process, pipe);
+                throw;
             }
             finally
             {
-                if (pipe.IsConnected && !worker.Process.HasExited)
+                if (failureObservation is null)
                 {
-                    try
+                    observation.Advance(WorkerSessionStage.StopWorker);
+                    failureObservation = observation.Capture(sessionId, worker.Process, pipe);
+                }
+                try
+                {
+                    if (pipe.IsConnected && !worker.Process.HasExited)
                     {
-                        using var stopTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(2));
-                        await WriteAsync(pipe, new ControlFrameEnvelope(selectedVersion, "Stop", Guid.NewGuid(),
-                            instance.InstanceId, sessionId, false, JsonSerializer.SerializeToElement(new { })),
-                            stopTimeout.Token).ConfigureAwait(false);
-                        await worker.WaitForExitAsync(stopTimeout.Token).ConfigureAwait(false);
+                        try
+                        {
+                            using var stopTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+                            await WriteAsync(pipe, new ControlFrameEnvelope(selectedVersion, "Stop", Guid.NewGuid(),
+                                instance.InstanceId, sessionId, false, JsonSerializer.SerializeToElement(new { })),
+                                stopTimeout.Token).ConfigureAwait(false);
+                            await worker.WaitForExitAsync(stopTimeout.Token).ConfigureAwait(false);
+                        }
+                        catch (Exception exception) when (exception is IOException or OperationCanceledException or
+                            EndOfStreamException)
+                        {
+                            // The existing grace period ended; drain forced termination below.
+                        }
                     }
-                    catch (Exception exception) when (exception is IOException or OperationCanceledException or
-                        EndOfStreamException)
+                }
+                finally
+                {
+                    // Closing a kill-on-close Job Object only requests termination. Retain the
+                    // process reference until exit so private runtime mappings and file locks
+                    // cannot outlive supervisor disposal or race package/cache reclamation.
+                    if (jobAttached) job.Terminate();
+                    else if (!worker.Process.HasExited)
                     {
-                        // Disposing the Job Object below terminates the remaining process tree.
+                        try { worker.Process.Kill(entireProcessTree: true); }
+                        catch (InvalidOperationException) when (worker.Process.HasExited) { }
                     }
+                    // WaitForExitAsync may short-circuit through HasExited/GetExitCodeProcess
+                    // before Windows signals completed termination. The mature synchronous
+                    // wait uses that signal; await it without blocking the Host's control path.
+                    await Task.Run(worker.Process.WaitForExit, CancellationToken.None).ConfigureAwait(false);
                 }
             }
         }
@@ -320,23 +500,28 @@ public sealed class AdapterInstanceProcessSupervisor :
         }
         catch (Exception exception)
         {
-            await LogSessionFailureAsync(instance.InstanceId, exception).ConfigureAwait(false);
+            await LogSessionFailureAsync(instance.InstanceId, exception,
+                failureObservation ?? observation.Capture(sessionId)).ConfigureAwait(false);
             await SetPhaseAsync(instance.InstanceId, "Worker failed", CancellationToken.None,
                 exception.GetType().Name).ConfigureAwait(false);
         }
     }
 
-    private async Task LogSessionFailureAsync(InstanceId instanceId, Exception exception)
+    private async Task LogSessionFailureAsync(InstanceId instanceId, Exception exception, LogField[] observation)
     {
         if (_log is null) return;
         try
         {
             Exception cause = exception.GetBaseException();
+            LogField[] nativeFailure = cause is System.ComponentModel.Win32Exception native
+                ? [new("workerNativeErrorCode", native.NativeErrorCode.ToString(System.Globalization.CultureInfo.InvariantCulture))] : [];
             await _log.WriteAsync(new(LogLevel.Warning, "worker", "WorkerSessionFailed", DateTimeOffset.UtcNow,
                 [new("instanceId", instanceId.ToString()),
                  new("failureCategory", SafeDiagnosticPolicy.ClassifyFailure(cause)),
                  new("workerFailureCode", cause is AdapterWorkerOperationException failure ? failure.FailureCode : "Unknown"),
-                 new("hresult", cause.HResult.ToString("X8", System.Globalization.CultureInfo.InvariantCulture))]), CancellationToken.None).ConfigureAwait(false);
+                 new("hresult", cause.HResult.ToString("X8", System.Globalization.CultureInfo.InvariantCulture)),
+                 .. nativeFailure,
+                 .. observation]), CancellationToken.None).ConfigureAwait(false);
         }
         catch (Exception loggingFailure) when (loggingFailure is not OperationCanceledException) { }
     }
@@ -347,11 +532,24 @@ public sealed class AdapterInstanceProcessSupervisor :
         AdapterInstance instance,
         WorkerSessionId sessionId,
         Action<int> selectProtocol,
+        WorkerSessionFailureObservation observation,
+        Func<LogField[]> captureObservation,
         CancellationToken cancellationToken)
     {
+        observation.Advance(WorkerSessionStage.AwaitHello);
         using var helloDeadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         helloDeadline.CancelAfter(TimeSpan.FromSeconds(5));
-        ControlFrameEnvelope hello = await ReadAsync(pipe, helloDeadline.Token).ConfigureAwait(false);
+        ControlFrameEnvelope hello;
+        try
+        {
+            hello = await ReadAsync(pipe, helloDeadline.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (helloDeadline.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
+        {
+            observation.DeadlineExpired = true;
+            throw;
+        }
+        observation.Advance(WorkerSessionStage.Negotiate);
         ValidateFrame(hello, "Hello", instance.InstanceId, sessionId);
         AdapterWorkerProtocolSession protocol;
         try
@@ -365,6 +563,7 @@ public sealed class AdapterInstanceProcessSupervisor :
             await WriteAsync(pipe, new ControlFrameEnvelope(1, "HandshakeRejected", hello.RequestId,
                 instance.InstanceId, sessionId, true, JsonSerializer.SerializeToElement(new { code = exception.Message })),
                 cancellationToken).ConfigureAwait(false);
+            await LogSessionFailureAsync(instance.InstanceId, exception, captureObservation()).ConfigureAwait(false);
             await SetPhaseAsync(instance.InstanceId, "Worker error", cancellationToken, exception.Message).ConfigureAwait(false);
             return;
         }
@@ -375,6 +574,7 @@ public sealed class AdapterInstanceProcessSupervisor :
         var directory = new AdapterWorkerDirectoryPageClient(channel, instance.InstanceId, sessionId);
         var mutations = new AdapterWorkerMutationClient(channel, instance.InstanceId, sessionId);
         var instanceOperations = new SemaphoreSlim(1, 1);
+        observation.Advance(WorkerSessionStage.SendReady);
         await channel.WriteControlAsync(new ControlFrameEnvelope(1, "Ready", hello.RequestId,
             instance.InstanceId, sessionId, true, protocol.CreateReadyPayload(instance)),
             cancellationToken).ConfigureAwait(false);
@@ -396,6 +596,7 @@ public sealed class AdapterInstanceProcessSupervisor :
 
         try
         {
+            observation.Advance(WorkerSessionStage.ReceiveFrames);
             while (true)
             {
                 ControlFrameEnvelope frame = await ReadAsync(pipe, cancellationToken).ConfigureAwait(false);
@@ -447,7 +648,9 @@ public sealed class AdapterInstanceProcessSupervisor :
                             })), cancellationToken).ConfigureAwait(false);
                         break;
                     case "Connected":
+                        protocol.RecordConnectedCapabilities(frame.Payload);
                         await SetPhaseAsync(instance.InstanceId, "Connected", cancellationToken).ConfigureAwait(false);
+                        _ready[instance.InstanceId] = channel;
                         break;
                     case "TransferProgress":
                         await SaveTransferProgressAsync(instance.InstanceId, frame.Payload, cancellationToken)
@@ -464,7 +667,7 @@ public sealed class AdapterInstanceProcessSupervisor :
                     case "Error":
                         string code = frame.Payload.TryGetProperty("code", out JsonElement value)
                             ? value.GetString() ?? "Unknown" : "Unknown";
-                        await LogSessionFailureAsync(instance.InstanceId, new AdapterWorkerOperationException(code)).ConfigureAwait(false);
+                        await LogSessionFailureAsync(instance.InstanceId, new AdapterWorkerOperationException(code), captureObservation()).ConfigureAwait(false);
                         await SetPhaseAsync(instance.InstanceId, "Worker error", cancellationToken, code)
                             .ConfigureAwait(false);
                         return;
@@ -475,6 +678,7 @@ public sealed class AdapterInstanceProcessSupervisor :
         }
         finally
         {
+            _ready.TryRemove(instance.InstanceId, out _);
             _connected.TryRemove(instance.InstanceId, out _);
             _uploads.TryRemove(instance.InstanceId, out _);
             _stats.TryRemove(instance.InstanceId, out _);
@@ -486,7 +690,8 @@ public sealed class AdapterInstanceProcessSupervisor :
             stat.Close();
             directory.Close();
             mutations.Close();
-            instanceOperations.Dispose();
+            // RPCs already holding or waiting on this managed-only gate can still unwind.
+            // Removing the gate from the session lookup lets those callers drain it safely.
         }
     }
 
