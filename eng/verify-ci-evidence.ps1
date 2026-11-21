@@ -4,6 +4,7 @@ param(
     [Parameter(Mandatory)][ValidatePattern('^[0-9a-f]{40}$')][string]$ExpectedSourceSha,
     [switch]$RequireNative,
     [switch]$RequireInstalled,
+    [switch]$RequireInstalledShell,
     [switch]$RequireNamespace,
     [switch]$RequireNonAdminNamespace,
     [switch]$RequireOfficialCandidate
@@ -73,12 +74,15 @@ foreach ($job in $expected.Keys) {
             Assert-CliTransferObservations $crossPackage[0].observations -RequireSingleRoot -RequirePreparedRestart
         }
     }
-    if ($job -eq "official-package-arm64" -and $RequireInstalled) {
+    if ($job -eq "official-package-arm64" -and ($RequireInstalled -or $RequireInstalledShell)) {
         $installed = @($manifest.checks | Where-Object name -eq 'installed-msix')
         if ($installed.Count -ne 1 -or $installed[0].executed -ne $true -or $installed[0].uninstalled -ne $true -or
             $installed[0].osProductType -ne 1 -or $installed[0].osVersion -notmatch '^10\.0\.\d+\.\d+$' -or
             [version]$installed[0].osVersion -lt [version]'10.0.26100.0' -or
             $installed[0].minimumVersion -ne '10.0.26100.0') { throw "Supported desktop MSIX verification is missing." }
+        if ($RequireInstalledShell -and ($installed[0].shellRegistration -isnot [bool] -or
+            -not $installed[0].shellRegistration -or $installed[0].shellEntryPointVerified -isnot [bool] -or
+            -not $installed[0].shellEntryPointVerified)) { throw "Installed Shell registration and entry-point verification is missing." }
     }
     if ($job -eq "build-and-test") {
         $rejected = @($manifest.checks | Where-Object name -eq 'unsupported-server')

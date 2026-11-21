@@ -964,6 +964,7 @@ jobs:
             AdapterReleaseLockPath = 'artifacts/official-adapter-releases.json'
           }
           $parameters.RequireInstalled = $true
+          if ('${{ inputs.verify_shell }}' -eq 'true') { $parameters.RequireInstalledShell = $true }
           $parameters.InstalledPath = 'artifacts/evidence/installed.json'
           $parameters.TransferIntegrationPath = 'artifacts/evidence/cli-transfers.json'
           $parameters.CrossPackageTransferIntegrationPath = 'artifacts/evidence/cli-cross-package.json'

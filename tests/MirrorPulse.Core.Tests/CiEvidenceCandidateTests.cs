@@ -33,6 +33,12 @@ public sealed class CiEvidenceCandidateTests
     [DataRow("namespace-partial", false)]
     [DataRow("native-valid", true)]
     [DataRow("native-replaced", false)]
+    [DataRow("shell-valid", true)]
+    [DataRow("shell-install-only", false)]
+    [DataRow("shell-missing", false)]
+    [DataRow("shell-entry-point-unverified", false)]
+    [DataRow("shell-string-boolean", false)]
+    [DataRow("shell-install-only-legacy", true)]
     [DataRow("nonadmin-valid", true)]
     [DataRow("nonadmin-missing", false)]
     [DataRow("nonadmin-administrator", false)]
@@ -81,6 +87,18 @@ public sealed class CiEvidenceCandidateTests
                     : job == "build-and-test"
                         ? [new { name = "unsupported-server", executed = true, cliRejected = true, hostRejected = true, stateUntouched = true, osProductType = 3 }]
                         : [];
+                if (arm && scenario.StartsWith("shell-", StringComparison.Ordinal) && scenario != "shell-missing")
+                {
+                    object registered = scenario == "shell-string-boolean" ? "true" :
+                        !scenario.StartsWith("shell-install-only", StringComparison.Ordinal);
+                    checks = [.. checks, new
+                    {
+                        name = "installed-msix", executed = true, uninstalled = true,
+                        osProductType = 1, osVersion = "10.0.26200.0", minimumVersion = "10.0.26100.0",
+                        shellRegistration = registered,
+                        shellEntryPointVerified = scenario != "shell-entry-point-unverified",
+                    }];
+                }
                 if (arm && scenario.StartsWith("nonadmin-", StringComparison.Ordinal) && scenario != "nonadmin-missing")
                 {
                     var observations = await CreateOrdinaryUserObservationsAsync(repository, scenario, source, shared);
@@ -132,6 +150,8 @@ public sealed class CiEvidenceCandidateTests
             if (scenario != "legacy") start.ArgumentList.Add("-RequireOfficialCandidate");
             if (scenario.StartsWith("namespace-", StringComparison.Ordinal)) start.ArgumentList.Add("-RequireNamespace");
             if (scenario.StartsWith("native-", StringComparison.Ordinal)) start.ArgumentList.Add("-RequireNative");
+            if (scenario.StartsWith("shell-", StringComparison.Ordinal))
+                start.ArgumentList.Add(scenario == "shell-install-only-legacy" ? "-RequireInstalled" : "-RequireInstalledShell");
             if (scenario.StartsWith("nonadmin-", StringComparison.Ordinal)) start.ArgumentList.Add("-RequireNonAdminNamespace");
             using Process process = Process.Start(start)!;
             Task<string> output = process.StandardOutput.ReadToEndAsync();

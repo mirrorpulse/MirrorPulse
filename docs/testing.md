@@ -241,6 +241,11 @@ Omit `-RequireNative` and `-RequireInstalled` for a push/PR run, which does not 
 those gates. Omit `-RequireOfficialCandidate` only for historical reports produced
 before the shared-candidate contract.
 The three reports must name the same expected commit and their job-specific RID.
+For the S06 Windows acceptance run dispatched with `verify_shell=true`, also pass
+`-RequireInstalledShell -RequireNamespace -RequireNonAdminNamespace`. The installed
+Shell check requires both the package entry-point probe and actual Shell
+registration. The CI collector binds that evidence to the workflow run and
+checkout.
 
 Each atomic commit remains independently reviewable and passes its relevant
 local restore, Release build, tests, formatting, and ownership checks. Related

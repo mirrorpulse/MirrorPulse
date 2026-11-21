@@ -15,7 +15,8 @@ param(
     [string]$NamespaceNonAdminPath,
     [switch]$RequireNative,
     [switch]$RequireNamespace,
-    [switch]$RequireInstalled
+    [switch]$RequireInstalled,
+    [switch]$RequireInstalledShell
 )
 
 $ErrorActionPreference = "Stop"
@@ -148,8 +149,14 @@ if ($InstalledPath) {
         [version]$installed.osVersion -lt [version]'10.0.26100.0' -or $installed.minimumVersion -ne '10.0.26100.0') {
         throw "The installed MSIX evidence is incomplete or is not from a supported desktop build."
     }
-    $checks += [ordered]@{name="installed-msix";executed=$true;packageSha256=$installed.packageSha256;installedIdentity=$true;cliAlias=$true;hostAutoStart=$true;uninstalled=$true;cloudFilesExtension=$true;adapterAssociation=$true;shellRegistration=($installed.shellRegistration -eq $true);osVersion=$installed.osVersion;osProductType=1;minimumVersion=$installed.minimumVersion}
-} elseif ($RequireInstalled) { throw "The installed MSIX evidence is missing." }
+    $shellRegistered = $installed.shellRegistration -is [bool] -and $installed.shellRegistration
+    $shellEntryPointVerified = $installed.shellEntryPointVerified -is [bool] -and $installed.shellEntryPointVerified
+    if ($RequireInstalledShell -and (-not $shellRegistered -or -not $shellEntryPointVerified -or
+        $installed.sourceSha -cne $sourceSha -or ($env:GITHUB_RUN_ID -and $installed.runId -cne $env:GITHUB_RUN_ID))) {
+        throw "The installed Shell registration and entry-point proof must come from this source and workflow run."
+    }
+    $checks += [ordered]@{name="installed-msix";executed=$true;packageSha256=$installed.packageSha256;installedIdentity=$true;cliAlias=$true;hostAutoStart=$true;uninstalled=$true;cloudFilesExtension=$true;adapterAssociation=$true;shellRegistration=$shellRegistered;shellEntryPointVerified=$shellEntryPointVerified;osVersion=$installed.osVersion;osProductType=1;minimumVersion=$installed.minimumVersion}
+} elseif ($RequireInstalled -or $RequireInstalledShell) { throw "The installed MSIX evidence is missing." }
 if ($RejectedPath) {
     $rejected = Get-Content -LiteralPath $RejectedPath -Raw | ConvertFrom-Json
     if ($rejected.schemaVersion -ne 1 -or $rejected.runtime -ne $Runtime -or $rejected.osProductType -notin @(2,3) -or
