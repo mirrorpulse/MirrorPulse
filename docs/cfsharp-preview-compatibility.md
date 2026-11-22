@@ -1,14 +1,36 @@
 # CfSharp Preview Compatibility Report
 
-MirrorPulse pins `CfSharp` and `CfSharp.Storage.Sqlite` to `0.1.0-preview.11` from
-NuGet.org. The integration project owns CfSharp types and lifecycle; Core exposes
-MirrorPulse contracts to Adapters and the product UI.
+## S06 dependency
+
+MirrorPulse pins the NuGet.org packages `CfSharp` and `CfSharp.Storage.Sqlite` to
+`0.1.0-preview.16`. The matching `CfSharp.Native` package is locked transitively.
+All three publications identify commit `e0d5d32a7c24b2812d16315897524afd4b54e050`.
+The integration project owns CfSharp types and lifecycle. Core exposes
+MirrorPulse contracts to Adapters and the product UI. See the
+[official release](https://github.com/mirrorpulse/cfsharp/releases/tag/v0.1.0-preview.16).
+
+The Host continues to use CfSharp's official SQLite repository. It already
+supports replacing or clearing an operation's item association in place, which
+the local feed requires for metadata recovery. Existing official SQLite data
+opens without migration. The Host retries a temporarily withheld journal page
+at its original cursor and captured upper bound.
+
+Remote metadata uses CfSharp's default reconciliation policy when echo handling
+is enabled. Windows does not identify the writer of every attribute notification
+on a user-writable root. CfSharp retains uncertain observations with their
+original IDs and no item association. MirrorPulse captures the specific rescan
+boundary before discovery, then processes the retained observations under its
+existing unsupported-metadata policy. The Worker protocol has no metadata
+mutation. Earlier retained admissions keep their original publication identity.
+See the [CfSharp local change feed contract](https://github.com/mirrorpulse/cfsharp/blob/e0d5d32a7c24b2812d16315897524afd4b54e050/docs/local-change-feed.md).
+
+## Historical preview.11 qualification
 
 The core, SQLite provider and native NuGet publications identify the same source
 commit, `c28895203e20d588aa3d0eb1bb4c0e55c25896fb`. Package and lock updates do
-not establish native acceptance. Earlier native evidence remains bound to its
-original preview and MirrorPulse source. Preview.11 requires its own clean Windows
-native, signed Worker, installed and ordinary-user acceptance.
+not establish native acceptance. The historical Windows native, signed Worker,
+installed and ordinary-user evidence describes its exact preview and MirrorPulse
+source.
 
 Preview.11 fixes offline placeholder reference construction by distinguishing
 Cloud Files reparse points from file-system links during physical containment

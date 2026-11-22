@@ -40,8 +40,10 @@ revision. The unsupported result remains queryable across Host restarts; it does
 not claim remote metadata acceptance. Excluded notifications cannot occupy the
 bounded journal batch indefinitely and starve supported child operations.
 
-CfSharp owns the identity-verified echoes of remote creation and remote metadata
-application. MirrorPulse does not treat every directory notification as an echo.
+CfSharp owns the identity-verified echoes of remote creation. For remote metadata,
+MirrorPulse uses the default CfSharp reconciliation policy. Potential echoes
+without writer attribution are kept unbound behind a rescan boundary. The Host
+reconciles before settling each original under the metadata policy above.
 On the Windows watcher, file timestamp or attribute changes may instead arrive
 as content observations. A current owned `InSync` snapshot and mutually accepted
 content revision can settle that content observation without sending file bytes;
