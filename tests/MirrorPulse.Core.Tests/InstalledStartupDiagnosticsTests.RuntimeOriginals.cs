@@ -66,7 +66,7 @@ public sealed partial class InstalledStartupDiagnosticsTests
                 {
                     string assemblyName = Path.GetFileNameWithoutExtension(name);
                     string version = assemblyName == "MirrorPulse.Adapter.Sdk" ? "0.3.1+ed0153809e96ef80d80d303aefa45b30914f8e50" :
-                        assemblyName.StartsWith("CfSharp", StringComparison.Ordinal) ? "0.1.0-preview.15+6d34178a84949d2eae2f1d5dafa85b3620619589" : "1.0.0+" + source;
+                        assemblyName.StartsWith("CfSharp", StringComparison.Ordinal) ? "0.1.0-preview.16+e0d5d32a7c24b2812d16315897524afd4b54e050" : "1.0.0+" + source;
                     if (relative == "MirrorPulse.Core.dll" && scenario == "foreign-source") version = "1.0.0+" + new string('a', 40);
                     if (relative == "CfSharp.dll" && scenario == "foreign-library") version = "0.1.0-preview.7+" + new string('a', 40);
                     if (relative == "MirrorPulse.Core.dll" && scenario == "renamed") assemblyName = "Other.Core";

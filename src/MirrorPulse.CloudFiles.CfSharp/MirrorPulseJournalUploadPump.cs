@@ -99,9 +99,18 @@ public sealed partial class MirrorPulseJournalUploadPump : IAsyncDisposable
         _directoryConfirmation = new(catalog, router, state, namespaceActor, namespaceExecution);
         _namespaceWork = namespaceWork;
         if (fileSystem is not null)
-            _rescan = new(catalog, new MirrorPulseFullRescanPolicy(fileSystem, feed, state, router, catalog,
-                uploads, stats, mayDispatch, mutations, ranges, directories, conflicts, notifications, _scheduler, namespaceActor, namespaceExecution, namespaceWork).ReconcileAsync,
-                feed.AcknowledgeFullRescanAsync, ProjectRescanAsync);
+        {
+            var policy = new MirrorPulseFullRescanPolicy(fileSystem, feed, state, router, catalog,
+                uploads, stats, mayDispatch, mutations, ranges, directories, conflicts, notifications,
+                _scheduler, namespaceActor, namespaceExecution, namespaceWork);
+            // The upload pump is the single owner of its reconciliation attempts.
+            CloudLocalChangeRescan? boundary = null;
+            _rescan = new(catalog, token =>
+            {
+                boundary = feed.BeginFullRescan();
+                return policy.ReconcileAsync(token);
+            }, token => feed.AcknowledgeFullRescanAsync(boundary!, token), ProjectRescanAsync);
+        }
         _conflicts = conflicts;
         _notifications = notifications;
         ArgumentException.ThrowIfNullOrWhiteSpace(syncRootPath);

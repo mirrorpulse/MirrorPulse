@@ -91,10 +91,8 @@ internal sealed class MirrorPulseLocalBatchPlanBuilder(MirrorPulseRootRouter rou
             current.RelativePath, previous?.RootKey, previous?.RelativePath, change.IsDirectory, change.ItemId, change.ObservedAt)
         { PreviousInstanceId = previous is not null && previous.InstanceId != current.InstanceId ? previous.InstanceId : null } : null;
         if (command is not null) _complete.Add(command); else _completeRouting = false;
-        // CfSharp filters its proved remote-creation/application echoes. An
-        // unfiltered metadata observation cannot prove that a source accepted
-        // timestamps or attributes. The product promises content synchronization,
-        // and the current Worker contract has no metadata mutation capability.
+        // Metadata observations can still have uncertain origin after reconciliation.
+        // Record the unavailable Worker capability before settling each original.
         if (change.Kind == CloudLocalChangeKind.MetadataUpdate)
         {
             Block(change, current.InstanceId, MirrorPulseLocalOperationBlockReason.UnsupportedMetadataChange);

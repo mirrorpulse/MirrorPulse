@@ -40,6 +40,7 @@ public sealed class MirrorPulseRemoteBatchCoordinator
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(batch);
+        RequireSupportedAttributeEchoPolicy(options ?? CloudRemoteApplyOptions.Default);
         if (!batch.BatchId.StartsWith($"{instanceId}/", StringComparison.Ordinal))
         {
             throw new InvalidDataException("A remote batch must be scoped to its Adapter instance.");
@@ -98,6 +99,12 @@ public sealed class MirrorPulseRemoteBatchCoordinator
             cancellationToken).ConfigureAwait(false);
         await publish.CommitAsync(cancellationToken).ConfigureAwait(false);
         return result;
+    }
+
+    internal static void RequireSupportedAttributeEchoPolicy(CloudRemoteApplyOptions options)
+    {
+        if (options.AttributeEchoPolicy != CloudRemoteAttributeEchoPolicy.RequireReconciliation)
+            throw new NotSupportedException("MirrorPulse does not coordinate all native attribute writers for the echo lifetime.");
     }
 
     public async ValueTask<ReadOnlyMemory<byte>?> ReadCursorAsync(

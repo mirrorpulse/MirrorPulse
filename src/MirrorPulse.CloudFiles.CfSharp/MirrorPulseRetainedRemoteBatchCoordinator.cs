@@ -199,6 +199,7 @@ internal sealed class MirrorPulseRetainedRemoteBatchCoordinator(MirrorPulseProdu
     }
     private static void ValidatePolicy(CloudRemoteApplyOptions options)
     {
+        MirrorPulseRemoteBatchCoordinator.RequireSupportedAttributeEchoPolicy(options);
         if (options.ConflictResolver is not null || options.MaximumEntries is < 1 or > 65_536 ||
             options.EchoSuppressionObservationCount is < 1 or > 64 || options.EchoSuppressionLifetime <= TimeSpan.Zero || options.EchoSuppressionLifetime > TimeSpan.FromHours(1))
             throw new NotSupportedException("Durable incoming replay requires a bounded public policy without a transient conflict callback.");
