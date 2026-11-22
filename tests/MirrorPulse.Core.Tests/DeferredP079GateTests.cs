@@ -104,6 +104,12 @@ public sealed class DeferredP079GateTests
             $catalog.required.namespace=@($catalog.required.namespace|Where-Object {$_ -cne 'MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseJournalUploadSourceTests.NativeProductionPumpSettlesOriginalJournalBeforeAnExplicitRescanAcrossOwners'})
             $catalog.required.native=@($catalog.required.native|Where-Object {$_ -cne 'MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseJournalUploadSourceTests.NativeProductionPumpSettlesOriginalJournalBeforeAnExplicitRescanAcrossOwners'})
             $catalog.allowSkipped=@($catalog.allowSkipped|Where-Object {$_ -cne 'MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseJournalUploadSourceTests.NativeProductionPumpSettlesOriginalJournalBeforeAnExplicitRescanAcrossOwners'})
+            # The same-item attribute control adds one required native execution to P082.
+            $metadataWrite='MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseRemoteEchoIntegrationTests.NativeRemoteMetadataApplicationPreservesImmediateLocalAttributeWrite'
+            if(@($catalog.required.native|Where-Object {$_ -ceq $metadataWrite}).Count -ne 1 -or
+               @($catalog.required.namespace|Where-Object {$_ -ceq $metadataWrite}).Count -ne 0 -or
+               @($catalog.required.deferredP079|Where-Object {$_ -ceq $metadataWrite}).Count -ne 0){throw 'The P082 attribute control belongs only to the required native gate.'}
+            $catalog.required.native=@($catalog.required.native|Where-Object {$_ -cne $metadataWrite})
             $keepRemotePrefix='MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.'
             # Keep this original transfer/deferred-scope budget unchanged. The new
             # received-Delete cohort has its own exact selection/row/deadline gate.
