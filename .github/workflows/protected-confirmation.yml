@@ -1,21 +1,54 @@
 name: Protected content confirmation probe
+run-name: ${{ inputs.contract }} (${{ github.ref_name }})
 
 on:
   workflow_dispatch:
     inputs:
       contract:
-        description: Verify the historical prototype or the public managed API
+        description: Select protected confirmation, journal qualification or signed KeepRemote
         type: choice
         options:
           - prototype
           - managed
+          - access-journal
+          - journal-reconciliation
+          - disabled-local-birth
+          - signed-keep-remote
+          - signed-post-move
+          - signed-create-conflict
+          - signed-create-host
+          - signed-empty-create-host
+          - signed-move-host
+          - signed-move-only-host
+          - signed-disabled-host
+          - signed-file-reenable
         default: prototype
+      moved_source_conflict:
+        description: Select the concurrent source move case for signed-disabled-host
+        type: boolean
+        default: false
+      moved_source_address:
+        description: Select the backend state at the original address for the concurrent move case
+        type: choice
+        options:
+          - Absent
+          - Successor
+        default: Absent
+      large_backlog:
+        description: Select 80 original offline files and later active progress for signed-disabled-host
+        type: boolean
+        default: false
+      legacy_file_source:
+        description: Switch the prepared file source to signed Local V1 before reenable
+        type: boolean
+        default: false
 
 permissions:
   contents: read
 
 jobs:
   probe:
+    if: inputs.contract != 'signed-keep-remote' && inputs.contract != 'signed-post-move' && inputs.contract != 'signed-create-conflict' && inputs.contract != 'signed-create-host' && inputs.contract != 'signed-empty-create-host' && inputs.contract != 'signed-move-host' && inputs.contract != 'signed-move-only-host' && inputs.contract != 'signed-disabled-host' && inputs.contract != 'signed-file-reenable'
     strategy:
       fail-fast: false
       matrix:
@@ -25,7 +58,7 @@ jobs:
           - runner: windows-11-arm
             runtime: win-arm64
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 15
+    timeout-minutes: ${{ inputs.contract == 'disabled-local-birth' && 24 || 15 }}
     steps:
       - name: Check out source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -36,8 +69,11 @@ jobs:
           global-json-file: global.json
 
       - name: Restore locked test dependencies
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           pwsh ./eng/restore-adapter-sdk.ps1
+          if ($LASTEXITCODE -ne 0) { throw 'Pinned Adapter SDK acquisition failed.' }
           dotnet restore tests/MirrorPulse.CloudFiles.CfSharp.Tests --locked-mode
 
       - name: Build native test boundary
@@ -47,6 +83,7 @@ jobs:
         run: pwsh ./eng/prepare-native-ci-volume.ps1
 
       - name: Verify protected confirmation
+        if: inputs.contract != 'access-journal' && inputs.contract != 'journal-reconciliation' && inputs.contract != 'disabled-local-birth'
         shell: pwsh
         env:
           MIRRORPULSE_NATIVE_TEST: '1'
@@ -59,7 +96,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Protected content confirmation failed.' }
 
       - name: Collect safe probe evidence
-        if: always()
+        if: always() && inputs.contract != 'access-journal' && inputs.contract != 'journal-reconciliation' && inputs.contract != 'disabled-local-birth'
         shell: pwsh
         env:
           CONFIRMATION_CONTRACT: ${{ inputs.contract || 'prototype' }}
@@ -88,9 +125,282 @@ jobs:
           if ($report.selected -ne $expected -or $report.executed -ne $expected -or $report.passed -ne $expected) { throw 'Every protected confirmation case must execute and pass.' }
 
       - name: Upload safe probe report
-        if: always()
+        if: always() && inputs.contract != 'access-journal' && inputs.contract != 'journal-reconciliation' && inputs.contract != 'disabled-local-birth'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: evidence-protected-${{ matrix.runtime }}
           path: artifacts/protected-confirmation/report.json
           if-no-files-found: error
+
+      - name: Retain the original journal fixture deadlines
+        id: journal-budget
+        if: inputs.contract == 'access-journal' || inputs.contract == 'journal-reconciliation' || inputs.contract == 'disabled-local-birth'
+        shell: pwsh
+        env:
+          JOURNAL_SCOPE: ${{ inputs.contract }}
+        run: |
+          $minutes = & ./eng/verify-keep-remote-native.ps1 -BudgetOnly -Scope $env:JOURNAL_SCOPE
+          if ($LASTEXITCODE -ne 0) { throw 'Journal qualification selection failed.' }
+          "timeout_minutes=$minutes" >> $env:GITHUB_OUTPUT
+
+      - name: Verify the selected journal boundary
+        if: inputs.contract == 'access-journal' || inputs.contract == 'journal-reconciliation' || inputs.contract == 'disabled-local-birth'
+        timeout-minutes: ${{ fromJSON(steps.journal-budget.outputs.timeout_minutes) }}
+        shell: pwsh
+        env:
+          JOURNAL_SCOPE: ${{ inputs.contract }}
+          JOURNAL_ARCHITECTURE: ${{ matrix.runtime == 'win-arm64' && 'Arm64' || 'X64' }}
+        run: |
+          pwsh ./eng/verify-keep-remote-native.ps1 -Scope $env:JOURNAL_SCOPE -ExpectedArchitecture $env:JOURNAL_ARCHITECTURE
+
+      - name: Upload original journal qualification evidence
+        if: always() && (inputs.contract == 'access-journal' || inputs.contract == 'journal-reconciliation' || inputs.contract == 'disabled-local-birth')
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: evidence-${{ inputs.contract }}-${{ matrix.runtime }}
+          path: artifacts/test-results/keep-remote-native
+          if-no-files-found: error
+
+  signed-keep-remote:
+    if: inputs.contract == 'signed-keep-remote' || inputs.contract == 'signed-post-move' || inputs.contract == 'signed-create-conflict' || inputs.contract == 'signed-create-host' || inputs.contract == 'signed-empty-create-host' || inputs.contract == 'signed-move-host' || inputs.contract == 'signed-move-only-host' || inputs.contract == 'signed-disabled-host' || inputs.contract == 'signed-file-reenable'
+    runs-on: windows-11-arm
+    timeout-minutes: ${{ inputs.contract == 'signed-disabled-host' && 25 || 20 }}
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6
+        with:
+          global-json-file: global.json
+
+      - name: Restore locked test dependencies
+        shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          pwsh ./eng/restore-adapter-sdk.ps1
+          if ($LASTEXITCODE -ne 0) { throw 'Adapter SDK restore failed.' }
+          dotnet restore MirrorPulse.sln --locked-mode
+
+      - name: Freeze and verify the signed Local Adapter
+        shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          pwsh ./eng/prepare-native-ci-volume.ps1
+          if ($LASTEXITCODE -ne 0) { throw 'Disposable native volume preparation failed.' }
+          pwsh ./eng/verify-official-adapter-release-policy.ps1
+          if ($LASTEXITCODE -ne 0) { throw 'Official candidate selection failed.' }
+          pwsh ./eng/resolve-official-adapter-releases.ps1
+          if ($LASTEXITCODE -ne 0) { throw 'The official release candidate could not be frozen.' }
+          pwsh ./eng/aggregate-official-adapters.ps1 -ReleaseLockPath artifacts/official-adapter-releases.json -AdapterIds com.mirrorpulse.adapter.local -OutputDirectory artifacts/official-local
+
+      - name: Verify signed ARM64 coalesced KeepRemote through the default Host
+        if: inputs.contract == 'signed-keep-remote'
+        shell: pwsh
+        timeout-minutes: 10
+        env:
+          MIRRORPULSE_NATIVE_TEST: '1'
+        run: |
+          $packages = @(Get-ChildItem -LiteralPath artifacts/official-local -Recurse -Filter '*.mpadapter' -File)
+          if ($packages.Count -ne 1 -or -not (Test-Path -LiteralPath ($packages[0].FullName + '.signature.json'))) { throw 'The exact frozen signed Local package is required.' }
+          New-Item -ItemType Directory -Path artifacts/evidence/cli-keep-remote -Force | Out-Null
+          pwsh ./eng/verify-cli-integration.ps1 -Runtime win-arm64 -PackagePath $packages[0].FullName -Coalescing -CoalescingAction KeepRemote -EvidencePath artifacts/evidence/cli-keep-remote/report.json
+          if ($LASTEXITCODE -ne 0) { throw 'The real signed KeepRemote conflict choice failed.' }
+
+      - name: Download the signed Local V1 reference for the prepared file transfer
+        if: inputs.contract == 'signed-file-reenable' && inputs.legacy_file_source
+        shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          New-Item -ItemType Directory -Path artifacts/local-v1 -Force | Out-Null
+          gh release download v0.1.3 --repo mirrorpulse/adapter-local --dir artifacts/local-v1 --pattern 'com.mirrorpulse.adapter.local-0.1.3.mpadapter*'
+          if ($LASTEXITCODE -ne 0) { throw 'The signed Local V1 release could not be downloaded.' }
+
+      - name: Verify signed ARM64 prepared file transfer after reenable
+        if: inputs.contract == 'signed-file-reenable'
+        shell: pwsh
+        timeout-minutes: 15
+        env:
+          MIRRORPULSE_NATIVE_TEST: '1'
+          LEGACY_FILE_SOURCE: ${{ inputs.legacy_file_source }}
+        run: |
+          $packages = @(Get-ChildItem -LiteralPath artifacts/official-local -Recurse -Filter '*.mpadapter' -File)
+          if ($packages.Count -ne 1 -or -not (Test-Path -LiteralPath ($packages[0].FullName + '.signature.json'))) { throw 'The exact frozen signed Local package is required.' }
+          New-Item -ItemType Directory -Path artifacts/evidence/cli-file-reenable -Force | Out-Null
+          Copy-Item -LiteralPath artifacts/official-adapter-releases.json -Destination artifacts/evidence/cli-file-reenable/official-adapter-releases.json
+          $options = if ($env:LEGACY_FILE_SOURCE -eq 'true') {
+            @('-LegacySourcePackagePath', 'artifacts/local-v1/com.mirrorpulse.adapter.local-0.1.3.mpadapter')
+          } else { @('-VerifyPreparedTransferReenable') }
+          pwsh ./eng/verify-cli-transfers.ps1 -Runtime win-arm64 -PackagePath $packages[0].FullName @options -EvidencePath artifacts/evidence/cli-file-reenable/report.json
+          if ($LASTEXITCODE -ne 0) { throw 'The signed prepared file reenable fixture failed.' }
+
+      - name: Preserve signed ARM64 prepared file reenable originals
+        if: always() && inputs.contract == 'signed-file-reenable'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: cli-file-reenable-arm64-originals
+          path: artifacts/evidence/cli-file-reenable/**
+          if-no-files-found: ignore
+
+      - name: Verify signed ARM64 acknowledged Move and rejected content through the original executor
+        if: inputs.contract == 'signed-post-move'
+        shell: pwsh
+        timeout-minutes: 5
+        run: |
+          $packages = @(Get-ChildItem -LiteralPath artifacts/official-local -Recurse -Filter '*.mpadapter' -File)
+          if ($packages.Count -ne 1) { throw 'Require the one frozen official Local package.' }
+          pwsh ./eng/verify-signed-post-move.ps1 -PackagePath $packages[0].FullName
+          if ($LASTEXITCODE -ne 0) { throw 'The real signed post-move fixture failed.' }
+
+      - name: Verify signed ARM64 controlled Create KeepRemote through the default Host
+        if: inputs.contract == 'signed-create-host'
+        shell: pwsh
+        timeout-minutes: 10
+        env:
+          MIRRORPULSE_NATIVE_TEST: '1'
+        run: |
+          $packages = @(Get-ChildItem -LiteralPath artifacts/official-local -Recurse -Filter '*.mpadapter' -File)
+          if ($packages.Count -ne 1 -or -not (Test-Path -LiteralPath ($packages[0].FullName + '.signature.json'))) { throw 'Require one frozen official signed Local package.' }
+          New-Item -ItemType Directory -Path artifacts/evidence/cli-create-keep-remote -Force | Out-Null
+          pwsh ./eng/verify-cli-integration.ps1 -Runtime win-arm64 -PackagePath $packages[0].FullName -Coalescing -CoalescingAction KeepRemote -CreateConflict -EvidencePath artifacts/evidence/cli-create-keep-remote/report.json
+          if ($LASTEXITCODE -ne 0) { throw 'The default Host controlled-Create KeepRemote fixture failed.' }
+
+      - name: Preserve signed ARM64 default Host Create originals
+        if: always() && inputs.contract == 'signed-create-host'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: cli-create-keep-remote-arm64-originals
+          path: artifacts/evidence/cli-create-keep-remote/**
+          if-no-files-found: ignore
+
+      - name: Verify signed ARM64 empty controlled creation through the disabled default Host
+        if: inputs.contract == 'signed-empty-create-host'
+        shell: pwsh
+        timeout-minutes: 10
+        env:
+          MIRRORPULSE_NATIVE_TEST: '1'
+        run: |
+          $packages = @(Get-ChildItem -LiteralPath artifacts/official-local -Recurse -Filter '*.mpadapter' -File)
+          if ($packages.Count -ne 1 -or -not (Test-Path -LiteralPath ($packages[0].FullName + '.signature.json'))) { throw 'Require one frozen official signed Local package.' }
+          New-Item -ItemType Directory -Path artifacts/evidence/cli-empty-create-keep-remote -Force | Out-Null
+          pwsh ./eng/verify-cli-integration.ps1 -Runtime win-arm64 -PackagePath $packages[0].FullName -Coalescing -CoalescingAction KeepRemote -CreateConflict -EmptyCreate -EvidencePath artifacts/evidence/cli-empty-create-keep-remote/report.json
+          if ($LASTEXITCODE -ne 0) { throw 'The disabled default Host empty-creation fixture failed.' }
+
+      - name: Preserve signed ARM64 empty creation originals
+        if: always() && inputs.contract == 'signed-empty-create-host'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: cli-empty-create-keep-remote-arm64-originals
+          path: artifacts/evidence/cli-empty-create-keep-remote/**
+          if-no-files-found: ignore
+
+      - name: Verify signed ARM64 controlled Move and repeated edits through the default Host
+        if: inputs.contract == 'signed-move-host'
+        shell: pwsh
+        timeout-minutes: 10
+        env:
+          MIRRORPULSE_NATIVE_TEST: '1'
+        run: |
+          $packages = @(Get-ChildItem -LiteralPath artifacts/official-local -Recurse -Filter '*.mpadapter' -File)
+          if ($packages.Count -ne 1 -or -not (Test-Path -LiteralPath ($packages[0].FullName + '.signature.json'))) { throw 'Require one frozen official signed Local package.' }
+          New-Item -ItemType Directory -Path artifacts/evidence/cli-move-keep-remote -Force | Out-Null
+          pwsh ./eng/verify-cli-integration.ps1 -Runtime win-arm64 -PackagePath $packages[0].FullName -Coalescing -CoalescingAction KeepRemote -MoveConflict -EvidencePath artifacts/evidence/cli-move-keep-remote/report.json
+          if ($LASTEXITCODE -ne 0) { throw 'The default Host controlled-Move KeepRemote fixture failed.' }
+
+      - name: Preserve signed ARM64 default Host Move originals
+        if: always() && inputs.contract == 'signed-move-host'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: cli-move-keep-remote-arm64-originals
+          path: artifacts/evidence/cli-move-keep-remote/**
+          if-no-files-found: ignore
+
+      - name: Verify signed ARM64 pure rename KeepRemote through the default Host
+        if: inputs.contract == 'signed-move-only-host'
+        shell: pwsh
+        timeout-minutes: 10
+        env:
+          MIRRORPULSE_NATIVE_TEST: '1'
+        run: |
+          $packages = @(Get-ChildItem -LiteralPath artifacts/official-local -Recurse -Filter '*.mpadapter' -File)
+          if ($packages.Count -ne 1 -or -not (Test-Path -LiteralPath ($packages[0].FullName + '.signature.json'))) { throw 'Require one frozen official signed Local package.' }
+          New-Item -ItemType Directory -Path artifacts/evidence/cli-move-only-keep-remote -Force | Out-Null
+          pwsh ./eng/verify-cli-integration.ps1 -Runtime win-arm64 -PackagePath $packages[0].FullName -Coalescing -CoalescingAction KeepRemote -MoveOnlyConflict -EvidencePath artifacts/evidence/cli-move-only-keep-remote/report.json
+          if ($LASTEXITCODE -ne 0) { throw 'The default Host pure rename KeepRemote fixture failed.' }
+
+      - name: Preserve signed ARM64 pure rename originals
+        if: always() && inputs.contract == 'signed-move-only-host'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: cli-move-only-keep-remote-arm64-originals
+          path: artifacts/evidence/cli-move-only-keep-remote/**
+          if-no-files-found: ignore
+
+      - name: Verify signed ARM64 disabled operations and independent active progress through the default Host
+        if: inputs.contract == 'signed-disabled-host'
+        shell: pwsh
+        timeout-minutes: 15
+        env:
+          MIRRORPULSE_NATIVE_TEST: '1'
+          MOVED_SOURCE_CONFLICT: ${{ inputs.moved_source_conflict }}
+          MOVED_SOURCE_ADDRESS: ${{ inputs.moved_source_address }}
+          LARGE_BACKLOG: ${{ inputs.large_backlog }}
+        run: |
+          $packages = @(Get-ChildItem -LiteralPath artifacts/official-local -Recurse -Filter '*.mpadapter' -File)
+          if ($packages.Count -ne 1 -or -not (Test-Path -LiteralPath ($packages[0].FullName + '.signature.json'))) { throw 'Require one frozen official signed Local package.' }
+          New-Item -ItemType Directory -Path artifacts/evidence/cli-disabled-operations -Force | Out-Null
+          $arguments = @('-Runtime', 'win-arm64', '-PackagePath', $packages[0].FullName, '-EvidencePath', 'artifacts/evidence/cli-disabled-operations/report.json')
+          if ($env:MOVED_SOURCE_CONFLICT -eq 'true') {
+            $arguments += @('-MovedSourceConflict', '-MovedSourceAddress', $env:MOVED_SOURCE_ADDRESS)
+          }
+          if ($env:LARGE_BACKLOG -eq 'true') { $arguments += '-LargeBacklog' }
+          if ($env:MOVED_SOURCE_CONFLICT -eq 'true' -or $env:LARGE_BACKLOG -eq 'true') {
+            Copy-Item -LiteralPath artifacts/official-adapter-releases.json -Destination artifacts/evidence/cli-disabled-operations/official-adapter-releases.json
+          }
+          pwsh ./eng/verify-cli-disabled-operations.ps1 @arguments
+          if ($LASTEXITCODE -ne 0) { throw 'The disabled default Host operation chain failed.' }
+
+      - name: Preserve signed ARM64 disabled operation originals
+        if: always() && inputs.contract == 'signed-disabled-host'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: cli-disabled-operations-arm64-originals
+          path: artifacts/evidence/cli-disabled-operations/**
+          if-no-files-found: ignore
+
+      - name: Verify signed ARM64 rejected Create and original local-birth identity
+        if: inputs.contract == 'signed-create-conflict'
+        shell: pwsh
+        timeout-minutes: 5
+        run: |
+          $packages = @(Get-ChildItem -LiteralPath artifacts/official-local -Recurse -Filter '*.mpadapter' -File)
+          if ($packages.Count -ne 1) { throw 'Require the one frozen official Local package.' }
+          pwsh ./eng/verify-signed-create-conflict.ps1 -PackagePath $packages[0].FullName
+          if ($LASTEXITCODE -ne 0) { throw 'The real signed create-conflict fixture failed.' }
+
+      - name: Preserve signed ARM64 create-conflict originals
+        if: always() && inputs.contract == 'signed-create-conflict'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: signed-create-conflict-arm64-originals
+          path: artifacts/test-results/signed-create-conflict/**
+          if-no-files-found: ignore
+
+      - name: Preserve signed ARM64 KeepRemote results and failures
+        if: always() && inputs.contract == 'signed-keep-remote'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: cli-keep-remote-arm64-originals
+          path: artifacts/evidence/cli-keep-remote/**
+          if-no-files-found: ignore
+
+      - name: Preserve signed ARM64 post-move originals
+        if: always() && inputs.contract == 'signed-post-move'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: signed-post-move-arm64-originals
+          path: artifacts/test-results/signed-post-move/**
+          if-no-files-found: ignore

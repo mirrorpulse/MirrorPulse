@@ -18,25 +18,47 @@ public sealed class MirrorPulseFullRescanPolicy(CloudFileSystem fileSystem, Clou
     Func<InstanceId, bool> mayDispatch, IMirrorPulseWorkerMutationTransport? mutations = null,
     IMirrorPulseWorkerRangeTransport? ranges = null, IMirrorPulseWorkerDirectoryPageSource? directories = null,
     MirrorPulseConflictCenter? conflicts = null, MirrorPulseConflictNotificationBridge? notifications = null,
-    MirrorPulseInstanceScheduler? scheduler = null)
+    MirrorPulseInstanceScheduler? scheduler = null, MirrorPulseNamespaceActor? namespaceActor = null,
+    MirrorPulseNamespaceExecutionSession? namespaceExecution = null,
+    MirrorPulseNamespaceWorkAdmission? namespaceWork = null)
 {
     private readonly MirrorPulseMutationExecutor _executor = new(catalog);
     private readonly MirrorPulseMutationReadback _readback = new(stats, ranges, directories);
+    private readonly MirrorPulseNamespaceContentConfirmation _contentConfirmation = new(catalog, router, namespaceActor, namespaceExecution);
 
-    public ValueTask<int> ReconcileAsync(CancellationToken cancellationToken)
+    public async ValueTask<int> ReconcileAsync(CancellationToken cancellationToken)
     {
-        if (scheduler is null) return ReconcileCoreAsync(cancellationToken);
-        InstanceId[] instances = router.Registrations.Where(root => root.State == RootRegistrationState.Active && mayDispatch(root.InstanceId))
-            .Select(root => root.InstanceId).Distinct().OrderBy(instance => instance.Value).ToArray();
-        ValueTask<int> EnterAsync(int index, CancellationToken token) => index == instances.Length ? ReconcileCoreAsync(token) :
-            scheduler.RunAsync(instances[index], nested => EnterAsync(index + 1, nested), token);
-        return EnterAsync(0, cancellationToken);
+        var leases = new List<MirrorPulseNamespaceWorkAdmission.WorkLease>();
+        var admitted = new HashSet<RootId>();
+        try
+        {
+            var pending = (await catalog.ReadNamespaceDispatchFencedRootsAsync(cancellationToken).ConfigureAwait(false)).ToHashSet();
+            foreach (var root in router.Registrations.Where(root => root.State == RootRegistrationState.Active && mayDispatch(root.InstanceId) && !pending.Contains(root.RootId)))
+            {
+                if (namespaceWork is not null)
+                {
+                    if (!namespaceWork.TryEnter([root.RootId], out var lease)) continue;
+                    leases.Add(lease!);
+                }
+                admitted.Add(root.RootId);
+            }
+            if (scheduler is null) return await ReconcileCoreAsync(admitted, cancellationToken).ConfigureAwait(false);
+            InstanceId[] instances = router.Registrations.Where(root => admitted.Contains(root.RootId))
+                .Select(root => root.InstanceId).Distinct().OrderBy(instance => instance.Value).ToArray();
+            ValueTask<int> EnterAsync(int index, CancellationToken token) => index == instances.Length ? ReconcileCoreAsync(admitted, token) :
+                scheduler.RunAsync(instances[index], nested => EnterAsync(index + 1, nested), token);
+            return await EnterAsync(0, cancellationToken).ConfigureAwait(false);
+        }
+        finally { foreach (var lease in leases) lease.Dispose(); }
     }
 
-    private async ValueTask<int> ReconcileCoreAsync(CancellationToken cancellationToken)
+    private async ValueTask<int> ReconcileCoreAsync(HashSet<RootId> admitted, CancellationToken cancellationToken)
     {
+        if (!feed.IsStarted) throw new InvalidOperationException("Full rescan requires the authoritative local change feed.");
+        HashSet<RootId> pendingRoots = (await catalog.ReadNamespaceDispatchFencedRootsAsync(cancellationToken).ConfigureAwait(false)).ToHashSet();
         var observations = new Dictionary<string, (CloudItem Item, CloudItemSnapshot Snapshot)>(StringComparer.OrdinalIgnoreCase);
-        var enabled = router.Registrations.Where(root => root.State == RootRegistrationState.Active && mayDispatch(root.InstanceId)).ToArray();
+        var enabled = router.Registrations.Where(root => root.State == RootRegistrationState.Active && mayDispatch(root.InstanceId) &&
+            !pendingRoots.Contains(root.RootId) && admitted.Contains(root.RootId)).ToArray();
         // Complete discovery before any missing-path decision. Nonrecursive public enumeration
         // lets each materialized directory failure abort the scan rather than silently skip a subtree.
         foreach (RootRegistration root in enabled)
@@ -57,13 +79,46 @@ public sealed class MirrorPulseFullRescanPolicy(CloudFileSystem fileSystem, Clou
             }
         }
         IReadOnlyList<CloudItemState> known;
+        HashSet<Guid> pendingMoves = [];
         await using (ICloudStateTransaction transaction = await state.OpenStore.BeginTransactionAsync(cancellationToken).ConfigureAwait(false))
         {
             known = await transaction.Items.ListSubtreeAsync(string.Empty, cancellationToken).ConfigureAwait(false);
+            var candidates = known.Where(item => !item.IsTombstone && item.Kind == CloudItemKind.File && !string.IsNullOrEmpty(item.RemoteRevision) &&
+                observations.TryGetValue(NormalizePath(item.RelativePath), out var current) && current.Snapshot is
+                { IsPlaceholder: true, SynchronizationState: CloudSynchronizationState.NotInSync } && current.Snapshot.ItemId == item.ItemId)
+                .Select(item => item.ItemId).ToHashSet();
+            if (candidates.Count > 0 && transaction.Operations is ICloudOperationJournalPaging journal)
+            {
+                long through = await journal.GetHighWaterSequenceAsync(cancellationToken).ConfigureAwait(false);
+                long after = 0;
+                while (after < through && candidates.Count > 0)
+                {
+                    var page = await journal.ReadPageAsync(after, through, 256, cancellationToken).ConfigureAwait(false);
+                    foreach (var row in page.Operations)
+                        if (row.Kind == CloudStateOperationKind.Move && row.ItemId is { } id && candidates.Remove(id))
+                            pendingMoves.Add(id);
+                    if (!page.HasMore) break;
+                    if (page.LastScannedSequence <= after || page.LastScannedSequence >= through)
+                        throw new InvalidDataException("The pending Move journal scan did not advance within its exact boundary.");
+                    after = page.LastScannedSequence;
+                }
+            }
             await transaction.RollbackAsync(cancellationToken).ConfigureAwait(false);
         }
-        var previous = known.ToDictionary(item => NormalizePath(item.RelativePath), StringComparer.OrdinalIgnoreCase);
+        // A retired generation cannot be the upload baseline for a later local object.
+        // Tombstones still participate in genuine, not-yet-sent local deletions below.
+        var previous = known.Where(item => !item.IsTombstone)
+            .ToDictionary(item => NormalizePath(item.RelativePath), StringComparer.OrdinalIgnoreCase);
+        var completedDeletions = (await catalog.ReadAcknowledgedSourceDeletionsAsync(
+            known.Where(item => item.IsTombstone).Select(item => item.ItemId).ToHashSet(), cancellationToken).ConfigureAwait(false))
+            .ToLookup(completed => completed.ItemId);
         IReadOnlyList<MirrorPulseMutationRecord> incomplete = await catalog.ReadIncompleteMutationsAsync(cancellationToken).ConfigureAwait(false);
+        var atomicDeletes = new HashSet<Guid>();
+        var atomicOperations = await catalog.ReadUnsettledAtomicDirectoryOperationIdsAsync(cancellationToken).ConfigureAwait(false);
+        foreach (var record in incomplete)
+            if (record.Intent is { Kind: MirrorPulseWorkerChangeKind.Delete, JournalItemId: { } item } &&
+                atomicOperations.Contains(record.Intent.OperationId))
+                atomicDeletes.Add(item);
         int count = 0;
         var blockedDirectories = new List<string>();
         foreach (var (path, observation) in observations.OrderBy(pair => pair.Key, StringComparer.OrdinalIgnoreCase))
@@ -72,10 +127,45 @@ public sealed class MirrorPulseFullRescanPolicy(CloudFileSystem fileSystem, Clou
             MirrorPulseRoutedItem route = router.ResolvePath(path);
             if (observation.Item.Kind == CloudItemKind.Directory)
             {
-                if (!observation.Snapshot.IsPlaceholder)
+                MirrorPulseMutationRecord? pendingDirectory = incomplete.SingleOrDefault(record => record.Intent.Origin == MirrorPulseMutationOrigin.Rescan &&
+                    record.Intent.IsDirectory && record.Intent.InstanceId == route.InstanceId && record.Intent.RootKey == route.RootKey &&
+                    record.Intent.RelativePath == route.RelativePath);
+                if (!observation.Snapshot.IsPlaceholder || pendingDirectory is not null)
                 {
-                    await BlockAsync(route, path, MirrorPulseLocalOperationBlockReason.UnsupportedDirectoryCreate, cancellationToken).ConfigureAwait(false);
-                    blockedDirectories.Add(path + "/");
+                    if (mutations is null)
+                    {
+                        await BlockAsync(route, path, MirrorPulseLocalOperationBlockReason.UnsupportedDirectoryCreate, cancellationToken).ConfigureAwait(false);
+                        blockedDirectories.Add(path + "/");
+                        continue;
+                    }
+                    var directoryIntent = pendingDirectory?.Intent ?? new MirrorPulseMutationIntent(StableId($"directory/{route.InstanceId}/{route.RootKey}/{route.RelativePath}/{observation.Snapshot.LocalBinding?.LocalFileId}/{observation.Snapshot.LocalFileId}/{observation.Snapshot.CreationTime:O}"),
+                        route.InstanceId, route.RootKey, MirrorPulseWorkerChangeKind.Create, route.RelativePath, null, true,
+                        null, null, null, MirrorPulseMutationOrigin.Rescan);
+                    try
+                    {
+                        async ValueTask Confirm(string? revision, CancellationToken token)
+                        {
+                            MirrorPulseWorkerDirectoryEntry remote = await _readback.ReadMetadataAsync(directoryIntent, token).ConfigureAwait(false)
+                                ?? throw new MirrorPulseMutationAmbiguousException("The accepted rescan directory has no metadata.");
+                            await MirrorPulseDirectoryConfirmation.ConfirmAsync(fileSystem, router, directoryIntent, remote, revision, token).ConfigureAwait(false);
+                        }
+                        if (pendingDirectory is not null && pendingDirectory.State != MirrorPulseMutationState.Prepared)
+                            await _executor.ReconcileAsync(pendingDirectory, _readback.VerifyAsync, Confirm, cancellationToken).ConfigureAwait(false);
+                        else
+                            await _executor.ExecuteAsync(directoryIntent, async token => await mutations.CreateDirectoryAsync(new(route.InstanceId,
+                                route.RootKey, route.RelativePath, directoryIntent.OperationId), token).ConfigureAwait(false), Confirm, cancellationToken).ConfigureAwait(false);
+                        count++;
+                    }
+                    catch (NotSupportedException)
+                    {
+                        await BlockAsync(route, path, MirrorPulseLocalOperationBlockReason.UnsupportedDirectoryCreate, cancellationToken).ConfigureAwait(false);
+                        blockedDirectories.Add(path + "/");
+                    }
+                    catch (MirrorPulseWorkerMutationConflictException conflict)
+                    {
+                        await SaveConflictAsync(directoryIntent, path, conflict, cancellationToken).ConfigureAwait(false);
+                        blockedDirectories.Add(path + "/");
+                    }
                 }
                 continue;
             }
@@ -100,7 +190,8 @@ public sealed class MirrorPulseFullRescanPolicy(CloudFileSystem fileSystem, Clou
             // captures the object and previous identity. Never substitute this observation for
             // a historical intent's binding.
             CloudItemSnapshot lockedSnapshot = await observation.Item.InspectAsync(cancellationToken).ConfigureAwait(false);
-            MirrorPulseUploadBinding binding = MirrorPulseContentConfirmation.CaptureUploadBinding(lockedSnapshot);
+            MirrorPulseUploadBinding binding = await _contentConfirmation.CaptureUploadBindingAsync((CloudFile)observation.Item,
+                lockedSnapshot, cancellationToken).ConfigureAwait(false);
             if (observation.Snapshot.LocalBinding != lockedSnapshot.LocalBinding ||
                 pending is not null && pending.Intent.UploadBinding!.LocalObject != binding.LocalObject)
                 throw new MirrorPulseMutationAmbiguousException("The upload object changed after discovery or historical acceptance.");
@@ -108,6 +199,19 @@ public sealed class MirrorPulseFullRescanPolicy(CloudFileSystem fileSystem, Clou
             content.Position = 0;
             previous.TryGetValue(path, out CloudItemState? prior);
             string? expected = string.IsNullOrEmpty(prior?.RemoteRevision) ? null : prior.RemoteRevision;
+            if (pending is null && expected is not null && prior is not null && pendingMoves.Contains(prior.ItemId) &&
+                lockedSnapshot.ItemId == prior.ItemId && lockedSnapshot.RemoteId == prior.RemoteId &&
+                lockedSnapshot.RemoteRevision == expected && binding.Preparation == MirrorPulseContentPreparation.ReplacePlaceholderIdentity)
+            {
+                // An original Move retains its own remote baseline. Reconciliation must not
+                // create an independent upload or conflict for the already accepted bytes.
+                var proof = await catalog.ReadAcknowledgedContentProofAsync(route.InstanceId, route.RootKey, prior.ItemId, expected,
+                    binding.LocalObject, cancellationToken).ConfigureAwait(false);
+                if (proof is not null && proof.RemoteId == prior.RemoteId && proof.Length == content.Length &&
+                    string.Equals(proof.Sha256, hash, StringComparison.OrdinalIgnoreCase) &&
+                    lockedSnapshot.PlaceholderIdentity.Span.SequenceEqual(new CloudPlaceholderIdentity(prior.ItemId, proof.RemoteId, expected).Encode()))
+                    continue;
+            }
             var intent = pending?.Intent ?? new MirrorPulseMutationIntent(StableId($"upload/{route.InstanceId}/{route.RootKey}/{route.RelativePath}/{expected}/{hash}/{binding.LocalObject.VolumeSerialNumber:X16}/{binding.LocalObject.SyncRootFileId:N}/{binding.LocalObject.LocalFileId:N}"),
                 route.InstanceId, route.RootKey, MirrorPulseWorkerChangeKind.ContentUpdate, route.RelativePath, null, false,
                 expected, content.Length, hash, MirrorPulseMutationOrigin.Rescan, binding);
@@ -124,17 +228,13 @@ public sealed class MirrorPulseFullRescanPolicy(CloudFileSystem fileSystem, Clou
                     {
                         MirrorPulseWorkerDirectoryEntry remote = await FindRemoteAsync(route, token).ConfigureAwait(false);
                         if (remote.RemoteRevision != revision) throw new MirrorPulseMutationAmbiguousException();
-                        CloudPlaceholderIdentity identity = router.CreateFileIdentity(route.InstanceId, route.RootKey, remote.RemoteId, revision);
+                        CloudPlaceholderIdentity identity = await router.CreateCurrentFileIdentityAsync(route.InstanceId, route.RootKey, remote.RemoteId, revision, token).ConfigureAwait(false);
                         proof = new(intent.OperationId, intent.UploadBinding!, identity.ItemId, identity.RemoteId, revision,
                             intent.ContentLength!.Value, intent.ContentSha256!);
                         await catalog.SaveContentAcceptanceProofAsync(proof, token).ConfigureAwait(false);
                     }
-                    await feed.SuppressProviderEchoAsync(CloudStateOperationKind.MetadataUpdate, path,
-                        DateTimeOffset.UtcNow.AddSeconds(10), cancellationToken: token).ConfigureAwait(false);
-                    MirrorPulseContentConfirmationReceipt receipt = await MirrorPulseContentConfirmation.ConfirmAsync(
+                    MirrorPulseContentConfirmationReceipt receipt = await _contentConfirmation.ConfirmAsync(
                         fileSystem.GetFile(path), proof, token).ConfigureAwait(false);
-                    // After a native commit, retain the receipt even if caller cancellation arrived.
-                    await catalog.SaveContentConfirmationReceiptAsync(intent.OperationId, receipt, CancellationToken.None).ConfigureAwait(false);
                     if (!receipt.MayAcknowledge)
                         throw new MirrorPulseMutationAmbiguousException($"Local content confirmation requires recovery ({receipt.Outcome}).");
                 }
@@ -158,11 +258,17 @@ public sealed class MirrorPulseFullRescanPolicy(CloudFileSystem fileSystem, Clou
         // directory deletion: an unmaterialized remote subtree requires a separate policy decision.
         foreach (CloudItemState item in known.Where(item => !observations.ContainsKey(NormalizePath(item.RelativePath)) && !string.IsNullOrEmpty(item.RemoteRevision)))
         {
+            // An executing or accepted batch retains the original source effect
+            // while the separate official journal acknowledgement is pending.
+            if (atomicDeletes.Contains(item.ItemId)) continue;
             string path = NormalizePath(item.RelativePath);
             MirrorPulseRoutedItem route;
             try { route = router.ResolvePath(path); }
             catch (IOException) { continue; }
             if (route.RelativePath.Length == 0 || !enabled.Any(root => root.InstanceId == route.InstanceId && root.UniquenessKey == route.RootKey)) continue;
+            if (item.IsTombstone && completedDeletions[item.ItemId].Any(completed =>
+                completed.InstanceId == route.InstanceId && completed.RootKey == route.RootKey && completed.RelativePath == route.RelativePath &&
+                completed.IsDirectory == (item.Kind == CloudItemKind.Directory) && completed.ExpectedRevision == item.RemoteRevision)) continue;
             string parent = path[..path.LastIndexOf('/')];
             if (blockedDirectories.Any(prefix => path.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)) ||
                 (!observations.ContainsKey(parent) && !enabled.Any(root => root.DirectoryName == parent))) continue;

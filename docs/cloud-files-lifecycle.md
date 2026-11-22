@@ -6,6 +6,155 @@ instance routing, user policy, and a separate product catalog.
 
 ## Startup and shutdown today
 
+The owned sync-root protection coordinator locates original permission evidence
+by the complete native binding. It completes a retained permission attempt
+before rotating to the current Host namespace role, independently reads back
+the root descriptor, and retains the root and ancestor handles until disposal.
+It changes no ancestor ACL. A missing original binding with existing anchor
+history requires recovery instead of a new capture. This boundary is available
+to startup composition; default whole-tree initialization and readiness are
+still pending and cannot be inferred from anchor verification alone.
+
+Initial original-member registration composes the existing native registrar
+under shared instance scheduling and namespace ownership. It verifies the
+immutable capture seal and complete live inventory, registers the protected
+anchor before its descendants, then checks the inventory again. Partial or
+restart replay preserves the first member records while independently checking
+current permission epochs. This path does not recapture relocated or born
+members and does not declare the evolving product namespace ready.
+
+`namespace protection initialize` invokes that original-inventory composition
+through the actual Runtime and Host Control contract. Its initialization
+admission fences upload, rescan and remote dispatch before capture or permission
+writes. Existing capture, permission and member records retain their own state
+machines; initialization stores correlation and an audit fingerprint. Final
+native inventory checks precede one transaction that verifies the unchanged
+catalog snapshots, stores historical completion and releases only the owned
+initialization fences. Failure or cancellation retains admission for retry.
+The Runtime retains the live anchor guard and drains initialization on disposal.
+
+Pending initialization also exposes a separate catalog recovery lineage for
+registered members at their committed current positions. It retains moved and
+born provenance and unfinished original permission intents when parent and child
+roles differ after interruption. This read requires the pending root owner and
+does not relax ordinary current-role authorization or fabricate native checks.
+The default startup recovery executor and final current-tree admission remain
+required before this catalog boundary can enable source dispatch.
+
+The Runtime can recover an individual registered original under a pending
+initialization owner. It checks the actual current object and direct parent,
+replays unfinished permission work and persists a new role rotation at the
+completed current placement before applying it through CfSharp's protected
+scope. First capture and membership stay unchanged. Accepted current identities
+are read from the existing confirmed correlation rather than overwritten with
+the first local identity. Individual recovery leaves initialization fences in
+place; it is not the default startup executor or current-tree readiness.
+
+Registered born members also have a read-back recovery boundary. After their
+actual parent has recovered to the live role, it checks inherited protection and
+records the existing V3 located epoch, retaining first birth, observation,
+membership and committed movement. This boundary reads native metadata only;
+ordinary files requiring conversion or a new ACL need the separate before-write
+recovery path. Its verified epoch does not release initialization fences.
+
+Registered-born writes have their own immutable before-write actions. They
+retain the pending initializer, current member, placement, identity, parent
+epoch and descriptor target without replacing first birth observations. Their
+pending ownership also blocks ordinary controlled mutations in that root;
+the admitted initializer can recover dependent parents. A drained completion
+projects the existing V3 protection and releases only its action reservation in
+one product transaction. Initialization remains fenced until full-tree audit.
+Product catalog schema 51 creates empty action tables for older catalogs and
+does not invent native writes, verification or readiness during migration.
+
+The Runtime executes these actions under shared scheduling, namespace role and
+permission application admission. It converts a matching ordinary born file
+through CfSharp's public same-object scope, retains its current identity and
+latest bytes, restores only owned descriptors, then drains before native
+read-back and atomic product projection. A busy scope retains its action for
+retry. Completed replay returns historical facts without touching later edits.
+Default whole-tree startup and Host/CLI recovery orchestration remain required.
+Default automatic startup, dynamic moved/born graph recovery and newly added
+roots below an already protected anchor still require their full integration.
+
+Current-tree auditing reads the complete live membership, completed retirements,
+current placements, identities, protection and dispatch fences in one product
+transaction. Missing names, disconnected members and damaged retirement receipts
+cannot disappear from that inventory. The first capture remains historical;
+completed moves and born members are audited at their current locations.
+
+The native audit shares the Host's actor, execution role and permission admission,
+retains the actual anchor guard, and uses the existing member inspector for each
+object and its current direct parent. It then enumerates all actual local roots
+and descendants, rejecting missing or unexpected entries, binding changes,
+aliases, descriptor changes and public identity mismatches. It reads no source
+content and changes no permissions or membership. A final catalog comparison
+rejects concurrent changes to the retained graph or its fences. This receipt is
+a fresh observation; Host admission and initialization fence completion remain
+separate responsibilities, and later ordinary edits are not frozen by an audit.
+
+Current-inventory initialization completion can run immediately after that final
+audit inside the same actor, role and permission admission. Its product
+transaction checks the complete supplied inventory again, retains every captured
+original as either live or durably retired, rejects unfinished controlled work,
+and commits the completion receipt together with release of only the admitted
+initializer's root fences. Schema 52 distinguishes this receipt from the original
+inventory receipt; migration preserves old receipt bytes and hashes. Replaying
+a completed request supplies historical facts and leaves a newer initializer's
+fences and later file edits untouched. Automatic startup still requires the
+recovery orchestrator and fresh admission for the current Host lifecycle.
+
+The Runtime also exposes explicit recovery of the registered current graph. It
+persists the initializer before native work, recovers the anchor, and processes
+live original and born members in parent order using their existing coordinators.
+A compatible pending born action is resumed; a changed parent role requires an
+immutable successor. Retired members remain historical and are excluded from
+native traversal. Full current audit and completion run last, and the Runtime
+retains the resulting anchor guard until disposal. A busy scope leaves the same
+initializer queryable and retryable. Partially executed namespace operations,
+new root bootstrap and automatic startup still require their respective
+integration boundaries. `mp namespace protection recover-current` invokes this
+explicit Host operation through the versioned Control client. It returns the
+retained operation ID and historical inventory kind; pending requests remain
+queryable through the existing initialization status and discovery commands.
+
+A Host-owned root admission owner can close selected stable roots before recovery
+and drain their already accepted ordinary work. Other roots continue independently.
+Roots start closed in each new owner; fresh initialization or current recovery can
+reopen them only on successful scope exit after native audit and guard transfer.
+Cancellation or incomplete recovery keeps them closed. Historical completion
+does not reopen a new Host owner. This boundary is distinct from durable catalog
+fences and still needs all ordinary source, projection and bootstrap paths to be
+connected before automatic strict startup can use it.
+
+The demand provider can share that owner. It checks admission before a directory
+page or a new lazy range body reaches a Worker. Local top-level root pages stay
+available while roots are closed. An accepted range body retains its admission
+until consumer disposal and every active read, including disposal of the actual
+source body, have finished. A concurrent disposal closes new reads immediately
+and waits for those existing reads; a failed or canceled range cannot release
+the root while its consumer body remains open. Worker calls and lazy source
+disposal continue to use the captured normal user transport.
+
+Journal planning, excluded-metadata acknowledgment, dispatch, full rescan and
+remote polling can share the same root admission owner. Closed roots retain
+pending journal operations; a full rescan records their deferred requirement
+while continuing admitted roots. Polling retains admission across remote apply
+and durable snapshot projection. Remote batch application retains every affected
+root, including both sides of moves, and runs local application under the shared
+namespace actor and role. Source access remains on its normal-user transport.
+These application work leases do not replace CfSharp's complete native callback
+and official projection lifetime; automatic strict startup must drain that
+library lifecycle before permission recovery changes the live tree.
+
+New initialization admissions retain their requested original or current
+inventory route before native work. Pending discovery verifies ownership indexes
+and excludes historical completions, allowing startup to retain the original
+operation ID. A caller cannot change that route or complete it through the other
+inventory path. Schema 53 preserves older admission payloads and leaves their
+missing route unclassified; migration does not guess a route from current paths
+or treat a historical completion as live Host admission.
+
 Startup rebuilds missing remote conflict projections from CfSharp's decoded
 conflict queries. A mutation with a confirmed remote result and an absent
 official journal operation repairs its product projection before marking the
@@ -15,6 +164,11 @@ checks because they have a different acknowledgement boundary.
 
 1. The Host checks the Windows version, loads product configuration and the
    installed Adapter topology, then derives separate sync-root and data-root paths.
+   It captures the normal user in a Host-owned execution session. Worker RPC,
+   polling, range reads and uploads use that normal identity even when called
+   from local namespace work. Each bounded source range is read and disposed
+   before returning a detached buffer. Creating the execution session does not
+   apply ACLs or enable strict protection.
 2. `MirrorPulseCloudHostSession` obtains the current-user owner lock and ensures
    the Shell and CfSharp registrations agree with its stable root identity.
 3. The session starts one `CloudFileSystem` with the official
@@ -27,6 +181,10 @@ checks because they have a different acknowledgement boundary.
    the owner lock.
    Registration and the SQLite database remain for the next run. Explicit
    account removal has a separate unregister path.
+
+The execution identities are released after the Cloud Files session and Worker
+owner have stopped; active source operations drain before token release. A
+namespace identity cannot be created by relaxing permissions on failure.
 
 The WinUI install flow verifies and registers a signed `.mpadapter` package
 before creating an instance. Current packages carry their signed inventory at
@@ -57,18 +215,22 @@ journal. Restart repeats public discovery and uses stable mutation intents to
 avoid repeated remote writes. Permissions, cancellation and incomplete discovery
 leave the scan pending without authorizing deletion. A projection failure after
 official acknowledgement also retains the generation until recovery succeeds.
+Each deferred root request has its own durable generation. Entering discovery
+captures those requests in a fingerprinted product snapshot, including an
+explicit empty snapshot. Projection completes only the captured generation of
+an active, dispatchable, unfenced root. Requests made during discovery or
+acknowledgement survive the older scan; newly added and offline roots retain
+their obligations. Restart repeats discovery and captures current requests
+before acknowledgement. Migrated legacy markers become new administrative
+requests, without evidence that an earlier scan covered them.
 Rescan shares the per-instance scheduler with remote polling and streamed apply.
-Native conversion and update use CfSharp coordination. The current preview.2
-path requires a positive operation USN before final content verification and
-conditional in-sync confirmation. A missing or rejected precondition leaves
-`RemoteAccepted` and the scan generation pending. This boundary currently blocks
-complete native full-rescan acceptance.
-
-A disposable experiment validated exclusive protected references, complete
-content/identity verification and same-handle confirmation. The planned managed
-CfSharp operation will own that native boundary and official state recovery;
-MirrorPulse retains its anti-corruption layer and remote acceptance ledger.
-Production integration awaits that public API. See
+Native conversion, content confirmation and official state projection use
+CfSharp `0.1.0-preview.5` public APIs behind the anti-corruption layer. The actual
+registered policy must be `None`, as specified by the
+[content-only policy](content-sync-policy.md). A rejected native precondition or
+unfinished projection leaves `RemoteAccepted` and the scan generation pending.
+The historical independent experiment validates mechanisms; final product
+acceptance still requires the original native and installed reports. See
 [protected content confirmation](protected-content-confirmation.md) for evidence,
 ordinary-file identity requirements, and remaining cancellation/recovery gates.
 
@@ -149,6 +311,88 @@ consistency policy and remain a documented limitation.
 
 ## Recovery evidence and remaining gates
 
+When a runtime has a namespace work-admission owner, initialization first closes
+and drains every configured root, then persists its selected recovery route.
+It stops the old upload pump and awaits public CfSharp disposal before opening a
+fresh `CloudFileSystem` and official SQLite store session at the same registered
+path. This drains the native transfer and projection tail that can remain after
+the demand provider has returned. The prior anchor guard remains held throughout
+the transition. Library-dependent rename, conflict and upload services are
+rebuilt against the new owner; status reads and control operations using those
+services are serialized with the transition. Failed or cancelled recovery retains
+its admission and keeps the roots closed. Historical completion replay does not
+replace a library owner or reopen a root.
+
+A new original-inventory request checks retained current membership before closing
+live admission or reserving an initializer. A changed root Label, born member,
+completed relocation or retirement requires current-inventory recovery. The check
+is repeated after the work drain before committing the new initializer, covering
+a mutation that finished while recovery was being admitted. Existing pending
+owners retain their original route; this preflight does not settle or replace them.
+
+Current recovery selects each configured root by its complete public native
+binding and retained top-level membership. An original root retains its sealed
+capture; a later-born root retains its registered birth instead of inventing an
+original inventory. Version 2 admissions identify these sources separately while
+legacy admissions keep their original bytes and route. The selection is checked
+again after the work drain. It is recovery input, not permission or readiness:
+the new Runtime still restores the current role and audits every actual member
+before releasing its fences. Unregistered or partially executed births continue
+to require their own recovery.
+
+Runtime shutdown serializes with initialization before stopping dependent services.
+It closes the lifetime's work-admission owner, cancels and drains the upload pump,
+then awaits public library disposal and the remaining application work. The anchor
+and permission coordinator are released after both drains, including when an
+earlier shutdown step fails. This preserves the ancestor guard while a population
+callback is still committing its official projection. A shutdown admission owner
+is not reusable by a later Host lifetime.
+
+Controlled creation, import, replacement, movement and retirement retain root
+work leases through their actual execution and input cleanup. Their preparation
+and execution also hold the same library-owner gate as initialization, recovery
+and shutdown. A root lease alone cannot protect an operation in another root
+when the complete CfSharp instance is replaced. A queued recovery cancelled at
+this gate leaves no initializer or root fence behind. Historical status reads
+remain available while a controlled import waits for its official commit.
+The default Host now supplies one shared admission owner to demand population,
+the runtime upload pump and background polling. It enables automatic local
+namespace startup before Workers and polling start. Existing local original
+trees are captured before parent permissions change; missing configured roots
+are created as protected births. Retained initialization routes are resumed
+without replacing their operation IDs. Each configured root then receives its
+own current native audit; failed roots remain closed and root status exposes a
+safe recovery ID and code. A user with no Adapters still audits the actual anchor.
+Automatic recovery of every partially executed birth, move, retirement and
+replacement, and registration of all remote-apply births, remain integration
+work. An unresolved operation prevents admission instead of being forgotten.
+
+Host shutdown awaits control requests, polling, scheduled instance work and
+namespace callbacks before releasing the library, Workers, captured identities,
+catalog and Host lease. A disposal failure does not skip later resource owners;
+the original failure and any later failures remain observable. Concurrent disposal
+callers await the same teardown. Construction failure applies the same ordered
+cleanup and retains its original startup error. Root status reports nullable
+admission for contract compatibility and an explicit recovery operation/code
+when the current Host has kept a root closed.
+
+Explicit runtime initialization also supports a user with no configured Adapters.
+Version 3 retains an empty root inventory and its chosen recovery route. The
+runtime protects and registers the actual sync-root anchor, audits the empty local
+inventory, and retains its ancestor guard. A later owner performs a fresh current
+audit and role rotation. Empty recovery scopes drain the owner lifetime without
+admitting subsequently registered roots; versions 1 and 2 still require roots.
+Controlled first-level entry creation validates the complete configured root
+identity for active and disabled roots. Disabled entries can be protected locally;
+source enumeration, hydration and upload routing still reject disabled roots.
+
+Version 4 selects one current root for recovery. Its snapshot and completion name
+that root explicitly, audit every selected member and its shared anchor, and
+release only that operation's root reservation. Other roots retain their own
+protection and recovery state. A scoped receipt cannot complete a whole-tree
+admission. The runtime retains an anchor guard even when a selected root fails,
+and opens that root's work admission only after its fresh native audit succeeds.
+
 An opt-in Windows test uses an external consumer process to enumerate a
 partial directory and read an online-only placeholder, then reopens the same
 CfSharp database and reads again. Another test exits a separate process with
@@ -156,7 +400,7 @@ an open SQLite transaction and verifies committed journal, partial batch,
 conflict, echo, and checkpoint data survive while the unfinished write does
 not. It also performs a SQLite integrity check.
 
-CfSharp `0.1.0-preview.2` provides the remote conflict and keep-local APIs
+CfSharp `0.1.0-preview.5` provides the remote conflict and keep-local APIs
 used here. The ARM64 CLI integration gate installs a signed Local Adapter,
 reads a Cloud Files range, queues and drains an offline upload, applies a
 remote batch, then verifies conflict and cursor state across Host restarts.

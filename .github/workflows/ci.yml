@@ -4,10 +4,42 @@ on:
   pull_request:
   workflow_dispatch:
     inputs:
+      file_transfer_acceptance_only:
+        description: Run the signed ARM64 Local and Local/WebDAV CLI file transfers only
+        type: boolean
+        default: false
+      s06_recovery_only:
+        description: Run only the signed ARM64 S06 recovery scenarios
+        type: boolean
+        default: false
+      directory_acceptance_only:
+        description: Run only signed Local directory Delete, Move, and cross-instance directory and local-only file transfer acceptance
+        type: boolean
+        default: false
       verify_shell:
         description: Run the Shell registration probe from the installed App process
         type: boolean
         default: false
+      verify_atomic_directory:
+        description: Run the signed Local atomic directory acceptance on x64 and ARM64
+        type: boolean
+        default: false
+      verify_directory_move:
+        description: Run signed Local directory Move acceptance on x64 and ARM64
+        type: boolean
+        default: false
+      verify_directory_transfer:
+        description: Run signed cross-instance directory and local-only file transfer acceptance on x64 and ARM64
+        type: boolean
+        default: false
+      verify_prepared_directory_copy:
+        description: Run focused recovery acceptance with a signed Local package that supports copy preparation
+        type: boolean
+        default: false
+      local_atomic_preview:
+        description: Published Local preview tag for signed directory acceptance
+        type: string
+        required: false
   push:
     branches:
       - main
@@ -17,7 +49,18 @@ permissions:
   contents: read
 
 jobs:
+  signed-atomic-directory:
+    if: github.event_name == 'workflow_dispatch' && !inputs.s06_recovery_only && !inputs.file_transfer_acceptance_only && (inputs.directory_acceptance_only || inputs.verify_atomic_directory || inputs.verify_directory_move || inputs.verify_directory_transfer || inputs.verify_prepared_directory_copy)
+    uses: ./.github/workflows/signed-atomic-directory.yml
+    with:
+      local_preview: ${{ inputs.local_atomic_preview }}
+      verify_atomic_directory: ${{ (inputs.directory_acceptance_only && !inputs.verify_prepared_directory_copy) || inputs.verify_atomic_directory }}
+      verify_directory_move: ${{ (inputs.directory_acceptance_only && !inputs.verify_prepared_directory_copy) || inputs.verify_directory_move }}
+      verify_directory_transfer: ${{ (inputs.directory_acceptance_only && !inputs.verify_prepared_directory_copy) || inputs.verify_directory_transfer }}
+      verify_prepared_directory_copy: ${{ inputs.verify_prepared_directory_copy }}
+
   official-adapter-candidate:
+    if: github.event_name != 'workflow_dispatch' || inputs.s06_recovery_only || inputs.file_transfer_acceptance_only || !(inputs.directory_acceptance_only || inputs.verify_prepared_directory_copy) || inputs.verify_shell
     runs-on: windows-latest
     steps:
       - name: Check out the candidate product source
@@ -31,14 +74,151 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Official candidate selection failed.' }
           pwsh ./eng/resolve-official-adapter-releases.ps1
           if ($LASTEXITCODE -ne 0) { throw 'The official release candidate could not be frozen.' }
+          pwsh ./eng/restore-adapter-sdk.ps1
+          if ($LASTEXITCODE -ne 0) { throw 'The exact pinned Adapter SDK could not be frozen.' }
       - name: Share the exact official release candidate
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: official-adapter-release-lock
-          path: artifacts/official-adapter-releases.json
+          path: |
+            artifacts/official-adapter-releases.json
+            artifacts/sdk-feed
           if-no-files-found: error
 
+  signed-file-transfer:
+    if: github.event_name == 'workflow_dispatch' && !inputs.s06_recovery_only && inputs.file_transfer_acceptance_only
+    needs: official-adapter-candidate
+    runs-on: windows-11-arm
+    timeout-minutes: 30
+    env:
+      MIRRORPULSE_NATIVE_TEST: '1'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          name: official-adapter-release-lock
+          path: artifacts
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6
+        with:
+          global-json-file: global.json
+      - name: Prepare the locked build inputs and official Local package
+        id: prepare
+        shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          ./eng/restore-adapter-sdk.ps1 -RequireCachedPackage
+          dotnet restore MirrorPulse.sln --locked-mode
+          if ($LASTEXITCODE -ne 0) { throw 'Locked restore failed.' }
+          ./eng/prepare-native-ci-volume.ps1
+          ./eng/aggregate-official-adapters.ps1 -ReleaseLockPath artifacts/official-adapter-releases.json -AdapterIds com.mirrorpulse.adapter.local -OutputDirectory artifacts/official-local
+      - name: Verify signed Local file transfers across an actual Host restart
+        shell: pwsh
+        timeout-minutes: 10
+        run: |
+          $packages = @(Get-ChildItem -LiteralPath artifacts/official-local -Recurse -Filter '*.mpadapter' -File)
+          if ($packages.Count -ne 1) { throw 'The exact frozen signed Local package is required.' }
+          pwsh -NoProfile -File ./eng/verify-cli-transfers.ps1 -Runtime win-arm64 -PackagePath $packages[0].FullName -EvidencePath artifacts/evidence/cli-transfers.json
+          if ($LASTEXITCODE -ne 0) { throw 'The signed Local file transfer fixture failed.' }
+      - name: Verify signed Local and WebDAV file transfers across an actual Host restart
+        if: ${{ !cancelled() && steps.prepare.outcome == 'success' }}
+        shell: pwsh
+        timeout-minutes: 10
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          pwsh -NoProfile -File ./eng/verify-cli-cross-package.ps1 -Runtime win-arm64 -ReleaseLockPath artifacts/official-adapter-releases.json -LocalPackageDirectory artifacts/official-local -WebDavPackageDirectory artifacts/official-transfer-webdav -EvidencePath artifacts/evidence/cli-cross-package.json
+          if ($LASTEXITCODE -ne 0) { throw 'The signed Local and WebDAV file transfer fixture failed.' }
+      - name: Preserve both signed fixture reports and raw failure observations
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: signed-file-transfer-arm64-originals
+          path: |
+            artifacts/evidence/cli-transfers.json
+            artifacts/evidence/cli-transfers.originals/**
+            artifacts/evidence/cli-cross-package.json
+            artifacts/evidence/cli-cross-package.originals/**
+            artifacts/official-adapter-releases.json
+          if-no-files-found: warn
+
+  signed-s06-recovery:
+    if: github.event_name == 'workflow_dispatch' && (inputs.s06_recovery_only || (inputs.verify_shell && !inputs.file_transfer_acceptance_only))
+    needs: official-adapter-candidate
+    runs-on: windows-11-arm
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        scenario: [disabled-backlog, legacy-source, edited-source]
+    env:
+      MIRRORPULSE_NATIVE_TEST: '1'
+      S06_RECOVERY_SCENARIO: ${{ matrix.scenario }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          name: official-adapter-release-lock
+          path: artifacts
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6
+        with:
+          global-json-file: global.json
+      - name: Prepare the frozen signed Local package and locked build inputs
+        shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          pwsh ./eng/restore-adapter-sdk.ps1 -RequireCachedPackage
+          if ($LASTEXITCODE -ne 0) { throw 'The candidate Adapter SDK could not be restored.' }
+          dotnet restore MirrorPulse.sln --locked-mode
+          if ($LASTEXITCODE -ne 0) { throw 'Locked restore failed.' }
+          pwsh ./eng/prepare-native-ci-volume.ps1
+          if ($LASTEXITCODE -ne 0) { throw 'The disposable native volume could not be prepared.' }
+          pwsh ./eng/aggregate-official-adapters.ps1 -ReleaseLockPath artifacts/official-adapter-releases.json -AdapterIds com.mirrorpulse.adapter.local -OutputDirectory artifacts/official-local
+          if ($LASTEXITCODE -ne 0) { throw 'The frozen signed Local package could not be restored.' }
+      - name: Download the signed Local V1 reference
+        if: matrix.scenario == 'legacy-source'
+        shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          New-Item -ItemType Directory -Path artifacts/local-v1 -Force | Out-Null
+          gh release download v0.1.3 --repo mirrorpulse/adapter-local --dir artifacts/local-v1 --pattern 'com.mirrorpulse.adapter.local-0.1.3.mpadapter*'
+          if ($LASTEXITCODE -ne 0) { throw 'The signed Local V1 release could not be downloaded.' }
+      - name: Verify signed recovery against the same candidate
+        shell: pwsh
+        timeout-minutes: 15
+        run: |
+          $packages = @(Get-ChildItem -LiteralPath artifacts/official-local -Recurse -Filter '*.mpadapter' -File)
+          if ($packages.Count -ne 1 -or -not (Test-Path -LiteralPath ($packages[0].FullName + '.signature.json'))) { throw 'The exact frozen signed Local package is required.' }
+          $evidencePath = Join-Path 'artifacts/evidence' $env:S06_RECOVERY_SCENARIO
+          New-Item -ItemType Directory -Path $evidencePath -Force | Out-Null
+          $report = Join-Path $evidencePath 'report.json'
+          switch -CaseSensitive ($env:S06_RECOVERY_SCENARIO) {
+            'disabled-backlog' {
+              pwsh ./eng/verify-cli-disabled-operations.ps1 -Runtime win-arm64 -PackagePath $packages[0].FullName -LargeBacklog -EvidencePath $report
+            }
+            'legacy-source' {
+              pwsh ./eng/verify-cli-transfers.ps1 -Runtime win-arm64 -PackagePath $packages[0].FullName -LegacySourcePackagePath artifacts/local-v1/com.mirrorpulse.adapter.local-0.1.3.mpadapter -EvidencePath $report
+            }
+            'edited-source' {
+              pwsh ./eng/verify-cli-disabled-operations.ps1 -Runtime win-arm64 -PackagePath $packages[0].FullName -EditedSourceConflict -EvidencePath $report
+            }
+            default { throw 'The signed S06 recovery scenario is unknown.' }
+          }
+          if ($LASTEXITCODE -ne 0) { throw 'The signed S06 recovery scenario failed.' }
+      - name: Preserve original evidence and the shared release candidate
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: s06-${{ matrix.scenario }}-arm64-originals
+          path: |
+            artifacts/evidence/${{ matrix.scenario }}/**
+            artifacts/official-adapter-releases.json
+          if-no-files-found: warn
+
   build-and-test:
+    if: github.event_name != 'workflow_dispatch' || (!inputs.s06_recovery_only && !inputs.file_transfer_acceptance_only)
     needs: official-adapter-candidate
     runs-on: windows-latest
     steps:
@@ -58,7 +238,8 @@ jobs:
 
       - name: Restore
         run: |
-          pwsh ./eng/restore-adapter-sdk.ps1
+          pwsh ./eng/restore-adapter-sdk.ps1 -RequireCachedPackage
+          if ($LASTEXITCODE -ne 0) { throw 'Pinned Adapter SDK acquisition failed.' }
           dotnet restore MirrorPulse.sln --locked-mode
 
       - name: Verify formatting
@@ -90,11 +271,33 @@ jobs:
       - name: Install SFTP fixture dependencies
         run: pwsh ./eng/setup-test-environment.ps1
 
+      - name: Retain managed test assemblies before execution
+        run: pwsh ./eng/collect-managed-test-originals.ps1 -Phase Prepare
+
+      - name: Retain unfiltered compiled test case discovery
+        run: pwsh ./eng/collect-compiled-test-inventory.ps1 -Phase Discover
+
       - name: Test
         run: |
-          dotnet test MirrorPulse.sln --configuration Release --no-build --logger trx --results-directory artifacts/test-results/managed
+          dotnet test MirrorPulse.sln --configuration Release --no-build --logger trx --results-directory artifacts/test-results/managed --blame-hang-timeout 5m --blame-hang-dump-type none
           if ($LASTEXITCODE -ne 0) { throw 'Managed tests failed.' }
           pwsh ./eng/verify-test-results.ps1 -Suite managed -ResultsDirectory artifacts/test-results/managed
+
+      - name: Collect original managed results and assembly bindings
+        if: always()
+        run: pwsh ./eng/collect-managed-test-originals.ps1 -Phase Collect
+
+      - name: Reconcile every compiled case with its original result
+        if: always()
+        run: pwsh ./eng/collect-compiled-test-inventory.ps1 -Phase Reconcile
+
+      - name: Upload original managed results and assemblies
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: managed-test-originals
+          path: artifacts/test-results/managed-originals/**
+          if-no-files-found: error
 
       - name: Verify CLI completion gate
         run: pwsh ./eng/verify-cli-complete.ps1 -Configuration Release
@@ -113,6 +316,35 @@ jobs:
         run: |
           New-Item -ItemType Directory -Path artifacts/evidence -Force | Out-Null
           pwsh ./eng/verify-unsupported-platform.ps1 -PublishDirectory "$env:RUNNER_TEMP/mirrorpulse-cli-host-win-x64" -EvidencePath artifacts/evidence/rejected.json
+
+      - name: Upload native boundary test results
+        if: (success() || failure()) && github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: native-test-results
+          path: artifacts/test-results/native/**/*.trx
+          if-no-files-found: warn
+
+      - name: Preserve original native executing inputs
+        if: always() && github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: native-executing-originals
+          path: artifacts/test-results/native-originals/**
+          if-no-files-found: warn
+
+      - name: Verify retained P079 multi-root transfer compatibility on x64
+        if: (success() || failure()) && github.event_name == 'workflow_dispatch'
+        continue-on-error: true
+        run: pwsh ./eng/verify-deferred-p079.ps1 -ExpectedArchitecture X64
+
+      - name: Preserve original deferred P079 x64 results
+        if: always() && github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: deferred-p079-x64-test-results
+          path: artifacts/test-results/deferred-p079-x64/**
+          if-no-files-found: warn
 
       - name: Collect x64 verification evidence
         shell: pwsh
@@ -139,6 +371,7 @@ jobs:
           if-no-files-found: error
 
   official-package-arm64:
+    if: github.event_name != 'workflow_dispatch' || (!inputs.s06_recovery_only && !inputs.file_transfer_acceptance_only)
     needs: official-adapter-candidate
     runs-on: windows-11-arm
     steps:
@@ -158,7 +391,8 @@ jobs:
 
       - name: Restore
         run: |
-          pwsh ./eng/restore-adapter-sdk.ps1
+          pwsh ./eng/restore-adapter-sdk.ps1 -RequireCachedPackage
+          if ($LASTEXITCODE -ne 0) { throw 'Pinned Adapter SDK acquisition failed.' }
           dotnet restore MirrorPulse.sln --locked-mode
 
       - name: Install SFTP fixture dependencies
@@ -178,9 +412,47 @@ jobs:
           path: ${{ runner.temp }}/mirrorpulse-cli-host-win-arm64
           if-no-files-found: error
 
+      - name: Verify ARM64 SDK Delete recovery before Host integration
+        if: github.event_name == 'workflow_dispatch'
+        shell: pwsh
+        run: |
+          pwsh ./eng/prepare-native-ci-volume.ps1
+          if ($LASTEXITCODE -ne 0) { throw 'The disposable SDK test volume is unavailable.' }
+          pwsh ./eng/verify-cfsharp-delete-recovery.ps1 -ExpectedArchitecture Arm64
+
+      - name: Preserve original ARM64 SDK Delete results
+        if: always() && github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: cfsharp-delete-arm64-originals
+          path: artifacts/test-results/cfsharp-delete-arm64/**
+          if-no-files-found: ignore
+
+      - name: Verify ARM64 SDK explicit identities at retired paths
+        id: sdk-recreation
+        if: (success() || failure()) && github.event_name == 'workflow_dispatch'
+        continue-on-error: true
+        shell: pwsh
+        timeout-minutes: 8
+        env:
+          MIRRORPULSE_NATIVE_TEST: '1'
+        run: |
+          pwsh ./eng/prepare-native-ci-volume.ps1
+          if ($LASTEXITCODE -ne 0) { throw 'The disposable SDK test volume is unavailable.' }
+          pwsh ./eng/verify-cfsharp-recreation.ps1 -ExpectedArchitecture Arm64
+          if ($LASTEXITCODE -ne 0) { throw 'The independent SDK recreation matrix failed.' }
+
+      - name: Preserve original ARM64 SDK recreation results
+        if: always() && github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: cfsharp-recreation-arm64-originals
+          path: artifacts/test-results/cfsharp-recreation-arm64/**
+          if-no-files-found: ignore
+
       - name: Verify ARM64 CLI through signed Local Adapter and Cloud Files
         shell: pwsh
-        timeout-minutes: 10
+        timeout-minutes: 12
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: |
@@ -195,14 +467,338 @@ jobs:
           New-Item -ItemType Directory -Path artifacts/evidence -Force | Out-Null
           pwsh ./eng/verify-cli-regression.ps1 -Runtime win-arm64 -PackagePath $package.FullName -EvidencePath artifacts/evidence/cli-regression.json
 
+      - name: Preserve original ARM64 CLI regression results and failures
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: cli-regression-arm64-originals
+          path: |
+            artifacts/evidence/cli-regression.json
+            artifacts/evidence/cli-regression.originals/**
+          if-no-files-found: ignore
+
+      - name: Verify signed ARM64 controlled Move and repeated edits through the default Host
+        if: (success() || failure()) && github.event_name == 'workflow_dispatch'
+        shell: pwsh
+        timeout-minutes: 10
+        env:
+          MIRRORPULSE_NATIVE_TEST: '1'
+        run: |
+          $packages = @(Get-ChildItem -LiteralPath artifacts/official-local -Recurse -Filter '*.mpadapter' -File)
+          if ($packages.Count -ne 1 -or -not (Test-Path -LiteralPath ($packages[0].FullName + '.signature.json'))) { throw 'The exact frozen signed Local package is required.' }
+          New-Item -ItemType Directory -Path artifacts/evidence/cli-move-keep-remote -Force | Out-Null
+          pwsh ./eng/verify-cli-integration.ps1 -Runtime win-arm64 -PackagePath $packages[0].FullName -Coalescing -CoalescingAction KeepRemote -MoveConflict -EvidencePath artifacts/evidence/cli-move-keep-remote/report.json
+          if ($LASTEXITCODE -ne 0) { throw 'The default Host controlled-Move KeepRemote fixture failed.' }
+
+      - name: Preserve signed ARM64 default Host Move originals
+        if: always() && github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: cli-move-keep-remote-arm64-originals
+          path: artifacts/evidence/cli-move-keep-remote/**
+          if-no-files-found: ignore
+
+      - name: Verify signed ARM64 pure rename KeepRemote through the default Host
+        if: (success() || failure()) && github.event_name == 'workflow_dispatch'
+        shell: pwsh
+        timeout-minutes: 10
+        env:
+          MIRRORPULSE_NATIVE_TEST: '1'
+        run: |
+          $packages = @(Get-ChildItem -LiteralPath artifacts/official-local -Recurse -Filter '*.mpadapter' -File)
+          if ($packages.Count -ne 1 -or -not (Test-Path -LiteralPath ($packages[0].FullName + '.signature.json'))) { throw 'Require one frozen official signed Local package.' }
+          New-Item -ItemType Directory -Path artifacts/evidence/cli-move-only-keep-remote -Force | Out-Null
+          $journalQualification = @()
+          if ('${{ inputs.verify_shell }}' -eq 'true') { $journalQualification = @('-RequirePureMoveJournal') }
+          pwsh ./eng/verify-cli-integration.ps1 -Runtime win-arm64 -PackagePath $packages[0].FullName -Coalescing -CoalescingAction KeepRemote -MoveOnlyConflict -EvidencePath artifacts/evidence/cli-move-only-keep-remote/report.json @journalQualification
+          if ($LASTEXITCODE -ne 0) { throw 'The default Host pure rename KeepRemote fixture failed.' }
+
+      - name: Preserve signed ARM64 pure rename originals
+        if: always() && github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: cli-move-only-keep-remote-arm64-originals
+          path: artifacts/evidence/cli-move-only-keep-remote/**
+          if-no-files-found: ignore
+
+      - name: Verify independent signed ARM64 coalesced KeepBoth through the default Host
+        if: (success() || failure()) && github.event_name == 'workflow_dispatch'
+        shell: pwsh
+        timeout-minutes: 10
+        env:
+          MIRRORPULSE_NATIVE_TEST: '1'
+        run: |
+          $packages = @(Get-ChildItem -LiteralPath artifacts/official-local -Recurse -Filter '*.mpadapter' -File)
+          if ($packages.Count -ne 1 -or -not (Test-Path -LiteralPath ($packages[0].FullName + '.signature.json'))) { throw 'The exact frozen signed Local package is required.' }
+          New-Item -ItemType Directory -Path artifacts/evidence/cli-coalescing -Force | Out-Null
+          pwsh ./eng/verify-cli-integration.ps1 -Runtime win-arm64 -PackagePath $packages[0].FullName -Coalescing -EvidencePath artifacts/evidence/cli-coalescing/report.json
+          if ($LASTEXITCODE -ne 0) { throw 'The independent real signed coalescing conflict choice failed.' }
+
+      - name: Preserve independent signed ARM64 coalescing results and failures
+        if: always() && github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: cli-coalescing-arm64-originals
+          path: artifacts/evidence/cli-coalescing/**
+          if-no-files-found: ignore
+      - name: Verify signed ARM64 coalesced KeepRemote through the default Host
+        if: (success() || failure()) && github.event_name == 'workflow_dispatch'
+        shell: pwsh
+        timeout-minutes: 10
+        env:
+          MIRRORPULSE_NATIVE_TEST: '1'
+        run: |
+          $packages = @(Get-ChildItem -LiteralPath artifacts/official-local -Recurse -Filter '*.mpadapter' -File)
+          if ($packages.Count -ne 1 -or -not (Test-Path -LiteralPath ($packages[0].FullName + '.signature.json'))) { throw 'The exact frozen signed Local package is required.' }
+          New-Item -ItemType Directory -Path artifacts/evidence/cli-keep-remote -Force | Out-Null
+          pwsh ./eng/verify-cli-integration.ps1 -Runtime win-arm64 -PackagePath $packages[0].FullName -Coalescing -CoalescingAction KeepRemote -EvidencePath artifacts/evidence/cli-keep-remote/report.json
+          if ($LASTEXITCODE -ne 0) { throw 'The real signed KeepRemote conflict choice failed.' }
+
+      - name: Preserve signed ARM64 KeepRemote results and failures
+        if: always() && github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: cli-keep-remote-arm64-originals
+          path: artifacts/evidence/cli-keep-remote/**
+          if-no-files-found: ignore
+      - name: Verify signed ARM64 acknowledged Move and rejected content through the original executor
+        if: (success() || failure()) && github.event_name == 'workflow_dispatch'
+        shell: pwsh
+        timeout-minutes: 5
+        run: |
+          $packages = @(Get-ChildItem -LiteralPath artifacts/official-local -Recurse -Filter '*.mpadapter' -File)
+          if ($packages.Count -ne 1) { throw 'Require the one frozen official Local package.' }
+          pwsh ./eng/verify-signed-post-move.ps1 -PackagePath $packages[0].FullName
+          if ($LASTEXITCODE -ne 0) { throw 'The real signed post-move fixture failed.' }
+
+      - name: Preserve signed ARM64 post-move originals
+        if: always() && github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: signed-post-move-arm64-originals
+          path: artifacts/test-results/signed-post-move/**
+          if-no-files-found: ignore
+
+      - name: Verify signed ARM64 rejected Create and original local-birth identity
+        if: (success() || failure()) && github.event_name == 'workflow_dispatch'
+        shell: pwsh
+        timeout-minutes: 5
+        run: |
+          $packages = @(Get-ChildItem -LiteralPath artifacts/official-local -Recurse -Filter '*.mpadapter' -File)
+          if ($packages.Count -ne 1) { throw 'Require the one frozen official Local package.' }
+          pwsh ./eng/verify-signed-create-conflict.ps1 -PackagePath $packages[0].FullName
+          if ($LASTEXITCODE -ne 0) { throw 'The real signed create-conflict fixture failed.' }
+
+      - name: Preserve signed ARM64 create-conflict originals
+        if: always() && github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: signed-create-conflict-arm64-originals
+          path: artifacts/test-results/signed-create-conflict/**
+          if-no-files-found: ignore
+
+      - name: Verify signed ARM64 controlled Create KeepRemote through the default Host
+        if: (success() || failure()) && github.event_name == 'workflow_dispatch' && inputs.verify_shell
+        shell: pwsh
+        timeout-minutes: 10
+        env:
+          MIRRORPULSE_NATIVE_TEST: '1'
+        run: |
+          $packages = @(Get-ChildItem -LiteralPath artifacts/official-local -Recurse -Filter '*.mpadapter' -File)
+          if ($packages.Count -ne 1 -or -not (Test-Path -LiteralPath ($packages[0].FullName + '.signature.json'))) { throw 'Require one frozen official signed Local package.' }
+          New-Item -ItemType Directory -Path artifacts/evidence/cli-create-keep-remote -Force | Out-Null
+          pwsh ./eng/verify-cli-integration.ps1 -Runtime win-arm64 -PackagePath $packages[0].FullName -Coalescing -CoalescingAction KeepRemote -CreateConflict -EvidencePath artifacts/evidence/cli-create-keep-remote/report.json
+          if ($LASTEXITCODE -ne 0) { throw 'The default Host controlled-Create KeepRemote fixture failed.' }
+
+      - name: Preserve signed ARM64 default Host Create originals
+        if: always() && github.event_name == 'workflow_dispatch' && inputs.verify_shell
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: cli-create-keep-remote-arm64-originals
+          path: artifacts/evidence/cli-create-keep-remote/**
+          if-no-files-found: ignore
+
+      - name: Verify signed ARM64 empty controlled creation through the disabled default Host
+        if: (success() || failure()) && github.event_name == 'workflow_dispatch' && inputs.verify_shell
+        shell: pwsh
+        timeout-minutes: 10
+        env:
+          MIRRORPULSE_NATIVE_TEST: '1'
+        run: |
+          $packages = @(Get-ChildItem -LiteralPath artifacts/official-local -Recurse -Filter '*.mpadapter' -File)
+          if ($packages.Count -ne 1 -or -not (Test-Path -LiteralPath ($packages[0].FullName + '.signature.json'))) { throw 'Require one frozen official signed Local package.' }
+          New-Item -ItemType Directory -Path artifacts/evidence/cli-empty-create-keep-remote -Force | Out-Null
+          pwsh ./eng/verify-cli-integration.ps1 -Runtime win-arm64 -PackagePath $packages[0].FullName -Coalescing -CoalescingAction KeepRemote -CreateConflict -EmptyCreate -EvidencePath artifacts/evidence/cli-empty-create-keep-remote/report.json
+          if ($LASTEXITCODE -ne 0) { throw 'The disabled default Host empty-creation fixture failed.' }
+
+      - name: Preserve signed ARM64 empty creation originals
+        if: always() && github.event_name == 'workflow_dispatch' && inputs.verify_shell
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: cli-empty-create-keep-remote-arm64-originals
+          path: artifacts/evidence/cli-empty-create-keep-remote/**
+          if-no-files-found: ignore
+
+      - name: Verify signed ARM64 disabled operations and independent active progress through the default Host
+        if: (success() || failure()) && github.event_name == 'workflow_dispatch' && inputs.verify_shell
+        shell: pwsh
+        timeout-minutes: 15
+        env:
+          MIRRORPULSE_NATIVE_TEST: '1'
+        run: |
+          $packages = @(Get-ChildItem -LiteralPath artifacts/official-local -Recurse -Filter '*.mpadapter' -File)
+          if ($packages.Count -ne 1 -or -not (Test-Path -LiteralPath ($packages[0].FullName + '.signature.json'))) { throw 'Require one frozen official signed Local package.' }
+          New-Item -ItemType Directory -Path artifacts/evidence/cli-disabled-operations -Force | Out-Null
+          pwsh ./eng/verify-cli-disabled-operations.ps1 -Runtime win-arm64 -PackagePath $packages[0].FullName -EvidencePath artifacts/evidence/cli-disabled-operations/report.json
+          if ($LASTEXITCODE -ne 0) { throw 'The disabled default Host operation chain failed.' }
+
+      - name: Preserve signed ARM64 disabled operation originals
+        if: always() && github.event_name == 'workflow_dispatch' && inputs.verify_shell
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: cli-disabled-operations-arm64-originals
+          path: artifacts/evidence/cli-disabled-operations/**
+          if-no-files-found: ignore
+
+      - name: Verify signed ARM64 stale revision conflict after a source move while disabled
+        if: (success() || failure()) && github.event_name == 'workflow_dispatch' && inputs.verify_shell
+        shell: pwsh
+        timeout-minutes: 15
+        env:
+          MIRRORPULSE_NATIVE_TEST: '1'
+        run: |
+          $packages = @(Get-ChildItem -LiteralPath artifacts/official-local -Recurse -Filter '*.mpadapter' -File)
+          if ($packages.Count -ne 1 -or -not (Test-Path -LiteralPath ($packages[0].FullName + '.signature.json'))) { throw 'Require one frozen official signed Local package.' }
+          New-Item -ItemType Directory -Path artifacts/evidence/cli-disabled-moved-source -Force | Out-Null
+          Copy-Item -LiteralPath artifacts/official-adapter-releases.json -Destination artifacts/evidence/cli-disabled-moved-source/official-adapter-releases.json
+          pwsh ./eng/verify-cli-disabled-operations.ps1 -Runtime win-arm64 -PackagePath $packages[0].FullName -MovedSourceConflict -EvidencePath artifacts/evidence/cli-disabled-moved-source/report.json
+          if ($LASTEXITCODE -ne 0) { throw 'The reenabled moved-source conflict fixture failed.' }
+
+      - name: Preserve signed ARM64 moved-source conflict originals
+        if: always() && github.event_name == 'workflow_dispatch' && inputs.verify_shell
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: cli-disabled-moved-source-arm64-originals
+          path: artifacts/evidence/cli-disabled-moved-source/**
+          if-no-files-found: ignore
+
+      - name: Verify signed ARM64 stale revision conflict with a same-name successor
+        if: (success() || failure()) && github.event_name == 'workflow_dispatch' && inputs.verify_shell
+        shell: pwsh
+        timeout-minutes: 15
+        env:
+          MIRRORPULSE_NATIVE_TEST: '1'
+        run: |
+          $packages = @(Get-ChildItem -LiteralPath artifacts/official-local -Recurse -Filter '*.mpadapter' -File)
+          if ($packages.Count -ne 1 -or -not (Test-Path -LiteralPath ($packages[0].FullName + '.signature.json'))) { throw 'Require one frozen official signed Local package.' }
+          New-Item -ItemType Directory -Path artifacts/evidence/cli-disabled-source-successor -Force | Out-Null
+          Copy-Item -LiteralPath artifacts/official-adapter-releases.json -Destination artifacts/evidence/cli-disabled-source-successor/official-adapter-releases.json
+          pwsh ./eng/verify-cli-disabled-operations.ps1 -Runtime win-arm64 -PackagePath $packages[0].FullName -MovedSourceConflict -MovedSourceAddress Successor -EvidencePath artifacts/evidence/cli-disabled-source-successor/report.json
+          if ($LASTEXITCODE -ne 0) { throw 'The reenabled same-name successor fixture failed.' }
+
+      - name: Preserve signed ARM64 same-name successor originals
+        if: always() && github.event_name == 'workflow_dispatch' && inputs.verify_shell
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: cli-disabled-source-successor-arm64-originals
+          path: artifacts/evidence/cli-disabled-source-successor/**
+          if-no-files-found: ignore
+
       - name: Verify signed official packages and native ARM64 Workers
+        if: (success() || failure()) && github.event_name == 'workflow_dispatch'
         run: |
           dotnet test tests/MirrorPulse.Core.Tests/MirrorPulse.Core.Tests.csproj --configuration Release --no-restore --filter FullyQualifiedName~SignedPackageProcessTests --logger trx --results-directory artifacts/test-results/signed
           if ($LASTEXITCODE -ne 0) { throw 'Signed ARM64 Worker tests failed.' }
           pwsh ./eng/verify-test-results.ps1 -Suite signed -ResultsDirectory artifacts/test-results/signed
 
+      - name: Verify signed ARM64 CLI transfers across roots and instances
+        id: cli-transfers
+        if: (success() || failure()) && github.event_name == 'workflow_dispatch'
+        continue-on-error: true
+        shell: pwsh
+        timeout-minutes: 10
+        env:
+          MIRRORPULSE_NATIVE_TEST: '1'
+          MP_VERIFY_PREPARED_TRANSFER_REENABLE: ${{ inputs.verify_shell && '1' || '0' }}
+        run: |
+          $packages = @(Get-ChildItem -LiteralPath artifacts/official-local -Recurse -Filter '*.mpadapter' -File)
+          if ($packages.Count -ne 1) { throw 'The exact frozen signed Local package is required.' }
+          $reenable = @()
+          if ($env:MP_VERIFY_PREPARED_TRANSFER_REENABLE -ceq '1') { $reenable += '-VerifyPreparedTransferReenable' }
+          pwsh ./eng/verify-cli-transfers.ps1 -Runtime win-arm64 -PackagePath $packages[0].FullName -VerifyDirectoryTransfer @reenable -EvidencePath artifacts/evidence/cli-transfers.json
+          if ($LASTEXITCODE -ne 0) { throw 'The real signed CLI transfer matrix failed.' }
+
+      - name: Preserve original signed ARM64 CLI transfer results and failures
+        if: always() && github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: cli-transfers-arm64-originals
+          path: |
+            artifacts/evidence/cli-transfers.json
+            artifacts/evidence/cli-transfers.originals/**
+          if-no-files-found: ignore
+
+      - name: Verify signed ARM64 CLI transfers between Local and WebDAV packages
+        id: cli-cross-package
+        if: (success() || failure()) && github.event_name == 'workflow_dispatch'
+        continue-on-error: true
+        shell: pwsh
+        timeout-minutes: 10
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          MIRRORPULSE_NATIVE_TEST: '1'
+        run: |
+          pwsh ./eng/verify-cli-cross-package.ps1 -Runtime win-arm64 -ReleaseLockPath artifacts/official-adapter-releases.json -LocalPackageDirectory artifacts/official-local -WebDavPackageDirectory artifacts/official-transfer-webdav -EvidencePath artifacts/evidence/cli-cross-package.json
+          if ($LASTEXITCODE -ne 0) { throw 'The real signed cross-package CLI transfer matrix failed.' }
+
+      - name: Preserve original signed ARM64 cross-package transfer results and failures
+        if: always() && github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: cli-cross-package-arm64-originals
+          path: |
+            artifacts/evidence/cli-cross-package.json
+            artifacts/evidence/cli-cross-package.originals/**
+          if-no-files-found: ignore
+
+      - name: Verify ARM64 namespace identity and strict Cloud Files ACLs
+        if: (success() || failure()) && github.event_name == 'workflow_dispatch'
+        shell: pwsh
+        run: pwsh ./eng/verify-namespace.ps1 -ExpectedArchitecture Arm64
+
+      - name: Upload ARM64 namespace test results
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: namespace-arm64-test-results
+          path: |
+            artifacts/test-results/namespace-arm64/**/*.trx
+            artifacts/test-results/namespace-arm64/**/namespace.runsettings
+          if-no-files-found: ignore
+
+      - name: Preserve original ARM64 namespace executing inputs
+        if: always() && github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: namespace-arm64-executing-originals
+          path: artifacts/test-results/namespace-arm64-originals/**
+          if-no-files-found: warn
+
+      - name: Verify retained P079 multi-root transfer compatibility on ARM64
+        if: (success() || failure()) && github.event_name == 'workflow_dispatch'
+        continue-on-error: true
+        run: pwsh ./eng/verify-deferred-p079.ps1 -ExpectedArchitecture Arm64
+
+      - name: Preserve original deferred P079 ARM64 results
+        if: always() && github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: deferred-p079-arm64-test-results
+          path: artifacts/test-results/deferred-p079-arm64/**
+          if-no-files-found: warn
+
       - name: Verify installed ARM64 MSIX on Windows 11 desktop
-        if: github.event_name == 'workflow_dispatch'
+        if: (success() || failure()) && github.event_name == 'workflow_dispatch'
         shell: pwsh
         env:
           MIRRORPULSE_VERIFY_SHELL: ${{ inputs.verify_shell }}
@@ -214,20 +810,164 @@ jobs:
             pwsh ./eng/verify-msix-cloudfiles.ps1 -Runtime win-arm64 -EvidencePath artifacts/evidence/installed.json
           }
 
+      - name: Retain installed Host startup failure diagnostics
+        if: failure() && github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: installed-startup-failure-arm64
+          path: artifacts/evidence/installed-startup-failure.json
+          if-no-files-found: ignore
+
+      - name: Preserve original installed ARM64 MSIX verification evidence
+        if: always() && github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: installed-msix-arm64-originals
+          path: artifacts/evidence/installed.json
+          if-no-files-found: ignore
+
+      - name: Retain installed ARM64 Shell failure observations
+        if: failure() && github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: installed-shell-failure-arm64
+          path: artifacts/evidence/installed-shell-failure.json
+          if-no-files-found: ignore
+
+      - name: Preserve original installed ARM64 package and runtime inputs
+        if: always() && github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: installed-runtime-arm64-originals
+          path: artifacts/test-results/installed-msix-originals/**
+          if-no-files-found: ignore
+
+      - name: Report independent ARM64 SDK recreation failure after verification
+        if: always() && steps.sdk-recreation.outcome == 'failure'
+        shell: pwsh
+        run: throw 'The independent SDK recreation matrix failed; actual original results are retained.'
+
+      - name: Report signed ARM64 CLI transfer failure after verification
+        if: always() && steps.cli-transfers.outcome == 'failure'
+        shell: pwsh
+        run: throw 'The signed CLI transfer matrix failed; original results and the other verification reports are retained.'
+
+      - name: Report signed ARM64 cross-package transfer failure after verification
+        if: always() && steps.cli-cross-package.outcome == 'failure'
+        shell: pwsh
+        run: throw 'The signed cross-package CLI transfer matrix failed; original results and other verification reports are retained.'
+
+      - name: Share the exact ARM64 verification reports
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: arm64-evidence-inputs
+          path: |
+            artifacts/test-results/signed/test-evidence.json
+            artifacts/test-results/namespace-arm64/test-evidence.json
+            artifacts/evidence/cli-regression.json
+            artifacts/evidence/cli-transfers.json
+            artifacts/evidence/cli-cross-package.json
+            artifacts/evidence/installed.json
+          if-no-files-found: error
+
+  namespace-nonadmin-arm64:
+    if: github.event_name == 'workflow_dispatch' && !inputs.s06_recovery_only && !inputs.file_transfer_acceptance_only
+    needs: official-adapter-candidate
+    runs-on: windows-11-arm
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          name: official-adapter-release-lock
+          path: artifacts
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6
+        with:
+          global-json-file: global.json
+
+      - name: Prepare the ARM64 namespace test assembly
+        shell: pwsh
+        run: |
+          $testProject = 'tests/MirrorPulse.CloudFiles.CfSharp.Tests/MirrorPulse.CloudFiles.CfSharp.Tests.csproj'
+          pwsh ./eng/restore-adapter-sdk.ps1 -RequireCachedPackage
+          if ($LASTEXITCODE -ne 0) { throw 'Pinned Adapter SDK acquisition failed.' }
+          dotnet restore $testProject --locked-mode
+          if ($LASTEXITCODE -ne 0) { throw 'Locked restore failed.' }
+          dotnet build $testProject --configuration Release --no-restore -m:1 -p:UseSharedCompilation=false
+          if ($LASTEXITCODE -ne 0) { throw 'Namespace verification build failed.' }
+          pwsh ./eng/prepare-native-ci-volume.ps1
+          if ($LASTEXITCODE -ne 0) { throw 'The disposable namespace test volume is unavailable.' }
+
+      - name: Determine ordinary-user verification envelope
+        id: namespace-nonadmin-budget
+        shell: pwsh
+        run: |
+          . ./eng/namespace-nonadmin-controller.ps1
+          $catalog = Get-Content ./eng/test-suites.json -Raw | ConvertFrom-Json
+          $minutes = Get-OrdinaryUserNamespaceStepTimeoutMinutes -TestCount @($catalog.required.namespace).Count -TestNames @($catalog.required.namespace) -Scope S06
+          "timeout_minutes=$minutes" >> $env:GITHUB_OUTPUT
+
+      - name: Verify strict Cloud Files ACLs as a fresh non-administrator user
+        shell: pwsh
+        timeout-minutes: ${{ fromJSON(steps.namespace-nonadmin-budget.outputs.timeout_minutes) }}
+        run: pwsh ./eng/verify-namespace-nonadmin.ps1 -ExpectedArchitecture Arm64
+
+      - name: Upload original ordinary-user namespace results
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: namespace-nonadmin-arm64-test-results
+          path: artifacts/test-results/namespace-nonadmin-arm64/**
+          if-no-files-found: ignore
+
+      - name: Preserve original ordinary-user executing inputs
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: namespace-nonadmin-arm64-executing-originals
+          path: artifacts/test-results/namespace-nonadmin-arm64-originals/**
+          if-no-files-found: warn
+
+  official-package-arm64-evidence:
+    if: github.event_name == 'workflow_dispatch'
+    needs: [official-adapter-candidate, official-package-arm64, namespace-nonadmin-arm64]
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          name: official-adapter-release-lock
+          path: artifacts
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          name: cli-host-win-arm64
+          path: ${{ runner.temp }}/mirrorpulse-cli-host-win-arm64
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          name: arm64-evidence-inputs
+          path: artifacts
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          name: namespace-nonadmin-arm64-test-results
+          path: artifacts/test-results/namespace-nonadmin-arm64
+
       - name: Collect ARM64 verification evidence
         shell: pwsh
         run: |
           $parameters = @{
             Job = 'official-package-arm64'; Runtime = 'win-arm64'; OutputPath = 'artifacts/evidence/official-package-arm64.json'
-            TestManifests = @('artifacts/test-results/signed/test-evidence.json')
+            TestManifests = @('artifacts/test-results/signed/test-evidence.json', 'artifacts/test-results/namespace-arm64/test-evidence.json')
+            RequireNamespace = $true
+            NamespaceNonAdminPath = 'artifacts/test-results/namespace-nonadmin-arm64/ordinary-user-evidence.json'
             PublishDirectory = "$env:RUNNER_TEMP/mirrorpulse-cli-host-win-arm64"
             IntegrationPath = 'artifacts/evidence/cli-regression.json'
             AdapterReleaseLockPath = 'artifacts/official-adapter-releases.json'
           }
-          if ('${{ github.event_name }}' -eq 'workflow_dispatch') {
-            $parameters.RequireInstalled = $true
-            $parameters.InstalledPath = 'artifacts/evidence/installed.json'
-          }
+          $parameters.RequireInstalled = $true
+          if ('${{ inputs.verify_shell }}' -eq 'true') { $parameters.RequireInstalledShell = $true }
+          $parameters.InstalledPath = 'artifacts/evidence/installed.json'
+          $parameters.TransferIntegrationPath = 'artifacts/evidence/cli-transfers.json'
+          $parameters.CrossPackageTransferIntegrationPath = 'artifacts/evidence/cli-cross-package.json'
           ./eng/collect-ci-evidence.ps1 @parameters
 
       - name: Upload ARM64 verification evidence
@@ -238,6 +978,7 @@ jobs:
           if-no-files-found: error
 
   official-adapters:
+    if: github.event_name != 'workflow_dispatch' || (!inputs.s06_recovery_only && !inputs.file_transfer_acceptance_only)
     needs: official-adapter-candidate
     runs-on: windows-latest
     permissions:
@@ -259,7 +1000,8 @@ jobs:
 
       - name: Restore package verifier
         run: |
-          pwsh ./eng/restore-adapter-sdk.ps1
+          pwsh ./eng/restore-adapter-sdk.ps1 -RequireCachedPackage
+          if ($LASTEXITCODE -ne 0) { throw 'Pinned Adapter SDK acquisition failed.' }
           dotnet restore tests/MirrorPulse.Core.Tests/MirrorPulse.Core.Tests.csproj --locked-mode
 
       - name: Aggregate the frozen official Adapter releases

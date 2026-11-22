@@ -1,0 +1,484 @@
+using System.Runtime.InteropServices;
+using System.Security.AccessControl;
+using System.Security.Principal;
+using System.Text;
+using CfSharp;
+using MirrorPulse.CloudFiles.CfSharp;
+using MirrorPulse.Core.CloudFiles;
+using MirrorPulse.Core.Configuration;
+using MirrorPulse.Core.Contracts;
+using MirrorPulse.Core.State;
+using MirrorPulse.Core.Sync;
+
+namespace MirrorPulse.CloudFiles.CfSharp.Tests;
+
+public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
+{
+    [TestMethod]
+    [DoNotParallelize]
+    [TestCategory("NativeCloudFiles")]
+    public async Task NativeControlledBirthRetainsIdentityBytesAndOfficialJournalAcrossRestart()
+    {
+        if (Environment.GetEnvironmentVariable("MIRRORPULSE_NATIVE_TEST") != "1")
+            Assert.Inconclusive("Requires the disposable NativeCloudFiles verification environment.");
+        MirrorPulseNamespaceExecutionSessionTests.AssertExpectedArchitecture();
+        string directory = Path.Combine(Path.GetTempPath(), "MirrorPulse-native-tests", Guid.NewGuid().ToString("N"));
+        var paths = new MirrorPulseStoragePaths(Path.Combine(directory, "sync"), Path.Combine(directory, "data"));
+        var registry = new CfSharpMirrorPulseCloudRootRegistry();
+        var registration = AdapterRootRegistrationMapper.Map(AdapterId.Parse("example.controlled-birth"), InstanceId.New(),
+            new AdapterRootDefinition("docs", "Docs", "Docs", false), RootRegistrationState.Disabled,
+            identityScope: RootIdentityScope.InstanceRoot);
+        var router = new MirrorPulseRootRouter(paths.SyncRootPath, [registration]);
+        using WindowsIdentity caller = WindowsIdentity.GetCurrent();
+        await using var role = new MirrorPulseNamespaceExecutionSession();
+        await using var nextRole = new MirrorPulseNamespaceExecutionSession();
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(45));
+        var source = new ProtectedPermissionNoSourceProvider();
+        var births = new List<(MirrorPulseNamespaceBirthIntent Birth, MirrorPulseNamespaceBirthPlan Plan, MirrorPulseNamespaceBirthStart Start)>();
+        var originals = new List<MirrorPulseNamespacePermissionPreparation>();
+        var observations = new List<MirrorPulseNamespaceBirthObservation>();
+        var originalBindings = new List<CloudLocalFileBinding>();
+        var conversions = new List<MirrorPulseNamespaceBirthConversionPreparation>();
+        var birthProtections = new List<MirrorPulseNamespaceBirthProtection>();
+        var nestedBirths = new List<NativeNestedBirth>();
+        var members = new Dictionary<Guid, MirrorPulseNamespaceMemberRegistration>();
+        NativeMemberPositionHistory? positionHistory = null;
+        NativeStagedBirth? stagedBirth = null;
+        Guid[] journalIds = [];
+        Guid[] nestedJournalIds = [];
+        Guid[] stagedJournalIds = [];
+        byte[] payload = Encoding.UTF8.GetBytes("controlled local bytes with no remote acceptance");
+        CloudPlaceholderIdentity originalFileIdentity = router.CreateFileIdentity(registration.InstanceId, "docs", "local:original-resident");
+        Guid originalFileExpectedItemId = Guid.Empty;
+        string? originalFileExpectedRemoteId = null;
+        string filePath = Path.Combine(paths.SyncRootPath, "Docs", "born.bin");
+        try
+        {
+            registry.Register(new(paths.SyncRootPath, "0.1.0", Guid.NewGuid(), [1, 2, 3]));
+            await File.WriteAllTextAsync(Path.Combine(directory, ".mp-permission-fixture"), string.Empty, timeout.Token);
+            for (int owner = 0; owner < 4; owner++)
+            {
+                await using var namespaceActor = new MirrorPulseNamespaceActor();
+                if (owner == 2)
+                {
+                    // Both CfSharp owners started under the old role have fully drained.
+                    await role.DisposeAsync();
+                    await Assert.ThrowsAsync<ObjectDisposedException>(() => role.RunNamespaceOperationAsync(() => Task.CompletedTask));
+                }
+                var state = new MirrorPulseCfSharpStateSession(paths);
+                await using var fileSystem = new MirrorPulseCloudFileSystemBuilder(paths).WithStateStore(state).WithContentProvider(source).Build();
+                await (owner >= 2 ? nextRole : role).RunNamespaceOperationAsync(async () => await fileSystem.StartAsync(timeout.Token));
+                await using var feed = fileSystem.CreateLocalChangeFeed();
+                await feed.StartAsync(timeout.Token);
+                CloudDirectory docs = fileSystem.GetDirectory("Docs");
+                CloudFile originalFile = fileSystem.GetFile("Docs/original.bin");
+                if (owner == 0)
+                {
+                    await role.RunNamespaceOperationAsync(async () => await new MirrorPulseRootPopulationCoordinator(fileSystem, feed).PopulateAsync(router, timeout.Token));
+                    await role.RunNamespaceOperationAsync(async () => await docs.SetPopulationStateAsync(CloudDirectoryPopulationState.Complete, cancellationToken: timeout.Token));
+                    SetProtectedFixtureUserOwner(fileSystem.Root, caller.User!);
+                    SetProtectedFixtureUserOwner(docs, caller.User!);
+                    await File.WriteAllBytesAsync(originalFile.FullPath, payload, timeout.Token);
+                    SetProtectedFixtureUserOwner(originalFile, caller.User!);
+                }
+                await using var catalog = await MirrorPulseProductCatalog.OpenAsync(paths, timeout.Token);
+                await using var coordinator = new MirrorPulseNamespacePermissionCoordinator(catalog);
+                ValueTask ReconcileAsync(CancellationToken stop) =>
+                    ReconcileClosedFixtureJournalAsync(fileSystem, state, feed, catalog, router, null, stop);
+                await using var guard = await MirrorPulseWindowsNamespacePermissionLease.OpenAsync(fileSystem.Root, router, timeout.Token);
+                if (owner == 0)
+                {
+                    foreach (CloudItem item in new CloudItem[] { fileSystem.Root, docs, originalFile })
+                    {
+                        await using var lease = await MirrorPulseWindowsNamespacePermissionLease.OpenMetadataAsync(item, router, timeout.Token);
+                        var observed = await lease.InspectAsync(timeout.Token);
+                        var original = new MirrorPulseNamespacePermissionBaseline(Guid.NewGuid(), observed.RootId, observed.LocalObject,
+                            observed.RelativePath, observed.IsDirectory, observed.OwnerSid, observed.Dacl, observed.ObservedAt);
+                        var protection = new MirrorPulseNamespacePermissionIntent(Guid.NewGuid(), original.EvidenceId, original.LocalObject,
+                            original.RootId, original.RelativePath, MirrorPulseNamespacePermissionChangeKind.Protect, role.RoleSid.Value,
+                            original.OriginalDacl, MirrorPulseNamespacePermissionPolicy.CreateProtectedDacl(role, observed.IsDirectory), DateTimeOffset.UtcNow);
+                        originals.Add(new(original, protection));
+                    }
+                    var originalFileBeforeProtection = await originalFile.InspectAsync(timeout.Token);
+                    originalFileExpectedItemId = originalFileBeforeProtection.ItemId ?? originalFileIdentity.ItemId;
+                    originalFileExpectedRemoteId = originalFileBeforeProtection.RemoteId ?? originalFileIdentity.RemoteId;
+                    await catalog.PrepareNamespacePermissionChangesAsync(originals, timeout.Token);
+                    await role.RunNamespaceOperationAsync(async () =>
+                    {
+                        foreach (var preparation in originals.AsEnumerable().Reverse())
+                        {
+                            var applied = await coordinator.ApplyProtectedAsync(preparation.Intent.OperationId,
+                                NativeOriginalMemberItem(fileSystem, preparation.Baseline), router,
+                                preparation.Baseline.IsDirectory ? null : originalFileIdentity, timeout.Token);
+                            Assert.AreEqual(MirrorPulseNamespacePermissionOutcome.Verified, applied.Permission!.Outcome);
+                        }
+                    });
+                    await RegisterNativeOriginalMembersAsync(fileSystem, catalog, router, role, originals, members, namespaceActor, timeout.Token);
+                    await Assert.ThrowsAsync<UnauthorizedAccessException>(() => File.WriteAllTextAsync(
+                        Path.Combine(docs.FullPath, "ordinary.txt"), "not admitted", timeout.Token));
+                    foreach (bool isDirectory in new[] { false, true })
+                    {
+                        var parent = originals[1];
+                        string name = isDirectory ? "empty" : "born.bin";
+                        var birth = new MirrorPulseNamespaceBirthIntent(1, Guid.NewGuid(), registration.RootId,
+                            parent.Baseline.EvidenceId, parent.Intent.OperationId, parent.Baseline.LocalObject,
+                            "Docs/" + name, isDirectory, MirrorPulseNamespaceBirthOrigin.ControlledCreation, role.RoleSid.Value, DateTimeOffset.UtcNow);
+                        CloudPlaceholderIdentity identity = router.CreateFileIdentity(registration.InstanceId, "docs", "local:" + birth.OperationId.ToString("N"));
+                        var plan = new MirrorPulseNamespaceBirthPlan(1, birth.OperationId, identity.ItemId, identity.RemoteId, null, DateTimeOffset.UtcNow);
+                        CloudItem child = isDirectory ? fileSystem.GetDirectory(birth.RelativePath) : fileSystem.GetFile(birth.RelativePath);
+                        await catalog.PrepareNamespaceBirthAsync(birth, timeout.Token); await catalog.PrepareNamespaceBirthPlanAsync(plan, timeout.Token);
+                        Assert.IsTrue(await MirrorPulseNamespaceBirthIdentityProjection.PrepareAsync(catalog, state.OpenStore, birth.OperationId, child, timeout.Token));
+                        var start = new MirrorPulseNamespaceBirthStart(1, birth.OperationId, DateTimeOffset.UtcNow);
+                        Assert.IsTrue((await catalog.RecordNamespaceBirthStartAsync(start, timeout.Token)).NewlyRecorded);
+                        births.Add((birth, plan, start));
+                        // Public remote placeholder population does not describe a local create.
+                        // Create locally under protection, then use CfSharp's same-object conversion.
+                        await role.RunNamespaceOperationAsync(async () =>
+                        {
+                            if (isDirectory) Directory.CreateDirectory(child.FullPath);
+                            else
+                            {
+                                var birthSecurity = new FileSecurity();
+                                birthSecurity.SetSecurityDescriptorSddlForm(MirrorPulseNamespacePermissionPolicy.CreateOrdinaryFileBirthDacl(role), AccessControlSections.Access);
+                                await using FileStream writer = new FileInfo(child.FullPath).Create(FileMode.CreateNew,
+                                    FileSystemRights.Write, FileShare.None, 4096, FileOptions.None, birthSecurity);
+                                await writer.WriteAsync(payload, timeout.Token);
+                                writer.Flush(flushToDisk: true);
+                            }
+                            var ordinary = await child.InspectAsync(timeout.Token);
+                            Assert.IsFalse(ordinary.IsPlaceholder);
+                            Assert.IsNotNull(ordinary.LocalBinding);
+                            originalBindings.Add(ordinary.LocalBinding);
+                            var preparation = await MirrorPulseNamespaceBirthConversionPreparer.RecordAsync(catalog,
+                                birth.OperationId, child, router, MirrorPulseWindowsNamespaceInheritance.CreateInheritedDacl(parent.Intent.TargetDacl, isDirectory), timeout.Token);
+                            conversions.Add(preparation);
+                            Assert.AreEqual(originalBindings[^1].LocalFileId, preparation.LocalObject.LocalFileId);
+                            Assert.AreEqual(preparation, await MirrorPulseNamespaceBirthConversionPreparer.RecordAsync(catalog,
+                                birth.OperationId, child, router, preparation.ExpectedConvertedDacl, timeout.Token));
+                        });
+                        if (!isDirectory)
+                        {
+                            await Assert.ThrowsAsync<UnauthorizedAccessException>(() => File.ReadAllBytesAsync(child.FullPath, timeout.Token));
+                            AssertBirthAliasDenied(Path.Combine(directory, "ordinary-birth.link"), child.FullPath, expectedError: 5);
+                        }
+                        await role.RunNamespaceOperationAsync(async () =>
+                        {
+                            if (isDirectory)
+                                await child.ConvertToPlaceholderAsync(identity, CloudPlaceholderConversionOptions.CreateBuilder()
+                                    .WithPopulationState(CloudDirectoryPopulationState.Complete).Build(), timeout.Token);
+                            else
+                            {
+                                var binding = originalBindings[^1];
+                                var retained = new MirrorPulseLocalFileBinding(binding.VolumeSerialNumber, binding.SyncRootFileId, binding.LocalFileId);
+                                var receipt = await MirrorPulseWindowsNamespacePermissionLease.RunProtectedAsync(child, router, retained, identity,
+                                    async (lease, stop) =>
+                                    {
+                                        await child.ConvertToPlaceholderAsync(identity, cancellationToken: stop);
+                                        AssertBirthAliasDenied(Path.Combine(directory, "conversion-scope.link"), child.FullPath);
+                                        await lease.ApplyDaclAsync(MirrorPulseWindowsNamespaceInheritance.CreateInheritedDacl(parent.Intent.TargetDacl, false), stop);
+                                        Assert.AreEqual(retained, (await lease.InspectAsync(stop)).LocalObject);
+                                    }, timeout.Token);
+                                Assert.AreEqual(CloudProtectedLocalOperationOutcome.Completed, receipt.Outcome, receipt.Error?.ToString());
+                                Assert.IsTrue(receipt.CallbackStarted && receipt.CallbackCompleted && receipt.Drained);
+                            }
+                        });
+                        // Keep actual native birth unrecorded until after the first CfSharp/catalog owner ends.
+                        var snapshot = await child.InspectAsync(timeout.Token);
+                        Assert.IsTrue(snapshot.IsPlaceholder);
+                        Assert.AreEqual(originalBindings[^1], snapshot.LocalBinding);
+                        Assert.AreEqual(plan.ItemId, snapshot.ItemId);
+                        Assert.IsNull(snapshot.RemoteRevision);
+                        Assert.AreEqual(CloudSynchronizationState.NotInSync, snapshot.SynchronizationState);
+                        await using (var bornLease = await MirrorPulseWindowsNamespacePermissionLease.OpenMetadataAsync(child, router, timeout.Token))
+                            Assert.AreEqual(MirrorPulseWindowsNamespaceInheritance.CreateInheritedDacl(parent.Intent.TargetDacl, isDirectory),
+                                (await bornLease.InspectAsync(timeout.Token)).Dacl);
+                        Assert.IsNull(await catalog.ReadNamespaceBirthObservationAsync(birth.OperationId, timeout.Token));
+                    }
+                    AssertBirthAliasDenied(Path.Combine(directory, "before-write.link"), filePath);
+                    await using (var writer = new FileStream(filePath, FileMode.Open, FileAccess.Write, FileShare.ReadWrite))
+                    {
+                        await writer.WriteAsync(payload, timeout.Token);
+                        writer.Flush(flushToDisk: true);
+                    }
+                    AssertBirthAliasDenied(Path.Combine(directory, "after-write.link"), filePath);
+                    CollectionAssert.AreEqual(payload, await File.ReadAllBytesAsync(filePath, timeout.Token));
+                    var pending = await WaitForBirthJournalAsync(feed, births[0].Plan.ItemId, births[1].Plan.ItemId, timeout.Token, ReconcileAsync);
+                    journalIds = pending.Select(change => change.OperationId).ToArray();
+                    Assert.IsGreaterThan(0, journalIds.Length);
+                    stagedBirth = await StageNativeAbandonedBirthAsync(fileSystem, state, catalog, router, role,
+                        registration.InstanceId, originals[1], payload, timeout.Token);
+                    stagedJournalIds = (await WaitForBirthJournalAsync(feed, stagedBirth.Plan.ItemId,
+                        births[1].Plan.ItemId, timeout.Token, ReconcileAsync)).Select(change => change.OperationId).ToArray();
+                }
+                else if (owner == 1)
+                {
+                    foreach (var (birth, plan, start) in births)
+                    {
+                        Assert.IsFalse((await catalog.RecordNamespaceBirthStartAsync(start, timeout.Token)).NewlyRecorded);
+                        CloudItem child = birth.IsDirectory ? fileSystem.GetDirectory(birth.RelativePath) : fileSystem.GetFile(birth.RelativePath);
+                        Assert.AreEqual(conversions[observations.Count], await catalog.ReadNamespaceBirthConversionAsync(birth.OperationId, timeout.Token));
+                        var observed = await MirrorPulseNamespaceBirthObserver.RecordAsync(catalog, birth.OperationId, child, router, timeout.Token);
+                        observations.Add(observed);
+                        Assert.AreEqual(caller.User!.Value, observed.OwnerSid);
+                        Assert.AreEqual(1U, observed.LinkCount);
+                        Assert.AreEqual(plan.ItemId, observed.ItemId);
+                        Assert.IsFalse(observed.IsInSync);
+                        Assert.IsNull(observed.RemoteRevision);
+                        Assert.AreEqual(originalBindings[observations.Count - 1].LocalFileId, observed.LocalObject.LocalFileId);
+                        Assert.AreEqual(observed, await MirrorPulseNamespaceBirthObserver.RecordAsync(catalog, birth.OperationId, child, router, timeout.Token));
+                        Guid protectionId = Guid.NewGuid();
+                        await Assert.ThrowsAsync<UnauthorizedAccessException>(() => MirrorPulseNamespaceBirthProtectionVerifier.RecordAsync(
+                            catalog, protectionId, birth.OperationId, child, docs, router, timeout.Token));
+                        await role.RunNamespaceOperationAsync(async () =>
+                        {
+                            if (!birth.IsDirectory)
+                                await Assert.ThrowsAsync<InvalidDataException>(() => MirrorPulseNamespaceBirthProtectionVerifier.RecordAsync(
+                                    catalog, protectionId, birth.OperationId, child, fileSystem.Root, router, timeout.Token));
+                            var verified = await MirrorPulseNamespaceBirthProtectionVerifier.RecordAsync(
+                                catalog, protectionId, birth.OperationId, child, docs, router, timeout.Token);
+                            Assert.IsNull(verified.PreviousProtectionId);
+                            Assert.AreEqual(observed.LocalObject, verified.Verification.LocalObject);
+                            Assert.AreEqual(observed.BirthDacl, verified.Verification.Dacl);
+                            birthProtections.Add(verified);
+                            Assert.AreEqual(verified, await MirrorPulseNamespaceBirthProtectionVerifier.RecordAsync(
+                                catalog, protectionId, birth.OperationId, child, docs, router, timeout.Token));
+                        });
+                        await RegisterNativeBornMemberAsync(fileSystem, catalog, router, role, birth.OperationId, members, namespaceActor, timeout.Token);
+                    }
+                    Assert.HasCount(2, observations);
+                    var rotations = originals.Select(preparation => new MirrorPulseNamespacePermissionPreparation(preparation.Baseline,
+                        preparation.Intent with
+                        {
+                            OperationId = Guid.NewGuid(),
+                            Kind = MirrorPulseNamespacePermissionChangeKind.RotateRole,
+                            ExpectedDacl = preparation.Intent.TargetDacl,
+                            RoleSid = nextRole.RoleSid.Value,
+                            TargetDacl = MirrorPulseNamespacePermissionPolicy.CreateProtectedDacl(nextRole, preparation.Baseline.IsDirectory),
+                            PreparedAt = DateTimeOffset.UtcNow,
+                        })).ToArray();
+                    await catalog.PrepareNamespacePermissionChangesAsync(rotations, timeout.Token);
+                    await nextRole.RunNamespaceOperationAsync(async () =>
+                    {
+                        foreach (var rotation in rotations.Reverse())
+                        {
+                            var applied = await coordinator.ApplyProtectedAsync(rotation.Intent.OperationId,
+                                NativeOriginalMemberItem(fileSystem, rotation.Baseline), router, cancellationToken: timeout.Token);
+                            Assert.AreEqual(MirrorPulseNamespacePermissionOutcome.Verified, applied.Permission!.Outcome);
+                        }
+                        for (int index = 0; index < births.Count; index++)
+                        {
+                            var birth = births[index].Birth;
+                            CloudItem child = birth.IsDirectory ? fileSystem.GetDirectory(birth.RelativePath) : fileSystem.GetFile(birth.RelativePath);
+                            var firstProtection = birthProtections[index];
+                            await Assert.ThrowsAsync<InvalidDataException>(() => MirrorPulseNamespaceBirthProtectionVerifier.RecordAsync(
+                                catalog, firstProtection.ProtectionId, birth.OperationId, child, docs, router, timeout.Token));
+                            var current = await MirrorPulseNamespaceBirthProtectionVerifier.RecordAsync(
+                                catalog, Guid.NewGuid(), birth.OperationId, child, docs, router, timeout.Token);
+                            Assert.AreEqual(firstProtection.ProtectionId, current.PreviousProtectionId);
+                            Assert.AreEqual(nextRole.RoleSid.Value, current.RoleSid);
+                            Assert.AreEqual(firstProtection.Verification.LocalObject, current.Verification.LocalObject);
+                            Assert.AreEqual(firstProtection, await catalog.RecordNamespaceBirthProtectionAsync(firstProtection, timeout.Token));
+                            Assert.AreEqual(observations[index], await catalog.ReadNamespaceBirthObservationAsync(birth.OperationId, timeout.Token));
+                            Assert.AreEqual(current, await catalog.ReadLatestNamespaceBirthProtectionAsync(birth.OperationId, timeout.Token));
+                        }
+                    });
+                    TestContext.WriteLine("ControlledBirthProtection: independentParentAndChildReads=True; originalOwnerAndBinding=True; inheritedPolicyVerified=True; ordinaryCallerRejected=True; wrongParentRejected=True; roleRotation=True; firstEpochUnchanged=True; sourceReads=0; hostIntegrated=False.");
+                    CollectionAssert.AreEqual(payload, await File.ReadAllBytesAsync(filePath, timeout.Token));
+                    await File.AppendAllTextAsync(filePath, " latest", timeout.Token); // Existing content remains writable to the normal user.
+                    AssertBirthAliasDenied(Path.Combine(directory, "after-normal-edit.link"), filePath);
+                    Assert.AreEqual(Encoding.UTF8.GetString(payload) + " latest", await File.ReadAllTextAsync(filePath, timeout.Token));
+                    var snapshot = await fileSystem.GetFile("Docs/born.bin").InspectAsync(timeout.Token);
+                    Assert.IsTrue(snapshot.IsPlaceholder);
+                    Assert.AreEqual(observations[0].LocalObject.LocalFileId, snapshot.LocalBinding!.LocalFileId);
+                    Assert.AreEqual(births[0].Plan.ItemId, snapshot.ItemId);
+                    var pending = await WaitForBirthJournalAsync(feed, births[0].Plan.ItemId, births[1].Plan.ItemId, timeout.Token, ReconcileAsync);
+                    CollectionAssert.IsSubsetOf(journalIds, pending.Select(change => change.OperationId).ToArray());
+                    await Assert.ThrowsAsync<UnauthorizedAccessException>(() => Task.Run(() => File.Delete(filePath), timeout.Token));
+                    string directoryPath = Path.Combine(docs.FullPath, "empty");
+                    var directoryProtection = await catalog.ReadLatestNamespaceBirthProtectionAsync(births[1].Birth.OperationId, timeout.Token);
+                    Assert.IsNotNull(directoryProtection);
+                    Assert.AreEqual(nextRole.RoleSid.Value, directoryProtection.RoleSid);
+                    Assert.AreNotEqual(observations[1].BirthDacl, directoryProtection.Verification.Dacl,
+                        "Role rotation must retain the first birth descriptor and verify a separate current descriptor.");
+                    await using (var beforeDeleteLease = await MirrorPulseWindowsNamespacePermissionLease.OpenMetadataAsync(
+                        fileSystem.GetDirectory("Docs/empty"), router, timeout.Token))
+                    {
+                        var beforeDelete = await beforeDeleteLease.InspectAsync(timeout.Token);
+                        Assert.AreEqual(directoryProtection.Verification.LocalObject, beforeDelete.LocalObject);
+                        Assert.AreEqual(directoryProtection.Verification.Dacl, beforeDelete.Dacl);
+                    }
+                    try
+                    {
+                        Directory.Delete(directoryPath);
+                        Assert.Fail("Ordinary managed deletion must not remove the protected directory.");
+                    }
+                    catch (Exception error) when (error is UnauthorizedAccessException or IOException)
+                    {
+                        TestContext.WriteLine($"ControlledBirthManagedDirectoryDelete: exception={error.GetType().Name}; hResult={error.HResult:X8}.");
+                    }
+                    bool removed = RemoveBirthDirectory(directoryPath);
+                    int removalError = removed ? 0 : Marshal.GetLastPInvokeError();
+                    TestContext.WriteLine($"ControlledBirthDirectoryDelete: removed={removed}; nativeError={removalError}.");
+                    Assert.IsFalse(removed);
+                    Assert.AreEqual(5, removalError, "The native deletion must be refused with access denied.");
+                    var retainedDirectory = await fileSystem.GetDirectory("Docs/empty").InspectAsync(timeout.Token);
+                    Assert.IsTrue(retainedDirectory.Exists && retainedDirectory.IsPlaceholder);
+                    Assert.AreEqual(observations[1].LocalObject.LocalFileId, retainedDirectory.LocalBinding!.LocalFileId);
+                    await using (var retainedLease = await MirrorPulseWindowsNamespacePermissionLease.OpenMetadataAsync(
+                        fileSystem.GetDirectory("Docs/empty"), router, timeout.Token))
+                    {
+                        var afterDelete = await retainedLease.InspectAsync(timeout.Token);
+                        Assert.AreEqual(directoryProtection.Verification.LocalObject, afterDelete.LocalObject);
+                        Assert.AreEqual(directoryProtection.Verification.Dacl, afterDelete.Dacl);
+                    }
+                    Assert.AreEqual(directoryProtection, await catalog.ReadLatestNamespaceBirthProtectionAsync(births[1].Birth.OperationId, timeout.Token));
+                    Assert.AreEqual(observations[1], await catalog.ReadNamespaceBirthObservationAsync(births[1].Birth.OperationId, timeout.Token));
+                    Assert.HasCount(6, await catalog.ReadNamespacePermissionChangesAsync(timeout.Token));
+                    foreach (var original in originals)
+                        Assert.AreEqual(original.Baseline, await catalog.ReadNamespacePermissionBaselineAsync(original.Baseline.EvidenceId, timeout.Token));
+                    var parentProtection = await catalog.ReadLatestNamespaceBirthProtectionAsync(births[1].Birth.OperationId, timeout.Token);
+                    Assert.IsNotNull(parentProtection);
+                    nestedBirths.AddRange(await CreateNativeNestedBirthsAsync(fileSystem, state, catalog, router, nextRole,
+                        registration.InstanceId, births[1].Birth, observations[1], parentProtection, payload, timeout.Token));
+                    nestedJournalIds = await ReadNativeNestedBirthJournalAsync(feed, nestedBirths, ReconcileAsync, timeout.Token);
+                    foreach (var nested in nestedBirths)
+                        await RegisterNativeBornMemberAsync(fileSystem, catalog, router, nextRole, nested.Birth.OperationId, members, namespaceActor, timeout.Token);
+                }
+                else
+                {
+                    await VerifyNativeNestedBirthsAsync(fileSystem, state, catalog, router, nextRole, nestedBirths, payload, timeout.Token);
+                    var pending = await WaitForBirthJournalAsync(feed, births[0].Plan.ItemId, births[1].Plan.ItemId, timeout.Token, ReconcileAsync);
+                    CollectionAssert.IsSubsetOf(journalIds, pending.Select(change => change.OperationId).ToArray());
+                    CollectionAssert.IsSubsetOf(nestedJournalIds, await ReadNativeNestedBirthJournalAsync(feed, nestedBirths, ReconcileAsync, timeout.Token));
+                    Assert.IsNotNull(stagedBirth);
+                    if (owner == 2)
+                    {
+                        await RecoverNativeAbandonedBirthAsync(fileSystem, catalog, router, nextRole, stagedBirth, payload, timeout.Token);
+                        await RejectNativeStagedMemberBeforeObservationAsync(fileSystem, catalog, router, nextRole, stagedBirth,
+                            members[originals[1].Baseline.EvidenceId], namespaceActor, timeout.Token);
+                    }
+                    else
+                    {
+                        await VerifyRecoveredNativeBirthAsync(fileSystem, state, catalog, router, nextRole, stagedBirth, payload, timeout.Token);
+                        await RegisterNativeBornMemberAsync(fileSystem, catalog, router, nextRole, stagedBirth.Birth.OperationId, members, namespaceActor, timeout.Token);
+                    }
+                    CollectionAssert.IsSubsetOf(stagedJournalIds, (await WaitForBirthJournalAsync(feed,
+                        stagedBirth.Plan.ItemId, births[1].Plan.ItemId, timeout.Token, ReconcileAsync)).Select(change => change.OperationId).ToArray());
+                    Assert.AreEqual(Encoding.UTF8.GetString(payload) + " latest", await File.ReadAllTextAsync(filePath, timeout.Token));
+                    Assert.HasCount(6, await catalog.ReadNamespacePermissionChangesAsync(timeout.Token));
+                    TestContext.WriteLine($"ControlledNestedBirth: cfSharpOwner={owner}; bornDirectParents=True; depth=3; publicParentIdentity=True; firstBindingsAndBytesRetained=True; originalJournalIdsRetained=True; roleOnlyNamespace=True; sourceReads=0; hostIntegrated=False.");
+                }
+                Assert.AreEqual(0, source.Reads);
+                await VerifyNativeMemberRegistrationsAsync(fileSystem, state, catalog, router, owner >= 1 ? nextRole : role, members, namespaceActor, timeout.Token);
+                Assert.HasCount(owner switch { 0 => 3, 1 or 2 => 8, _ => 9 }, members);
+                CollectionAssert.AreEqual(payload, await File.ReadAllBytesAsync(originalFile.FullPath, timeout.Token));
+                var retainedOriginalIdentity = await catalog.ReadNamespacePermissionLocalIdentityAsync(originals[2].Baseline.EvidenceId, timeout.Token);
+                Assert.IsNotNull(retainedOriginalIdentity);
+                Assert.AreEqual(originalFileExpectedItemId, retainedOriginalIdentity.ItemId);
+                Assert.AreEqual(originalFileExpectedRemoteId, retainedOriginalIdentity.RemoteId);
+                if (owner == 3)
+                {
+                    positionHistory = await VerifyNativeMemberLocationAfterPublicMoveAsync(fileSystem, state, catalog, router, nextRole, namespaceActor,
+                        members[births[0].Birth.OperationId], members[births[1].Birth.OperationId], feed, journalIds, births[1].Plan.ItemId, ReconcileAsync, timeout.Token);
+                    var retirementMember = members[nestedBirths[^1].Birth.OperationId];
+                    var retirement = new MirrorPulseNamespaceRetirementCoordinator(fileSystem, catalog, router, nextRole, namespaceActor);
+                    var retirementPrepared = await retirement.PrepareAsync(Guid.NewGuid(), retirementMember.MemberId, timeout.Token);
+                    var retirementCompleted = await retirement.ExecuteAsync(retirementPrepared.OperationId, timeout.Token);
+                    Assert.AreEqual(MirrorPulseNamespaceRetirementPhase.Completed, retirementCompleted.Phase);
+                    Assert.IsFalse((await fileSystem.GetFile(retirementMember.RelativePath).InspectAsync(timeout.Token)).Exists);
+                    TestContext.WriteLine("ControlledRetirement: leafFile=True; ordinaryDeleteDenied=True; nativeDeletionReceipt=True; membershipSettled=True; hostIntegrated=False.");
+                    Assert.AreEqual(0, source.Reads);
+                }
+                TestContext.WriteLine($"ControlledMembership: cfSharpOwner={owner}; registeredMembers={members.Count}; memberAdmission=True; originalFileIdentityAndBytes=True; freshChildAndDirectParent=True; stableOriginalAndBornProvenance=True; reservationTransferred={owner >= 1}; replayAfterRoleRotation={owner >= 1}; sourceReads={source.Reads}; hostIntegrated=False.");
+                foreach (var preparation in originals)
+                {
+                    await using var lease = await MirrorPulseWindowsNamespacePermissionLease.OpenMetadataAsync(
+                        NativeOriginalMemberItem(fileSystem, preparation.Baseline), router, timeout.Token);
+                    var current = await catalog.ReadLatestNamespacePermissionChangeAsync(preparation.Baseline.EvidenceId, timeout.Token);
+                    Assert.IsNotNull(current?.Verification);
+                    Assert.AreEqual(current.Verification.Dacl, (await lease.InspectAsync(timeout.Token)).Dacl);
+                }
+                TestContext.WriteLine($"ControlledBirth: owner={owner}; architecture={RuntimeInformation.ProcessArchitecture}; roleOnlyOrdinaryBirth=True; ordinaryBindingDurableBeforeConversion=True; sameObjectConversion=True; fileModeOpen=True; aliasesDenied=True; originalsRetained=True; nativeBirthUnrecorded={owner == 0}; officialJournalIds={journalIds.Length}; sourceReads={source.Reads}; parentAclClosed=True; elevatedCaller={new WindowsPrincipal(caller).IsInRole(WindowsBuiltInRole.Administrator)}; hostIntegrated=False.");
+            }
+            // All previous Catalog owners and Cloud Files sessions have released their leases.
+            Assert.IsNotNull(positionHistory);
+            await using var reopened = await MirrorPulseProductCatalog.OpenAsync(paths, timeout.Token);
+            Assert.AreEqual(positionHistory.First, await reopened.ReadNamespaceMemberPositionAsync(positionHistory.MemberId,
+                positionHistory.First.OperationId, timeout.Token));
+            Assert.AreEqual(positionHistory.Last, await reopened.ReadNamespaceMemberPositionAsync(positionHistory.MemberId,
+                positionHistory.Last.OperationId, timeout.Token));
+            Assert.AreEqual(positionHistory.Last.OperationId,
+                (await reopened.ReadNamespaceMemberLocationAsync(positionHistory.MemberId, timeout.Token)).CurrentPositionOperationId);
+            TestContext.WriteLine("ControlledMemberPositionReopen: previousOwnersDisposed=True; immutableFirstAndLast=True; currentHeadRetained=True; hostIntegrated=False.");
+        }
+        finally
+        {
+            registry.Unregister(paths.SyncRootPath);
+            RestoreSourceContextFixtureForCleanup(directory, paths.SyncRootPath, caller.User!);
+            DeleteFixture(directory);
+        }
+    }
+
+    private async Task<CloudLocalChange[]> WaitForBirthJournalAsync(CloudLocalChangeFeed feed, Guid file, Guid directory,
+        CancellationToken token, Func<CancellationToken, ValueTask>? reconcile = null)
+    {
+        string? previousDiagnostic = null;
+        while (true)
+        {
+            var scan = await feed.BeginScanAsync(token);
+            if (scan.RequiresFullRescan && reconcile is not null)
+            {
+                await reconcile(token);
+                continue;
+            }
+            Assert.IsFalse(scan.RequiresFullRescan);
+            var changes = new List<CloudLocalChange>();
+            long after = 0;
+            while (true)
+            {
+                var page = await feed.ReadPageAsync(scan, after, 64, token);
+                if (page.RequiresFullRescan && reconcile is not null)
+                {
+                    await reconcile(token);
+                    changes.Clear();
+                    break;
+                }
+                Assert.IsFalse(page.RequiresFullRescan);
+                changes.AddRange(page.Changes.Where(change => change.ItemId == file || change.ItemId == directory));
+                if (!page.HasMore) break;
+                Assert.IsGreaterThan(after, page.LastScannedSequence);
+                after = page.LastScannedSequence;
+            }
+            string diagnostic = $"count={changes.Count}; fileCreate={changes.Count(change => change.ItemId == file && change.Kind == CloudLocalChangeKind.Create)}; directoryCreate={changes.Count(change => change.ItemId == directory && change.Kind == CloudLocalChangeKind.Create)}";
+            if (diagnostic != previousDiagnostic)
+            {
+                TestContext.WriteLine("ControlledBirthJournal: " + diagnostic);
+                previousDiagnostic = diagnostic;
+            }
+            if (changes.Any(change => change.ItemId == file && change.Kind == CloudLocalChangeKind.Create && !change.IsDirectory) &&
+                changes.Any(change => change.ItemId == directory && change.Kind == CloudLocalChangeKind.Create && change.IsDirectory))
+                return changes.ToArray();
+            await Task.Delay(25, token);
+        }
+    }
+
+    private void AssertBirthAliasDenied(string alias, string target, int expectedError = 396)
+    {
+        bool created = CreateBirthHardLink(alias, target, nint.Zero);
+        int error = created ? 0 : Marshal.GetLastPInvokeError();
+        TestContext.WriteLine($"ControlledBirthAlias: name={Path.GetFileName(alias)}; created={created}; nativeError={error}.");
+        Assert.IsFalse(created);
+        Assert.AreEqual(expectedError, error); // Access denied before conversion; incompatible Cloud Files hardlinks afterwards.
+        Assert.IsFalse(File.Exists(alias));
+    }
+
+    [LibraryImport("kernel32.dll", EntryPoint = "CreateHardLinkW", StringMarshalling = StringMarshalling.Utf16, SetLastError = true)]
+    [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool CreateBirthHardLink(string alias, string target, nint attributes);
+
+    [LibraryImport("kernel32.dll", EntryPoint = "RemoveDirectoryW", StringMarshalling = StringMarshalling.Utf16, SetLastError = true)]
+    [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool RemoveBirthDirectory(string path);
+}

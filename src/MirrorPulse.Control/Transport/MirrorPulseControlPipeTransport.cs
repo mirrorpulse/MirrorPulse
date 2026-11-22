@@ -42,14 +42,11 @@ public static class MirrorPulseControlPipeTransport
             throw new InvalidDataException("The control frame exceeds the protocol limit.");
         }
 
-        var lengthPrefix = new byte[ControlFrameLimits.LengthPrefixBytes];
-        ControlFrameLimits.WritePayloadLength((uint)payload.Length, lengthPrefix);
-        await stream.WriteAsync(lengthPrefix, cancellationToken).ConfigureAwait(false);
-        if (!payload.IsEmpty)
-        {
-            await stream.WriteAsync(payload, cancellationToken).ConfigureAwait(false);
-        }
-
+        cancellationToken.ThrowIfCancellationRequested();
+        var frame = new byte[ControlFrameLimits.LengthPrefixBytes + payload.Length];
+        ControlFrameLimits.WritePayloadLength((uint)payload.Length, frame.AsSpan(0, ControlFrameLimits.LengthPrefixBytes));
+        payload.CopyTo(frame.AsMemory(ControlFrameLimits.LengthPrefixBytes));
+        await stream.WriteAsync(frame, cancellationToken).ConfigureAwait(false);
         await stream.FlushAsync(cancellationToken).ConfigureAwait(false);
     }
 }
@@ -109,6 +106,7 @@ public sealed class MirrorPulseControlPipeServer
     }
 
     public string PipeName => _pipeName;
+    internal Func<CancellationToken, Task>? BeforeAccept { get; init; }
 
     public async Task ServeAsync(CancellationToken cancellationToken)
     {
@@ -129,7 +127,22 @@ public sealed class MirrorPulseControlPipeServer
                     foreach (Task task in completed) connections.Remove(task);
                 }
 
-                await listener.WaitForConnectionAsync(cancellationToken).ConfigureAwait(false);
+                try
+                {
+                    if (BeforeAccept is not null) await BeforeAccept(cancellationToken).ConfigureAwait(false);
+                    await listener.WaitForConnectionAsync(cancellationToken).ConfigureAwait(false);
+                }
+                catch (IOException error) when (error.HResult == unchecked((int)0x800700E8))
+                {
+                    if (cancellationToken.IsCancellationRequested) break;
+                    // A probe can connect and close before the asynchronous accept begins.
+                    // Retain the old handle until its replacement owns the pipe name; an
+                    // aborted connection is not a failure of the Host initialization.
+                    var disconnected = listener; listener = null;
+                    try { listener = CreateListener(firstInstance: false); }
+                    finally { await disconnected.DisposeAsync().ConfigureAwait(false); }
+                    continue;
+                }
                 NamedPipeServerStream pipe = listener;
                 listener = null;
                 // Keep the pipe name owned throughout handover, even if a request completes immediately.
@@ -172,12 +185,13 @@ public sealed class MirrorPulseControlPipeServer
         }
     }
 
-    private async Task HandleConnectionAsync(NamedPipeServerStream pipe, SemaphoreSlim ordinary,
+    internal async Task HandleConnectionAsync(Stream pipe, SemaphoreSlim ordinary,
         SemaphoreSlim control, SemaphoreSlim mutation, bool overloaded, CancellationToken cancellationToken)
     {
         await using (pipe.ConfigureAwait(false))
         {
             Guid requestId = Guid.Empty;
+            bool responseStarted = false;
             try
             {
                 using var connection = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
@@ -191,12 +205,17 @@ public sealed class MirrorPulseControlPipeServer
                 ControlResponseEnvelope response = overloaded
                     ? Busy(requestId)
                     : await DispatchBoundedAsync(request, ordinary, control, mutation, connection.Token).ConfigureAwait(false);
+                // Serialization belongs to the whole connection budget, not the frame's I/O budget.
+                byte[] payload = MirrorPulseControlJsonCodec.Serialize(response);
                 connection.Token.ThrowIfCancellationRequested();
                 using var write = CancellationTokenSource.CreateLinkedTokenSource(connection.Token);
                 write.CancelAfter(_options.FrameWriteTimeout);
+                // A canceled or failed stream write may already have exposed a frame prefix.
+                // Closing is safe; appending a failure response would corrupt that first frame.
+                responseStarted = true;
                 await MirrorPulseControlPipeTransport.WriteFrameAsync(
                     pipe,
-                    MirrorPulseControlJsonCodec.Serialize(response),
+                    payload,
                     write.Token).ConfigureAwait(false);
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -205,7 +224,7 @@ public sealed class MirrorPulseControlPipeServer
             }
             catch (OperationCanceledException)
             {
-                await TryWriteFailureAsync(pipe, requestId,
+                if (!responseStarted) await TryWriteFailureAsync(pipe, requestId,
                     MirrorPulseControlErrorCodes.RequestTimeout,
                     "The control connection timed out.",
                     ErrorCategory.Network,
@@ -213,7 +232,7 @@ public sealed class MirrorPulseControlPipeServer
             }
             catch (InvalidDataException)
             {
-                await TryWriteFailureAsync(pipe, requestId,
+                if (!responseStarted) await TryWriteFailureAsync(pipe, requestId,
                     MirrorPulseControlErrorCodes.InvalidRequest,
                     "The control request is invalid.",
                     ErrorCategory.Protocol,
@@ -221,7 +240,7 @@ public sealed class MirrorPulseControlPipeServer
             }
             catch (ArgumentException)
             {
-                await TryWriteFailureAsync(pipe, requestId,
+                if (!responseStarted) await TryWriteFailureAsync(pipe, requestId,
                     MirrorPulseControlErrorCodes.InvalidRequest,
                     "The control request is invalid.",
                     ErrorCategory.Validation,
@@ -259,14 +278,14 @@ public sealed class MirrorPulseControlPipeServer
             ErrorCategory.Network, retryable: true));
 
     private async Task TryWriteFailureAsync(
-        NamedPipeServerStream pipe,
+        Stream pipe,
         Guid requestId,
         string code,
         string message,
         ErrorCategory category,
         CancellationToken cancellationToken)
     {
-        if (!pipe.IsConnected || requestId == Guid.Empty)
+        if (pipe is NamedPipeServerStream { IsConnected: false } || !pipe.CanWrite || requestId == Guid.Empty)
         {
             return;
         }

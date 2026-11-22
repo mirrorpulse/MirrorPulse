@@ -71,7 +71,7 @@ public sealed class SftpSignedPackageProcessTests
         var session = WorkerSessionId.New();
         string pipeName = $"mirrorpulse-sftp-package-{Guid.NewGuid():N}";
         await using var pipe = SecureNamedPipeServerFactory.Create(new NamedPipeServerOptions(pipeName));
-        using WorkerProcessHandle worker = WorkerProcessLauncher.Start(new WorkerLaunchRequest(
+        WorkerProcessHandle worker = WorkerProcessLauncher.Start(new WorkerLaunchRequest(
             instance, session, installed.ExecutablePath, installed.InstallationDirectory,
             ["--instance-id", instance.ToString(), "--worker-session-id", session.ToString(),
              "--pipe-name", pipeName]));
@@ -112,6 +112,7 @@ public sealed class SftpSignedPackageProcessTests
                 worker.Process.Kill(entireProcessTree: true);
                 await worker.WaitForExitAsync();
             }
+            worker.Dispose();
         }
     }
 

@@ -8,7 +8,7 @@ This repository contains the MirrorPulse application and its runtime code.
 
 ## Development status
 
-The no-UI `mp` CLI and current-user Host control path run on x64 and ARM64. The CLI is also packaged as an MSIX app execution alias. Synchronization recovery, multi-root Worker routing, live instance changes, and parts of the control surface remain incomplete. See the [capability baseline](docs/cli-capabilities.md) for implemented, partial, and unsupported behavior, and the [CLI reference](docs/cli.md) for commands.
+The no-UI `mp` CLI and current-user Host control path run on x64 and ARM64. The CLI is also packaged as an MSIX app execution alias. The current delivery baseline uses one declared root per Adapter instance, with multiple independent instances sharing one Windows sync root. Synchronization recovery, complete transfers between instances, live instance changes, and parts of the control surface remain incomplete. Same-instance transfers between multiple declared roots are deferred for review after the current journal milestone. See the [capability baseline](docs/cli-capabilities.md) for implemented, partial, and unsupported behavior, and the [CLI reference](docs/cli.md) for commands.
 
 ## Requirements
 

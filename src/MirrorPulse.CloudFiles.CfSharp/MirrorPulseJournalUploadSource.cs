@@ -3,6 +3,7 @@ using System.Security.Cryptography;
 using System.Text.Json;
 using CfSharp;
 using MirrorPulse.Core.Contracts;
+using MirrorPulse.Core.Diagnostics;
 using MirrorPulse.Core.State;
 using MirrorPulse.Core.Sync;
 
@@ -11,7 +12,23 @@ namespace MirrorPulse.CloudFiles.CfSharp;
 public sealed record MirrorPulseJournalUploadBatch(
     IReadOnlyList<MirrorPulseWorkerChangeCommand> ReadyCommands,
     int DeferredCount,
-    bool RequiresFullRescan);
+    bool RequiresFullRescan)
+{
+    public IReadOnlyList<MirrorPulseWorkerChangeCommand>? CompleteWindow { get; init; }
+    public long WindowUpperSequence { get; init; }
+    public bool ScanInProgress { get; init; }
+    public bool PlanningInProgress { get; init; }
+    public bool AdmissionInProgress { get; init; }
+
+    // Only the finite-window source supplies this exact immutable list after
+    // validating its original sequence. A copied batch with different ready
+    // commands must take the ordinary ordering path again.
+    internal IReadOnlyList<MirrorPulseWorkerChangeCommand>? ValidatedSequenceCommands { get; init; }
+
+    // Supplied during bounded admission, after removing metadata originals actually
+    // settled as unsupported. Disabled routes do not prevent an active peer's rescan.
+    internal IReadOnlySet<(InstanceId InstanceId, string RootKey)>? PendingRoutes { get; init; }
+}
 
 /// <summary>
 /// Reads upload intent from CfSharp's durable local journal. The MP catalog records only an
@@ -21,54 +38,184 @@ public sealed record MirrorPulseJournalUploadBatch(
 public sealed class MirrorPulseJournalUploadSource
 {
     private readonly CloudLocalChangeFeed _feed;
+    private readonly MirrorPulseJournalWindowReader<CloudLocalChangeScan> _windowReader;
+    private readonly int _planningBudget;
+    private readonly int _admissionBudget;
+    private MirrorPulseJournalWindowPlanner? _planner;
+    private MirrorPulseJournalAdmissionPlanner? _admission;
+    private HashSet<Guid> _retiredHeld = [];
+    private int _reading;
     private readonly MirrorPulseRootRouter _router;
     private readonly MirrorPulseProductCatalog _catalog;
     private readonly Func<InstanceId, bool> _mayDispatch;
     private readonly MirrorPulseJournalUploadCompletion? _completion;
+    private readonly MirrorPulseNamespaceWorkAdmission? _namespaceWork;
+    private readonly IMirrorPulseRetiredTransferObservationHandler? _retiredSources;
+    private readonly MirrorPulseRootLabelJournalRecovery? _rootLabelJournal;
+    private readonly MirrorPulseRootLabelJournalAdmission? _rootLabelAdmission;
     public bool RequiresFullRescan { get; private set; }
-    public void ClearFullRescanRequest() => RequiresFullRescan = false;
+    public void ClearFullRescanRequest()
+    {
+        if (Interlocked.Exchange(ref _reading, 1) != 0) throw new InvalidOperationException("A running journal source cannot be reset concurrently.");
+        try { ResetPlanning(); RequiresFullRescan = false; }
+        finally { Volatile.Write(ref _reading, 0); }
+    }
 
     public MirrorPulseJournalUploadSource(
         CloudLocalChangeFeed feed,
         MirrorPulseRootRouter router,
         MirrorPulseProductCatalog catalog,
         Func<InstanceId, bool> mayDispatch,
-        MirrorPulseJournalUploadCompletion? completion = null)
+        MirrorPulseJournalUploadCompletion? completion = null,
+        MirrorPulseNamespaceWorkAdmission? namespaceWork = null,
+        IMirrorPulseRetiredTransferObservationHandler? retiredSources = null,
+        int scanPagesPerRead = 8,
+        int planningObservationsPerRead = 2048,
+        int admissionOperationsPerRead = 2048,
+        MirrorPulseRootLabelJournalRecovery? rootLabelJournal = null,
+        MirrorPulseRootLabelJournalAdmission? rootLabelAdmission = null)
     {
         ArgumentNullException.ThrowIfNull(feed);
         ArgumentNullException.ThrowIfNull(router);
         ArgumentNullException.ThrowIfNull(catalog);
         ArgumentNullException.ThrowIfNull(mayDispatch);
+        ArgumentOutOfRangeException.ThrowIfLessThan(planningObservationsPerRead, 1);
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(planningObservationsPerRead, 4096);
+        ArgumentOutOfRangeException.ThrowIfLessThan(admissionOperationsPerRead, 1);
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(admissionOperationsPerRead, 4096);
+        _planningBudget = planningObservationsPerRead;
+        _admissionBudget = admissionOperationsPerRead;
         _feed = feed;
+        _windowReader = new(feed.BeginScanAsync, scan => scan.ThroughSequence, scan => scan.RequiresFullRescan,
+            async (scan, after, limit, token) =>
+            {
+                var page = await feed.ReadPageAsync(scan, after, limit, token).ConfigureAwait(false);
+                return new(page.Changes.Select(change => new MirrorPulseLocalChangeObservation(change.OperationId,
+                    change.Sequence, change.Kind, change.ItemId, change.RelativePath, change.PreviousRelativePath,
+                    change.IsDirectory, change.ObservedAt)).ToArray(), page.LastScannedSequence, page.HasMore, page.RequiresFullRescan);
+            }, pagesPerRead: scanPagesPerRead);
         _router = router;
         _catalog = catalog;
         _mayDispatch = mayDispatch;
         _completion = completion;
+        _namespaceWork = namespaceWork;
+        _retiredSources = retiredSources;
+        _rootLabelJournal = rootLabelJournal;
+        _rootLabelAdmission = rootLabelAdmission;
     }
 
-    public async ValueTask<MirrorPulseJournalUploadBatch> ReadPendingAsync(
+    public ValueTask<MirrorPulseJournalUploadBatch> ReadPendingAsync(
         CancellationToken cancellationToken = default)
+        => ReadPendingAsync(waitForNotification: true, cancellationToken);
+
+    internal ValueTask<MirrorPulseJournalUploadBatch> ReadBeforeRequestedRescanAsync(CancellationToken cancellationToken)
+        => ReadPendingAsync(waitForNotification: false, cancellationToken);
+
+    private async ValueTask<MirrorPulseJournalUploadBatch> ReadPendingAsync(bool waitForNotification, CancellationToken cancellationToken)
     {
-        CloudLocalChangeBatch batch = await _feed.ReadBatchAsync(cancellationToken).ConfigureAwait(false);
-        MirrorPulseLocalBatchPlan plan = MirrorPulseLocalBatchMapper.Map(batch, _router);
-        if (plan.RequiresFullRescan)
+        if (Interlocked.Exchange(ref _reading, 1) != 0) throw new InvalidOperationException("The journal source has one planning owner.");
+        try { return await ReadPendingCoreAsync(waitForNotification, cancellationToken).ConfigureAwait(false); }
+        catch { ResetPlanning(); throw; }
+        finally { Volatile.Write(ref _reading, 0); }
+    }
+
+    private async ValueTask<MirrorPulseJournalUploadBatch> ReadPendingCoreAsync(bool waitForNotification, CancellationToken cancellationToken)
+    {
+        if (_retiredSources is not null) await MirrorPulseJournalReadDiagnostics.AtStageAsync(MirrorPulseJournalReadStage.RetiredSourceRecovery, async () => await _retiredSources.RecoverPendingAsync(cancellationToken).ConfigureAwait(false)).ConfigureAwait(false);
+        // Preserve the feed's wait-for-notification behavior when the journal is
+        // empty and recovery has finished its root scan. Otherwise continue finite
+        // scans even without another journal notification. This head is only a
+        // wake-up observation, never the planning window.
+        if (_planner is null && _admission is null)
         {
-            RequiresFullRescan = true;
-            return new([], 0, true);
+            if (waitForNotification && !_windowReader.HasPendingScan && _retiredSources?.RecoveryScanInProgress != true &&
+                _rootLabelJournal?.RecoveryScanInProgress != true &&
+                !(OperatingSystem.IsWindowsVersionAtLeast(10, 0, 26100) && _rootLabelAdmission?.HasPendingReadmission == true))
+            {
+                CloudLocalChangeBatch head = await MirrorPulseJournalReadDiagnostics.AtStageAsync(MirrorPulseJournalReadStage.FeedHead, async () => await _feed.ReadBatchAsync(cancellationToken).ConfigureAwait(false)).ConfigureAwait(false);
+                if (head.RequiresFullRescan)
+                {
+                    _windowReader.Reset(); RequiresFullRescan = true;
+                    return new([], 0, true);
+                }
+            }
+
+            // A legacy batch always starts at the earliest pending row. Retaining a
+            // disabled root's head must not make unrelated active roots unreachable.
+            // Read the finite public window completely before planning, over bounded
+            // turns so a large backlog does not monopolize one scheduling call. The
+            // continuation is ephemeral; the official journal remains the authority.
+            var readWindow = await MirrorPulseJournalReadDiagnostics.AtStageAsync(MirrorPulseJournalReadStage.FeedWindow, async () => await _windowReader.ReadAsync(cancellationToken).ConfigureAwait(false)).ConfigureAwait(false);
+            if (readWindow.RequiresFullRescan)
+            {
+                RequiresFullRescan = true;
+                return new([], 0, true);
+            }
+
+            if (readWindow.ScanInProgress)
+            {
+                return new([], 0, false) { ScanInProgress = true, WindowUpperSequence = readWindow.UpperSequence };
+            }
+            _planner = new(readWindow.Observations!, _router, readWindow.UpperSequence, _planningBudget);
+            _retiredHeld = [];
         }
 
-        if (plan.DirectoryMetadataOperationIds.Count != 0)
+        // Classification can span turns. Recheck the feed's current loss marker
+        // without extending the original finite window or waiting for another row.
+        var currentScan = await MirrorPulseJournalReadDiagnostics.AtStageAsync(MirrorPulseJournalReadStage.FeedLossCheck, async () => await _feed.BeginScanAsync(cancellationToken).ConfigureAwait(false)).ConfigureAwait(false);
+        if (currentScan.RequiresFullRescan)
         {
-            await _feed.AcknowledgeAsync(plan.DirectoryMetadataOperationIds.Select(operationId =>
-                    new CloudLocalChangeAcknowledgement(operationId, null)), cancellationToken)
-                .ConfigureAwait(false);
+            ResetPlanning(); RequiresFullRescan = true; return new([], 0, true);
         }
+        HashSet<RootId> pendingRoots = (await MirrorPulseJournalReadDiagnostics.AtStageAsync(MirrorPulseJournalReadStage.PendingRootRead, async () => await _catalog.ReadNamespaceDispatchFencedRootsAsync(cancellationToken).ConfigureAwait(false)).ConfigureAwait(false)).ToHashSet();
+        if (_admission is null)
+        {
+            if (!await MirrorPulseJournalReadDiagnostics.AtStageAsync(MirrorPulseJournalReadStage.JournalClassification, async () => await _planner!.AdvanceAsync((observation, token) => IncludeOriginalAsync(observation, pendingRoots, token), cancellationToken).ConfigureAwait(false)).ConfigureAwait(false))
+                return new([], 0, false) { PlanningInProgress = true, WindowUpperSequence = _planner!.UpperSequence };
+            MirrorPulseLocalBatchPlan plan = _planner!.Plan;
+            long upperSequence = _planner.UpperSequence;
+            _planner = null;
+            if (plan.RequiresFullRescan)
+            {
+                ResetPlanning(); RequiresFullRescan = true; return new([], 0, true);
+            }
+            _admission = new(plan, upperSequence, _admissionBudget);
+            pendingRoots = (await MirrorPulseJournalReadDiagnostics.AtStageAsync(MirrorPulseJournalReadStage.PendingRootRead, async () => await _catalog.ReadNamespaceDispatchFencedRootsAsync(cancellationToken).ConfigureAwait(false)).ConfigureAwait(false)).ToHashSet();
+        }
+        if (!await MirrorPulseJournalReadDiagnostics.AtStageAsync(MirrorPulseJournalReadStage.JournalAdmission, () => _admission.AdvanceAsync((blocked, token) => RecordBlockedAsync(blocked, pendingRoots, token),
+            (command, token) => PrepareCommandAsync(command, pendingRoots, token), cancellationToken)).ConfigureAwait(false))
+            return new([], 0, false) { AdmissionInProgress = true, WindowUpperSequence = _admission.UpperSequence };
+        var result = _admission.Result;
+        _admission = null; _retiredHeld = [];
+        return result;
+    }
 
-        var ready = new List<MirrorPulseWorkerChangeCommand>(plan.Commands.Count);
-        int deferred = plan.BlockedOperations?.Count ?? 0;
-        foreach (MirrorPulseBlockedLocalOperation blocked in plan.BlockedOperations ?? [])
-            await _catalog.SaveBlockedLocalOperationAsync(blocked, cancellationToken).ConfigureAwait(false);
-        foreach (MirrorPulseWorkerChangeCommand command in plan.Commands)
+    private async ValueTask<bool> RecordBlockedAsync(MirrorPulseBlockedLocalOperation blocked, HashSet<RootId> pendingRoots, CancellationToken token)
+    {
+        if (_retiredHeld.Contains(blocked.OperationId)) return false;
+        await _catalog.SaveBlockedLocalOperationAsync(blocked, token).ConfigureAwait(false);
+        if (blocked.Reason != MirrorPulseLocalOperationBlockReason.UnsupportedMetadataChange || IsNamespaceFenced(blocked.RelativePath, pendingRoots))
+            return false;
+        var routed = _router.ResolvePath(blocked.RelativePath);
+        RootId rootId = _router.GetRegistration(routed.InstanceId, routed.RootKey).RootId;
+        MirrorPulseNamespaceWorkAdmission.WorkLease? admission = null;
+        if (_namespaceWork is not null && !_namespaceWork.TryEnter([rootId], out admission)) return false;
+        using (admission)
+        {
+            // Each original is settled only after its durable unsupported result,
+            // under the same namespace admission. This grants no remote metadata acceptance.
+            await _feed.AcknowledgeAsync([new CloudLocalChangeAcknowledgement(blocked.OperationId, null)], token).ConfigureAwait(false);
+        }
+        return true;
+    }
+
+    private async ValueTask<bool> PrepareCommandAsync(MirrorPulseWorkerChangeCommand command, HashSet<RootId> pendingRoots, CancellationToken token)
+    {
+        RootRegistration root = _router.GetRegistration(command.InstanceId, command.RootKey);
+        if (pendingRoots.Contains(root.RootId) || _retiredHeld.Contains(command.OperationId)) return false;
+        MirrorPulseNamespaceWorkAdmission.WorkLease? admission = null;
+        if (_namespaceWork is not null && !_namespaceWork.TryEnter([root.RootId], out admission)) return false;
+        using (admission)
         {
             byte[] fingerprint = SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(command));
             // Official identity projection may clear a journal's old ItemId reference.
@@ -81,33 +228,83 @@ public sealed class MirrorPulseJournalUploadSource
                 command.OperationId,
                 command.InstanceId,
                 fingerprint,
-                    stableFingerprint, cancellationToken).ConfigureAwait(false);
+                    stableFingerprint, token).ConfigureAwait(false);
             }
-            catch (InvalidDataException)
+            catch (Exception error) when (error is InvalidDataException or InvalidOperationException)
             {
                 await _catalog.SaveBlockedLocalOperationAsync(new(command.OperationId, command.InstanceId,
-                    command.RelativePath, MirrorPulseLocalOperationBlockReason.RequestIdentityMismatch, command.ObservedAt), cancellationToken).ConfigureAwait(false);
-                deferred++;
-                continue;
+                    command.RelativePath, MirrorPulseLocalOperationBlockReason.RequestIdentityMismatch, command.ObservedAt), token).ConfigureAwait(false);
+                return false;
             }
-            await _catalog.ClearBlockedLocalOperationAsync(command.OperationId, cancellationToken).ConfigureAwait(false);
+            await _catalog.ClearBlockedLocalOperationAsync(command.OperationId, token).ConfigureAwait(false);
             DateTimeOffset? retryAfter = _completion is null
                 ? null
-                : await _completion.GetRetryAfterAsync(command.OperationId, cancellationToken)
+                : await _completion.GetRetryAfterAsync(command.OperationId, token)
                     .ConfigureAwait(false);
-            if (_mayDispatch(command.InstanceId) &&
-                !await _catalog.HasPendingUploadConflictAsync(command.OperationId, cancellationToken)
+            return _mayDispatch(command.InstanceId) && root.State == RootRegistrationState.Active && !pendingRoots.Contains(root.RootId) &&
+                !await _catalog.HasPendingUploadConflictAsync(command.OperationId, token)
                     .ConfigureAwait(false) &&
-                (retryAfter is null || retryAfter <= DateTimeOffset.UtcNow))
-            {
-                ready.Add(command);
-            }
-            else
-            {
-                deferred++;
-            }
+                (retryAfter is null || retryAfter <= DateTimeOffset.UtcNow);
         }
+    }
 
-        return new(ready.AsReadOnly(), deferred, false);
+    private async ValueTask<bool> IncludeOriginalAsync(MirrorPulseLocalChangeObservation observation,
+        HashSet<RootId> pendingRoots, CancellationToken token)
+    {
+        // Durable original-ID ownership precedes mutable SDK identity references and
+        // ordinary or retired Worker planning. This accepts no new root notification.
+        try
+        {
+            if (_rootLabelJournal is not null && await _rootLabelJournal.TryReplayOwnedAsync(observation.OperationId, token).ConfigureAwait(false))
+                return false;
+            if (OperatingSystem.IsWindowsVersionAtLeast(10, 0, 26100) && _rootLabelAdmission is not null &&
+                await _rootLabelAdmission.TryAcceptAsync(observation, token).ConfigureAwait(false))
+                return false;
+        }
+        catch (Exception failure) when (OperatingSystem.IsWindowsVersionAtLeast(10, 0, 26100) && _rootLabelAdmission is not null &&
+            !token.IsCancellationRequested && failure is (IOException or InvalidDataException or InvalidOperationException or
+                UnauthorizedAccessException or System.ComponentModel.Win32Exception or Microsoft.Data.Sqlite.SqliteException or OperationCanceledException))
+        {
+            // One root's failed native audit or uncertain ACK must not abort the
+            // whole finite window or dispatch that original as ordinary work.
+            await _rootLabelAdmission.RecordDeferredAsync(observation, failure, token).ConfigureAwait(false);
+            _retiredHeld.Add(observation.OperationId);
+            return true;
+        }
+        if (observation.ItemId is not { } itemId) return true;
+        if (OperatingSystem.IsWindowsVersionAtLeast(10, 0, 26100) &&
+            await _catalog.ReadRetiredDirectoryTransferSourceAsync(itemId, token).ConfigureAwait(false) is { } directorySource)
+        {
+            if (_retiredSources is MirrorPulseRetiredTransferObservationHandler handler &&
+                !pendingRoots.Contains(directorySource.Admission.SourceRoute.RootId) &&
+                await handler.TryAcknowledgeDirectorySourceAsync(observation, directorySource, token).ConfigureAwait(false))
+                return false;
+            _retiredHeld.Add(observation.OperationId);
+            await _catalog.SaveBlockedLocalOperationAsync(new(observation.OperationId, directorySource.Admission.SourceRoute.InstanceId, observation.RelativePath,
+                MirrorPulseLocalOperationBlockReason.RootReconciliationRequired, observation.ObservedAt), token).ConfigureAwait(false);
+            return true;
+        }
+        var candidates = await _catalog.ReadNamespaceTransferSourceGenerationsAsync(itemId, token).ConfigureAwait(false);
+        if (candidates.Count == 0) return true;
+        bool accepted = candidates.Count == 1 && _retiredSources is not null &&
+            !pendingRoots.Contains(candidates[0].Transfer.Plan.SourceRoute.RootId) &&
+            await _retiredSources.TryAcknowledgeAsync(observation, candidates[0], token).ConfigureAwait(false);
+        if (accepted) return false;
+        else
+        {
+            _retiredHeld.Add(observation.OperationId);
+            await _catalog.SaveBlockedLocalOperationAsync(new(observation.OperationId,
+                candidates.Count == 1 ? candidates[0].Transfer.Plan.SourceRoute.InstanceId : null,
+                observation.RelativePath, MirrorPulseLocalOperationBlockReason.RootReconciliationRequired, observation.ObservedAt), token).ConfigureAwait(false);
+        }
+        return true;
+    }
+
+    private void ResetPlanning() { _windowReader.Reset(); _planner = null; _admission = null; _retiredHeld = []; }
+
+    private bool IsNamespaceFenced(string path, HashSet<RootId> pendingRoots)
+    {
+        MirrorPulseRoutedItem routed = _router.ResolvePath(path);
+        return pendingRoots.Contains(_router.GetRegistration(routed.InstanceId, routed.RootKey).RootId);
     }
 }

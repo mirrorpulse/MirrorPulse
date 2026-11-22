@@ -1,7 +1,12 @@
+using System.ComponentModel;
+using System.Diagnostics;
 using System.IO.MemoryMappedFiles;
+using System.Reflection;
+using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
 using System.Security.Cryptography;
 using CfSharp;
+using Microsoft.Win32.SafeHandles;
 using MirrorPulse.CloudFiles.CfSharp;
 using MirrorPulse.Core.CloudFiles;
 using MirrorPulse.Core.Configuration;
@@ -13,7 +18,7 @@ namespace MirrorPulse.CloudFiles.CfSharp.Tests;
 
 [TestClass]
 [SupportedOSPlatform("windows10.0.19041")]
-public sealed class MirrorPulseContentConfirmationRecoveryTests
+public sealed partial class MirrorPulseContentConfirmationRecoveryTests
 {
     public TestContext TestContext { get; set; } = null!;
 
@@ -78,8 +83,14 @@ public sealed class MirrorPulseContentConfirmationRecoveryTests
                 for (int attempt = 0; attempt < 4; attempt++)
                 {
                     fixture.Faults.FailNextCommit = true;
-                    pending = await MirrorPulseContentConfirmation.ConfirmAsync(fixture.File, proof, token);
+                    var native = await fixture.File.ConfirmUploadedContentAsync(MirrorPulseContentConfirmation.CreateRequest(proof), token);
+                    pending = MirrorPulseContentConfirmation.MapReceipt(native);
                     TestContext.WriteLine($"Confirmation matrix: projectionFaultAttempt={attempt + 1}; outcome={pending.Outcome}; stage={pending.Stage}; nativeStage={pending.NativeStage}; identityPrepared={pending.NativeIdentityPrepared}; nativeApplied={pending.NativeApplied}; nativeVerified={pending.NativeConfirmationVerified}; projectionCommitted={pending.DurableProjectionCommitted}; preparationHResult={pending.PreparationHResult:X8}; markHResult={pending.NativeMarkHResult:X8}; nativeHResult={pending.NativeErrorHResult:X8}; projectionHResult={pending.ProjectionErrorHResult:X8}.");
+                    if (native.NativeError is not null || native.ProjectionError is not null)
+                    {
+                        string? libraryVersion = typeof(CloudFile).Assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion;
+                        TestContext.WriteLine($"Confirmation library: version={libraryVersion}; nativeError={native.NativeError}; projectionError={native.ProjectionError}.");
+                    }
                     await fixture.Catalog.SaveContentConfirmationReceiptAsync(intent.OperationId, pending, CancellationToken.None);
                     if (pending.NativeConfirmationVerified) break;
                     Assert.IsTrue(pending.Outcome is MirrorPulseContentConfirmationOutcome.ProtectionLost or MirrorPulseContentConfirmationOutcome.Busy,
@@ -186,15 +197,15 @@ public sealed class MirrorPulseContentConfirmationRecoveryTests
             mapped.ExpectedSha256.Span, mapped.Preparation, mapped.ExpectedPlaceholderIdentity.Span, segmentSize: 1024);
         using var cancel = new CancellationTokenSource();
         CloudFile file = fixture.File;
-        Task<CloudContentConfirmationResult> confirming = Task.Run(async () => await file.ConfirmUploadedContentAsync(request, cancel.Token));
-        string nativePath = fixture.File.FullPath;
-        await Task.Delay(100);
+        string nativePath = file.FullPath;
+        Task<CloudContentConfirmationResult> confirming = await StartSegmentedReadAsync(file, request, cancel.Token);
         Task? stopping = null;
         if (dispose) stopping = fixture.System.DisposeAsync().AsTask();
         else cancel.Cancel();
         MirrorPulseContentConfirmationReceipt receipt = MirrorPulseContentConfirmation.MapReceipt(
             await confirming.WaitAsync(TimeSpan.FromSeconds(10)));
         if (stopping is not null) await stopping.WaitAsync(TimeSpan.FromSeconds(10));
+        TestContext.WriteLine($"Confirmation drain: dispose={dispose}; outcome={receipt.Outcome}; verifiedBytes={receipt.BytesVerified}; segmentsRead={receipt.SegmentsRead}.");
         Assert.AreEqual(MirrorPulseContentConfirmationOutcome.Canceled, receipt.Outcome);
         Assert.IsFalse(receipt.NativeApplied);
         Assert.IsFalse(receipt.MayAcknowledge);
@@ -258,9 +269,7 @@ public sealed class MirrorPulseContentConfirmationRecoveryTests
         var request = new CloudContentConfirmationRequest(mapped.ExpectedBinding, mapped.AcceptedIdentity, mapped.ExpectedLength,
             mapped.ExpectedSha256.Span, mapped.Preparation, mapped.ExpectedPlaceholderIdentity.Span, segmentSize: 1024);
         CloudFile file = fixture.File;
-        Task<CloudContentConfirmationResult> confirming = Task.Run(async () => await file.ConfirmUploadedContentAsync(request));
-        await Task.Delay(100);
-        Assert.IsFalse(confirming.IsCompleted, "The writer must enter while the segmented verifier is active.");
+        Task<CloudContentConfirmationResult> confirming = await StartSegmentedReadAsync(file, request, default);
         Task changing = Task.Run(async () =>
         {
             await using var writer = new FileStream(file.FullPath, FileMode.Open, FileAccess.Write, FileShare.ReadWrite | FileShare.Delete);
@@ -268,13 +277,72 @@ public sealed class MirrorPulseContentConfirmationRecoveryTests
         });
         MirrorPulseContentConfirmationReceipt receipt = MirrorPulseContentConfirmation.MapReceipt(await confirming.WaitAsync(TimeSpan.FromSeconds(10)));
         await changing.WaitAsync(TimeSpan.FromSeconds(10));
+        TestContext.WriteLine($"Confirmation writer: outcome={receipt.Outcome}; verifiedBytes={receipt.BytesVerified}; segmentsRead={receipt.SegmentsRead}.");
         Assert.IsTrue(receipt.Outcome is MirrorPulseContentConfirmationOutcome.ProtectionLost or MirrorPulseContentConfirmationOutcome.ContentMismatch);
+        Assert.IsGreaterThan(0L, receipt.BytesVerified, "The competing write must invalidate a proof after the native read has started.");
         Assert.IsFalse(receipt.NativeApplied);
         Assert.IsFalse(receipt.MayAcknowledge);
         Assert.AreEqual(CloudSynchronizationState.NotInSync, (await file.InspectAsync()).SynchronizationState);
         using (var current = new FileStream(file.FullPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
             Assert.AreEqual(255, current.ReadByte());
         TestContext.WriteLine("Confirmation matrix: queuedWriterProgressed=True; segmentedProofInvalidated=True; nativeApplied=False.");
+    }
+
+    private static async Task<Task<CloudContentConfirmationResult>> StartSegmentedReadAsync(CloudFile file,
+        CloudContentConfirmationRequest request, CancellationToken cancellationToken)
+    {
+        // These fixtures run without parallel tests or Adapter Workers. Probe process
+        // read I/O without opening the target and interfering with CfSharp's protection.
+        // The returned receipt still has to prove progress for this specific file.
+        const ulong minimumReads = 128;
+        ulong minimumBytes = minimumReads * (ulong)request.SegmentSize;
+        using Process process = Process.GetCurrentProcess();
+        IoCounters baseline = ReadIoCounters(process);
+        Task<CloudContentConfirmationResult> confirming = file.ConfirmUploadedContentAsync(request, cancellationToken).AsTask();
+        long started = Stopwatch.GetTimestamp();
+        while (!confirming.IsCompleted && Stopwatch.GetElapsedTime(started) < TimeSpan.FromSeconds(10))
+        {
+            IoCounters current = ReadIoCounters(process);
+            if (current.ReadOperationCount - baseline.ReadOperationCount >= minimumReads &&
+                current.ReadTransferCount - baseline.ReadTransferCount >= minimumBytes &&
+                !confirming.IsCompleted)
+            {
+                return confirming;
+            }
+
+            await Task.Delay(10, cancellationToken);
+        }
+
+        if (confirming.IsCompleted)
+        {
+            CloudContentConfirmationResult result = await confirming;
+            throw new AssertFailedException($"Confirmation finished before the native read could be interrupted. Outcome={result.Outcome}; stage={result.Stage}; verifiedBytes={result.BytesVerified}.");
+        }
+
+        throw new AssertFailedException("No segmented read progress was observed within the native test budget.");
+    }
+
+    private static IoCounters ReadIoCounters(Process process)
+    {
+        if (!GetProcessIoCounters(process.SafeHandle, out IoCounters counters))
+            throw new Win32Exception(Marshal.GetLastPInvokeError());
+
+        return counters;
+    }
+
+    [LibraryImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool GetProcessIoCounters(SafeProcessHandle process, out IoCounters counters);
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct IoCounters
+    {
+        public ulong ReadOperationCount;
+        public ulong WriteOperationCount;
+        public ulong OtherOperationCount;
+        public ulong ReadTransferCount;
+        public ulong WriteTransferCount;
+        public ulong OtherTransferCount;
     }
 
     [TestMethod]

@@ -4,6 +4,7 @@ using MirrorPulse.CloudFiles.CfSharp;
 using MirrorPulse.Core.CloudFiles;
 using MirrorPulse.Core.Configuration;
 using MirrorPulse.Core.Contracts;
+using MirrorPulse.Core.State;
 
 namespace MirrorPulse.CloudFiles.CfSharp.Tests;
 
@@ -11,6 +12,52 @@ namespace MirrorPulse.CloudFiles.CfSharp.Tests;
 [TestClass]
 public sealed class MirrorPulseRemoteBatchCoordinatorTests
 {
+    [TestMethod]
+    public async Task CursorReadsDistinguishAnAbsentCheckpointFromAnExistingEmptyCursor()
+    {
+        string directory = Path.Combine(Path.GetTempPath(), "MirrorPulse-cursor-tests", Guid.NewGuid().ToString("N"));
+        var paths = new MirrorPulseStoragePaths(Path.Combine(directory, "sync"), Path.Combine(directory, "data"));
+        var instance = InstanceId.New();
+        Directory.CreateDirectory(paths.SyncRootPath);
+        try
+        {
+            var state = new MirrorPulseCfSharpStateSession(paths);
+            await using var store = await state.OpenAsync(new(paths.SyncRootPath));
+            await using var fileSystem = new MirrorPulseCloudFileSystemBuilder(paths).WithStateStore(state)
+                .WithContentProvider(MirrorPulseDemandProvider.CreateWithoutAdapters(paths.SyncRootPath)).Build();
+            var coordinator = new MirrorPulseRemoteBatchCoordinator(fileSystem, state);
+            Assert.IsNull(await coordinator.ReadCursorAsync(instance));
+            await using (var transaction = await store.BeginTransactionAsync())
+            {
+                await transaction.Checkpoints.UpsertAsync(new(MirrorPulseRemoteBatchCoordinator.GetCheckpointName(instance),
+                    ReadOnlySpan<byte>.Empty, DateTimeOffset.UtcNow));
+                await transaction.CommitAsync();
+            }
+            var empty = await coordinator.ReadCursorAsync(instance);
+            Assert.IsTrue(empty.HasValue); Assert.IsTrue(empty.Value.IsEmpty);
+            await using (var transaction = await store.BeginTransactionAsync())
+            {
+                await transaction.Checkpoints.UpsertAsync(new(MirrorPulseRemoteBatchCoordinator.GetCheckpointName(instance),
+                    new byte[] { 1, 2, 3 }, DateTimeOffset.UtcNow));
+                await transaction.CommitAsync();
+            }
+            CollectionAssert.AreEqual(new byte[] { 1, 2, 3 }, (await coordinator.ReadCursorAsync(instance))!.Value.ToArray());
+            Assert.IsNull(await coordinator.ReadCursorAsync(InstanceId.New()));
+            var first = RootId.New(); var second = RootId.New();
+            Assert.IsNull(await coordinator.ReadCursorAsync(instance, first));
+            await using (var transaction = await store.BeginTransactionAsync())
+            {
+                await transaction.Checkpoints.UpsertAsync(new(MirrorPulseRemoteBatchCoordinator.GetCheckpointName(instance, first), new byte[] { 7 }, DateTimeOffset.UtcNow));
+                await transaction.Checkpoints.UpsertAsync(new(MirrorPulseRemoteBatchCoordinator.GetCheckpointName(instance, second), new byte[] { 8 }, DateTimeOffset.UtcNow));
+                await transaction.CommitAsync();
+            }
+            CollectionAssert.AreEqual(new byte[] { 7 }, (await coordinator.ReadCursorAsync(instance, first))!.Value.ToArray());
+            CollectionAssert.AreEqual(new byte[] { 8 }, (await coordinator.ReadCursorAsync(instance, second))!.Value.ToArray());
+            CollectionAssert.AreEqual(new byte[] { 1, 2, 3 }, (await coordinator.ReadCursorAsync(instance))!.Value.ToArray());
+        }
+        finally { Directory.Delete(directory, recursive: true); }
+    }
+
     [TestMethod]
     [DoNotParallelize]
     [TestCategory("NativeCloudFiles")]
@@ -40,7 +87,7 @@ public sealed class MirrorPulseRemoteBatchCoordinatorTests
             {
                 await fileSystem.StartAsync();
                 var coordinator = new MirrorPulseRemoteBatchCoordinator(fileSystem, firstState);
-                CloudRemoteApplyResult firstResult = await coordinator.ApplyAsync(instance, first);
+                MirrorPulseRemoteBatchResult firstResult = await coordinator.ApplyAsync(instance, first);
                 Assert.AreEqual(CloudRemoteBatchStatus.Applied, firstResult.Status);
                 CollectionAssert.AreEqual(new byte[] { 1 }, (await coordinator.ReadCursorAsync(instance))?.ToArray());
                 await coordinator.ApplyAsync(instance, first);
@@ -72,18 +119,55 @@ public sealed class MirrorPulseRemoteBatchCoordinatorTests
                      new CloudRemoteChange("b", CloudRemoteChangeKind.DirectoryUpsert, "b", "v1",
                         CloudItemKind.Directory, "B", metadata: metadata, cursorAfter: new byte[] { 4 })],
                     new byte[] { 4 });
-                CloudRemoteApplyResult partialResult = await coordinator.ApplyAsync(
+                MirrorPulseRemoteBatchResult partialResult = await coordinator.ApplyAsync(
                     instance, partial, new CloudRemoteApplyOptions { MaximumEntries = 1 });
                 Assert.IsTrue(partialResult.RequiresRetry);
                 Assert.IsLessThanOrEqualTo(1, partialResult.AppliedEntryCount);
                 CollectionAssert.AreEqual(new byte[] { 3 }, (await coordinator.ReadCursorAsync(instance))?.ToArray());
-                CloudRemoteApplyResult completed = await coordinator.ApplyAsync(instance, partial);
+                MirrorPulseRemoteBatchResult completed = await coordinator.ApplyAsync(instance, partial);
                 Assert.AreEqual(CloudRemoteBatchStatus.Applied, completed.Status);
                 Assert.IsFalse(completed.RequiresRetry);
                 CollectionAssert.AreEqual(new byte[] { 4 }, (await coordinator.ReadCursorAsync(instance))?.ToArray());
-                CloudRemoteApplyResult replayed = await coordinator.ApplyAsync(instance, partial);
+                MirrorPulseRemoteBatchResult replayed = await coordinator.ApplyAsync(instance, partial);
                 Assert.AreEqual(CloudRemoteBatchStatus.Applied, replayed.Status);
                 CollectionAssert.AreEqual(new byte[] { 4 }, replayed.SafeCursor.ToArray());
+                var rootA = AdapterRootRegistrationMapper.Map(AdapterId.Parse("example.cursor-roots"), instance,
+                    new("a", "A", "A", false), RootRegistrationState.Active, identityScope: RootIdentityScope.InstanceRoot);
+                var rootB = AdapterRootRegistrationMapper.Map(rootA.AdapterId, instance,
+                    new("b", "B", "B", false), RootRegistrationState.Active, identityScope: RootIdentityScope.InstanceRoot);
+                CloudRemoteChangeBatch RootBatch(RootRegistration selected, byte before, byte after)
+                {
+                    byte[] start = Enumerable.Repeat(before, 32).ToArray(), finish = Enumerable.Repeat(after, 32).ToArray();
+                    return new(MirrorPulseRemotePollBatchScope.Prefix(selected) + Convert.ToHexString(start) + "/" + Convert.ToHexString(finish), start, [], finish);
+                }
+                await coordinator.ApplyAsync(instance, RootBatch(rootA, 10, 11));
+                await coordinator.ApplyAsync(instance, RootBatch(rootB, 20, 21));
+                await coordinator.ApplyAsync(instance, RootBatch(rootA, 11, 12));
+                CollectionAssert.AreEqual(Enumerable.Repeat((byte)12, 32).ToArray(), (await coordinator.ReadCursorAsync(instance, rootA.RootId))!.Value.ToArray());
+                CollectionAssert.AreEqual(Enumerable.Repeat((byte)21, 32).ToArray(), (await coordinator.ReadCursorAsync(instance, rootB.RootId))!.Value.ToArray());
+                CollectionAssert.AreEqual(new byte[] { 4 }, (await coordinator.ReadCursorAsync(instance))!.Value.ToArray());
+                var router = new MirrorPulseRootRouter(paths.SyncRootPath, [rootA, rootB]);
+                var incoming = Batch(instance, "retained-after-sdk-commit", new byte[] { 4 }, new byte[] { 5 });
+                await using (var product = await MirrorPulseProductCatalog.OpenAsync(paths))
+                {
+                    var retained = new MirrorPulseRetainedRemoteBatchCoordinator(product, secondState.OpenStore, router,
+                        async (owner, original, policy, token) =>
+                        {
+                            Assert.IsNotNull(await product.ReadRetainedRemoteBatchAsync(owner, token));
+                            _ = await coordinator.ApplyAsync(owner, original, policy, token);
+                            throw new IOException("After the real SDK batch and product cursor committed, before the incoming intent cleared.");
+                        });
+                    await Assert.ThrowsExactlyAsync<IOException>(() => retained.ApplyAsync(instance, incoming, CloudRemoteApplyOptions.Default, default).AsTask());
+                    Assert.IsNotNull(await product.ReadRetainedRemoteBatchAsync(instance));
+                }
+                await using (var reopenedProduct = await MirrorPulseProductCatalog.OpenAsync(paths))
+                {
+                    var retained = new MirrorPulseRetainedRemoteBatchCoordinator(reopenedProduct, secondState.OpenStore, router,
+                        async (owner, original, policy, token) => MirrorPulseRemotePollApplyOutcome.FromResult(await coordinator.ApplyAsync(owner, original, policy, token)));
+                    Assert.IsTrue(await retained.ResumeAsync(instance, default));
+                    Assert.IsNull(await reopenedProduct.ReadRetainedRemoteBatchAsync(instance));
+                    CollectionAssert.AreEqual(new byte[] { 5 }, (await coordinator.ReadCursorAsync(instance))!.Value.ToArray());
+                }
             }
         }
         finally

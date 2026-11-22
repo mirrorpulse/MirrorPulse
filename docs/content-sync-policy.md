@@ -16,6 +16,40 @@ content acceptance proof. Local metadata notifications still pass through the
 official change feed and product routing; they do not establish acceptance of
 remote metadata or authorize deletion after an incomplete scan.
 
+Directory population uses `CloudPopulationPolicy.Full` and the Shell's matching
+`StorageProviderPopulationPolicy.Full`. The Host verifies the actual policies
+after registration and updates existing owned roots without replacing their
+identity or files. Windows does not support the native `Partial` population
+policy; `Full` requests all entries in a directory through bounded provider pages.
+See the [Windows population policy contract](https://learn.microsoft.com/en-us/windows/win32/api/cfapi/ne-cfapi-cf_population_policy_primary).
+
+Snapshot polling compares object kind, path, content revision and length. Adding
+an unrelated remote object does not create a content update for an unchanged
+resident file, even when an enumeration returns new metadata objects or changed
+timestamps. Explicit Adapter metadata updates still use CfSharp's metadata
+operation. Pending polling batches retain their projection version and original
+fingerprint across upgrades; recovery does not silently rewrite an earlier intent.
+
+## Local metadata results
+
+The current Worker protocol has no timestamp, DOS attribute or ACL mutation.
+Unfiltered `MetadataUpdate` operations for files, directories and managed roots
+are reported as `UnsupportedMetadataChange` in `mp --json sync status`. The Host
+persists that result before settling the official notification with no remote
+revision. The unsupported result remains queryable across Host restarts; it does
+not claim remote metadata acceptance. Excluded notifications cannot occupy the
+bounded journal batch indefinitely and starve supported child operations.
+
+CfSharp owns the identity-verified echoes of remote creation. For remote metadata,
+MirrorPulse uses the default CfSharp reconciliation policy. Potential echoes
+without writer attribution are kept unbound behind a rescan boundary. The Host
+reconciles before settling each original under the metadata policy above.
+On the Windows watcher, file timestamp or attribute changes may instead arrive
+as content observations. A current owned `InSync` snapshot and mutually accepted
+content revision can settle that content observation without sending file bytes;
+this is not a promise to replicate the timestamp or attribute. A data write that
+clears `InSync` still requires a conditional upload and content acceptance proof.
+
 ## Existing roots
 
 The Host updates only a registration with its own provider name, stable root
@@ -65,3 +99,189 @@ journal acknowledgement and the rescan generation.
 See [protected content confirmation](protected-content-confirmation.md) and
 [Cloud Files lifecycle](cloud-files-lifecycle.md). Full native rescan and installed
 MSIX evidence remain required before this recovery path is accepted.
+
+## Controlled file transfer source revisions
+
+A controlled transfer copies the guarded source's selected local bytes. Its
+conditional source deletion uses the original acknowledged remote revision,
+after independent whole-target verification. A newer local edit does not replace
+that remote baseline.
+
+Protected local placeholder preparation carries no native accepted revision and
+preserves the acknowledged revision in the official store. A fully resident,
+dirty original may therefore have a local-only native identity and a retained
+official baseline. Transfer execution still requires its original member, public
+identity, complete physical binding, current permissions and write-excluding
+content guard. A nonempty native revision must match the official revision;
+an in-sync object cannot borrow this dirty-source rule.
+
+Preparation does not establish remote acceptance or acknowledge a journal.
+Before target birth is selected, a Host role change requires fresh scoped audits
+of both original roots before copying resumes. Source retirement retains the
+actual public SDK generation captured before native deletion. Local preparation may establish a previously
+missing SDK tracking ID. Retirement retains that observed value separately from
+the complete native binding, while preserving the original logical identity and
+remote baseline.
+
+## Unsent file chains
+
+The product catalog can retain an immutable execution preparation for a complete
+unsent file-chain decision. It binds the final length, SHA-256 and upload-time
+native object, the original remote baseline, and fingerprints of transferred
+never-started mutation intents. Recovery refuses changed bindings, baselines,
+original intent or ownership indexes. Schema 25 preserves earlier plans and
+permission history without inventing execution evidence for existing records.
+
+Derived remote-effect IDs are distinct from every original journal ID and cannot
+be claimed by ordinary mutation preparation. Move followed by upload uses two
+separate effect IDs; a coalesced deletion targets the original remote name because
+intermediate local names were never sent. Create followed by deletion prepares
+absence checks rather than a remote write. All original journal IDs remain owned
+by their plan and pending in the official store.
+
+Preparation neither dispatches an effect nor establishes acceptance, content
+confirmation, identity projection or journal acknowledgement.
+
+The coalesced executor uses the existing durable mutation executor, remote
+readback and Worker transports. Only its owning preparation can create a derived
+intent. Effects execute in order, and an upload after a move uses that move's
+accepted revision as its conditional baseline. An unknown result is reconciled
+by readback without resending the mutation. Verification-only effects issue Stat
+requests and never write remote metadata or content.
+
+The Host completion overload receives each actual `RemoteAccepted` effect before
+the effect ledger advances to `Acknowledged`. It can retain content acceptance,
+confirm the original local object and finish durable projection at this boundary.
+A failed or canceled completion retains acceptance and blocks the next effect;
+recovery retries local completion without repeating the accepted remote write.
+The remote-effects-only overload does not prove local projection. Neither an
+effect acknowledgement nor this callback settles original official journal IDs.
+
+Derived intents have a separate origin. Their `Acknowledged` state records only
+completion of that remote effect; it does not acknowledge the original journal.
+Generic journal projection recovery cannot treat a missing derived ID in the
+official store as acknowledgement. One catalog-owned instance scheduler prevents
+concurrent executor objects from reconciling work still in flight, allows other
+instances to progress, and drains accepted work before the catalog closes.
+
+The Host pump does not yet select coalesced execution. Final local content or
+namespace confirmation, identity projection and acknowledgement of every
+original ID still require integration and their failure matrix. The content
+opener must check the retained native object and reject a replacement; the Worker
+upload transport checks the length and SHA-256 of bytes actually sent.
+
+## Controlled local replacement admission
+
+The Host catalog retains the existing member's coherent protection, placement,
+original object binding and public placeholder identity with the staged input's
+length and SHA-256. Admission rechecks the current product snapshot in one
+transaction and reserves that root for recovery. Other roots remain independent.
+The operation ID cannot reuse a birth, Worker request or other product operation.
+
+A start record must precede permission tightening or content changes. Only an
+admission with no start can be canceled and release its root reservation. Neither
+record changes membership, writes content, accepts an upload or acknowledges an
+official journal entry.
+
+The catalog also retains the before-write permission action, the first flushed
+and independently verified old-content backup, and a separate write-start intent.
+They must refer to the admitted original object, owner and role in that order.
+The backup records single-link protection and the role-only descriptor observed
+on the original object. Later bytes cannot replace this first backup receipt.
+Historical status reads use a short catalog transaction and do not wait on the
+namespace actor. Damaged execution chains keep dispatch and recovery closed.
+The replacement content writer revalidates that first private backup before any
+data write, commits the write-start intent, and copies onto an open original
+object without create-mode replacement. It flushes and hashes the actual complete
+new bytes, separately rechecks binding, owner, role-only access and public identity,
+and retains the actual content and synchronization receipt. Changed content must
+remain dirty. Already identical resident bytes can retain their existing native
+state only when the first verified backup equals the admitted input. A previous
+copy receipt returns history and
+does not authorize overwriting subsequent edits. An interrupted copy can resume
+only while the admitted original object remains exclusively protected.
+
+The native caller retains the original parent and object guards. Private inputs
+are opened as the normal user before instance scheduling and actor acquisition;
+old content must already be resident at this writer boundary to avoid source
+recall under those locks. Full save preparation, role recovery, restored protection,
+durable projection and root reservation release still require integration. Local
+copy success is neither remote acceptance nor official journal acknowledgement.
+
+## Controlled replacement completion
+
+The catalog completes replacement only after the latest public restoration
+scope reports verified, drained protection and fresh observations still identify
+the original single-link placeholder and its actual protected parent. The parent
+must have the current action's role; an old observation cannot stand in for a
+later parent protection or placement epoch.
+
+One short transaction retains the completion, appends current protection to the
+existing original-permission or born-protection ledger, creates a fresh root
+rescan request and releases only this operation's reservation. Original members
+use an explicit replacement projection referencing the retained before-scope
+action and actual restoration result. It does not claim a newly prepared native
+permission operation. Birth provenance, original descriptors, the first backup
+and copied-content receipt remain unchanged. Damaged completion or protection
+references prevent an unfenced root result. Historical replay returns the first
+completion and preserves subsequent requests and recovery ownership.
+
+Completion preparation can explicitly revalidate metadata when an ordinary save
+has removed placeholder state since the earlier verified scope. This uses the
+public CfSharp conversion and access scope on the same object, preserves later
+bytes, records its own before-scope intent and leaves historical status replay
+read-only. It never recopies the staged input or confirms later edits as accepted
+content. The shared executor opens private input as the normal user before
+instance scheduling, then composes protection, copying, restoration and the
+completion transaction under the Host's namespace actor. A completed operation
+returns its historical receipt before opening inputs or acquiring the actor.
+Cold target materialization precedes execution. Host/CLI integration and
+whole-tree readiness still require their separate product acceptance.
+
+The preparation API stages private input and materializes an enabled cold target
+as the normal user before instance scheduling, namespace actor acquisition or
+root reservation. An offline target or input inside MirrorPulse must already be
+resident. Fresh binding, identity, closed descriptor and parent checks precede
+one transaction that records admission, start and the first permission action.
+A crash cannot expose a newly prepared admission without that first action.
+Historical preparation replay returns original facts without reopening a removed
+source file. Host and CLI use the same executor through the Control contract;
+completed input reclamation runs only after its private lease closes.
+
+When a replacement spans Host lifetimes, the original operation owns a
+selected-root recovery initializer. It restores the other registered members
+and the actual parent to the current role while the replacement retains
+exclusive ownership of its file. The original executor then settles that file
+using its retained handoff, backup and write receipts. The root stays closed
+until a fresh audit covers the entire current tree, including the replaced
+file. A disabled root stays closed after that audit. If local completion is
+already durable, recovery can finish the audit without recopying the input.
+
+When the Host supplies its namespace execution session, CfSharp startup runs
+under that retained local identity. The production boundary is also exercised
+by the required external-consumer population and hydration acceptance case.
+Worker RPC and lazy source bodies retain their normal-user transport boundary.
+This startup context does not apply permissions, establish tree readiness or
+enable pending synchronization work.
+
+Initial tree capture retains current-user, single-link original objects in
+parent-before-child pages before applying permissions. A fresh complete local
+inventory is checked after permission work drains and again before sealing.
+Interrupted prefixes preserve their original binding, owner, descriptor and
+role. Registered members use their existing provenance rather than entering a
+new original capture. Capture performs no hydration, content read or ACL write;
+the subsequent native application and complete live audit remain separate.
+
+## Re-enabling an offline root
+
+Disabling a root preserves its stable identity, pending official journal IDs and
+last mutually acknowledged revisions. A running disabled root performs no source
+stat or upload. Restarting the Host does not adopt a newer source revision as its
+baseline.
+
+When the root is enabled again, the production upload pump checks the source
+against that retained baseline. Unchanged source content permits a conditional
+upload of the offline edit, followed by public native confirmation and official
+journal acknowledgement. A changed source preserves the local bytes and pending
+original operations in the conflict center without uploading over the remote
+version. Explicit user decisions are required to resolve that conflict.

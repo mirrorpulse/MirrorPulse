@@ -3,6 +3,8 @@ using CfSharp;
 using MirrorPulse.CloudFiles.CfSharp;
 using MirrorPulse.Core.CloudFiles;
 using MirrorPulse.Core.Contracts;
+using MirrorPulse.Core.State;
+using MirrorPulse.Core.Sync;
 
 namespace MirrorPulse.CloudFiles.CfSharp.Tests;
 
@@ -11,6 +13,75 @@ namespace MirrorPulse.CloudFiles.CfSharp.Tests;
 public sealed class MirrorPulseRootRouterTests
 {
     private static readonly string[] ExpectedTopLevelNames = ["Backup", "Documents", "Photos"];
+
+    [TestMethod]
+    public void PublicRootItemLookupRetainsStableOwnershipAcrossLabelsAndRemovesOldSnapshotsAtomically()
+    {
+        string path = Path.Combine(Path.GetTempPath(), "MirrorPulse-tests", Guid.NewGuid().ToString("N"));
+        var original = CreateRoot(InstanceId.New(), "Documents");
+        var router = new MirrorPulseRootRouter(path, [original]);
+        Guid item = router.CreateRootPage().Children.Single().Identity.ItemId;
+        Assert.AreEqual(original, router.FindRootByPublicItemId(item));
+        Assert.IsNull(router.FindRootByPublicItemId(Guid.Empty));
+        Assert.IsNull(router.FindRootByPublicItemId(Guid.NewGuid()));
+        var renamed = new RootRegistration(original.AdapterId, original.InstanceId, original.RootId, original.UniquenessKey,
+            "Renamed", "Renamed", original.CustomEntry, RootRegistrationState.Disabled, original.RegisteredAt, original.IdentityScope);
+        router.ReplaceRegistrations([renamed], [new(original.RootId, "Documents")]);
+        Assert.AreEqual(renamed, router.FindRootByPublicItemId(item));
+        Assert.AreEqual(item, router.CreateRootPage().Children.Single().Identity.ItemId);
+        Assert.ThrowsExactly<IOException>(() => router.ResolveUploadPath(original.InstanceId, original.UniquenessKey, "child.txt"));
+        var replacement = CreateRoot(InstanceId.New(), "Renamed");
+        router.ReplaceRegistrations([replacement]);
+        Assert.IsNull(router.FindRootByPublicItemId(item));
+        Assert.AreEqual(replacement, router.FindRootByPublicItemId(router.CreateRootPage().Children.Single().Identity.ItemId));
+    }
+
+    [TestMethod]
+    public void FailedPublicRootSnapshotReplacementPreservesEveryOriginalIndex()
+    {
+        string path = Path.Combine(Path.GetTempPath(), "MirrorPulse-tests", Guid.NewGuid().ToString("N"));
+        var first = CreateRoot(InstanceId.New(), "One");
+        var second = CreateRoot(InstanceId.New(), "Two");
+        var router = new MirrorPulseRootRouter(path, [first, second]);
+        Guid[] items = router.CreateRootPage().Children.Select(child => child.Identity.ItemId).ToArray();
+        var duplicateId = new RootRegistration(second.AdapterId, second.InstanceId, first.RootId, second.UniquenessKey,
+            second.Label, second.DirectoryName, second.CustomEntry, second.State, second.RegisteredAt, second.IdentityScope);
+        Assert.ThrowsExactly<ArgumentException>(() => router.ReplaceRegistrations([first, duplicateId]));
+        Assert.AreEqual(first, router.FindRootByPublicItemId(items[0]));
+        Assert.AreEqual(second, router.FindRootByPublicItemId(items[1]));
+        Assert.AreEqual(first, router.FindRegistration(first.RootId));
+        Assert.AreEqual(second, router.FindRegistration(second.RootId));
+    }
+
+    [TestMethod]
+    public void HistoricalJournalNamesFollowTheStableRootButCannotAuthorizeNativeCallbacks()
+    {
+        string syncRoot = Path.Combine(Path.GetTempPath(), "MirrorPulse-tests", Guid.NewGuid().ToString("N"));
+        InstanceId instance = InstanceId.New();
+        RootRegistration original = AdapterRootRegistrationMapper.Map(AdapterId.Parse("example.labels"), instance,
+            new AdapterRootDefinition("docs", "Documents", "Documents", false), RootRegistrationState.Active,
+            identityScope: RootIdentityScope.InstanceRoot);
+        var renamed = new RootRegistration(original.AdapterId, original.InstanceId, original.RootId, original.UniquenessKey,
+            "My Files", "My Files", original.CustomEntry, original.State, original.RegisteredAt, original.IdentityScope);
+        var router = new MirrorPulseRootRouter(syncRoot, [original]);
+        byte[] identity = router.CreateFileIdentity(instance, "docs", "remote-file", "v1").Encode();
+        MirrorPulseManagedRootName[] history = [new(original.RootId, "Documents"), new(original.RootId, "My Files")];
+        router.ReplaceRegistrations([renamed], history);
+        Assert.AreEqual(original.RootId, router.GetRegistration(instance, "docs").RootId);
+        Assert.AreEqual("note.txt", router.ResolvePath("Documents/note.txt").RelativePath);
+        Assert.AreEqual("docs", router.ResolvePath("Documents/note.txt").RootKey);
+        Assert.AreEqual(Path.Combine(syncRoot, "My Files", "note.txt"), router.ResolveUploadPath(instance, "docs", "note.txt"));
+        Assert.AreEqual(instance, router.Resolve("My Files/note.txt", identity).InstanceId);
+        Assert.ThrowsExactly<FileNotFoundException>(() => router.Resolve("Documents/note.txt", identity));
+        Assert.AreEqual(CloudProviderPolicyDecision.Allow, MirrorPulseRootNamespacePolicy.ApproveDelete(router, "Documents"));
+        Assert.AreEqual(CloudProviderPolicyDecision.Deny, MirrorPulseRootNamespacePolicy.ApproveDelete(router, "My Files"));
+        RootRegistration collision = CreateRoot(InstanceId.New(), "Documents");
+        Assert.ThrowsExactly<InvalidDataException>(() => router.ReplaceRegistrations([renamed, collision], history));
+        Assert.AreEqual("My Files", router.CreateRootPage().Children.Single().Name);
+        var reopened = new MirrorPulseRootRouter(syncRoot, [renamed], history);
+        Assert.AreEqual(router.ResolvePath("Documents/note.txt"), reopened.ResolvePath("Documents/note.txt"));
+        CollectionAssert.AreEqual(identity, reopened.CreateFileIdentity(instance, "docs", "remote-file", "v1").Encode());
+    }
 
     [TestMethod]
     public async Task OneSyncRootListsMultipleCopiesAndMultipleRootsPerInstance()
@@ -50,6 +121,35 @@ public sealed class MirrorPulseRootRouterTests
         await stream.ReadExactlyAsync(bytes);
         Assert.AreEqual(second, transport.Request?.InstanceId);
         Assert.AreEqual(Path.Combine("sub", "file.txt"), transport.Request?.NormalizedPath);
+    }
+
+    [TestMethod]
+    [DataRow(false)]
+    [DataRow(true)]
+    public async Task ProtectedRootEnumerationCannotCreateRootsOutsideControlledStartup(bool admitted)
+    {
+        string syncRoot = Path.Combine(Path.GetTempPath(), "MirrorPulse-tests", Guid.NewGuid().ToString("N"));
+        var root = CreateRoot(InstanceId.New(), "Documents");
+        var router = new MirrorPulseRootRouter(syncRoot, [root]);
+        await using var work = new MirrorPulseNamespaceWorkAdmission([root.RootId]);
+        if (admitted)
+        {
+            // Model the admission transition only; this managed test performs no native audit.
+            await using var recovery = await work.BeginRecoveryAsync([root.RootId]);
+            recovery.CompleteAfterFreshAudit();
+        }
+        var source = new RecordingDirectorySource();
+        var provider = new MirrorPulseDemandProvider(router, new RecordingRangeTransport(), source, work);
+        foreach (string path in new[] { string.Empty, syncRoot })
+        {
+            var page = await provider.FetchChildrenAsync(path, ReadOnlyMemory<byte>.Empty, null);
+            Assert.IsTrue(page.IsComplete);
+            Assert.IsEmpty(page.Children);
+        }
+        Assert.IsNull(source.RelativePath);
+        Assert.HasCount(1, router.CreateRootPage().Children);
+        await Assert.ThrowsExactlyAsync<InvalidDataException>(() =>
+            provider.FetchChildrenAsync(syncRoot, ReadOnlyMemory<byte>.Empty, "unexpected").AsTask());
     }
 
     [TestMethod]
@@ -162,6 +262,45 @@ public sealed class MirrorPulseRootRouterTests
         Assert.AreEqual("note.txt", router.ResolvePath(volumeRelativePath).RelativePath);
         Assert.ThrowsExactly<InvalidDataException>(() => router.ResolvePath(
             Path.DirectorySeparatorChar + Path.Combine("outside", "note.txt")));
+    }
+
+    [TestMethod]
+    public void CallbackPublicationPathsAreRelativeAndCannotEscapeTheSyncRoot()
+    {
+        string syncRoot = Path.Combine(Path.GetTempPath(), "MirrorPulse-tests", Guid.NewGuid().ToString("N"));
+        var router = new MirrorPulseRootRouter(syncRoot, [CreateRoot(InstanceId.New(), "Documents")]);
+        string relative = Path.Combine("Documents", "nested");
+        string absolute = Path.Combine(syncRoot, relative);
+        string volumeRooted = Path.DirectorySeparatorChar + absolute[Path.GetPathRoot(syncRoot)!.Length..];
+
+        foreach (string callback in new[] { relative, absolute, volumeRooted, "Documents/child/../nested" })
+        {
+            Assert.AreEqual(relative, router.GetRelativePath(callback));
+            Assert.IsFalse(Path.IsPathRooted(router.GetRelativePath(callback)));
+        }
+        Assert.AreEqual(string.Empty, router.GetRelativePath(syncRoot));
+        Assert.ThrowsExactly<InvalidDataException>(() => router.GetRelativePath("../outside"));
+        Assert.ThrowsExactly<InvalidDataException>(() => router.GetRelativePath(syncRoot + "-sibling\\Documents"));
+        Assert.ThrowsExactly<InvalidDataException>(() => router.GetRelativePath(Path.Combine(syncRoot, "..", "outside")));
+    }
+
+    [TestMethod]
+    public void DisabledRootEntryValidationDoesNotAuthorizeSourceAccessOrAChildIdentity()
+    {
+        string syncRoot = Path.Combine(Path.GetTempPath(), "MirrorPulse-tests", Guid.NewGuid().ToString("N"));
+        var instance = InstanceId.New();
+        var root = AdapterRootRegistrationMapper.Map(AdapterId.Parse("example.offline"), instance,
+            new AdapterRootDefinition("offline", "Offline", "Offline", false), RootRegistrationState.Disabled);
+        var router = new MirrorPulseRootRouter(syncRoot, [root]);
+        var identity = router.CreateRootPage().Children.Single().Identity;
+        var route = router.ResolveRootEntry(Path.Combine(syncRoot, "Offline"), identity.Encode());
+        Assert.AreEqual(instance, route.InstanceId); Assert.AreEqual("offline", route.RootKey); Assert.AreEqual(string.Empty, route.RelativePath);
+        Assert.ThrowsExactly<IOException>(() => router.Resolve("Offline", identity.Encode()));
+        Assert.ThrowsExactly<IOException>(() => router.ResolveUploadPath(instance, "offline", "child.txt"));
+        Assert.ThrowsExactly<InvalidDataException>(() => router.ResolveRootEntry("Offline/child", identity.Encode()));
+        Assert.ThrowsExactly<InvalidDataException>(() => router.ResolveRootEntry("Offline",
+            new CloudPlaceholderIdentity(identity.ItemId, "another-root", identity.RemoteRevision).Encode()));
+        Assert.ThrowsExactly<FileNotFoundException>(() => router.ResolveRootEntry("Unknown", identity.Encode()));
     }
 
     private static RootRegistration CreateRoot(InstanceId instanceId, string label) =>

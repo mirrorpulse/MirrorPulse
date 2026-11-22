@@ -1,0 +1,225 @@
+using System.Diagnostics;
+using System.Security.AccessControl;
+using System.Security.Principal;
+using System.Text.Json;
+using CfSharp;
+using MirrorPulse.CfSharp.CrashProbe;
+using MirrorPulse.CloudFiles.CfSharp;
+using MirrorPulse.Core.CloudFiles;
+using MirrorPulse.Core.Configuration;
+using MirrorPulse.Core.Contracts;
+using MirrorPulse.Core.State;
+using MirrorPulse.Core.Sync;
+
+namespace MirrorPulse.CloudFiles.CfSharp.Tests;
+
+public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
+{
+    [TestMethod]
+    [DoNotParallelize]
+    [TestCategory("NativeCloudFiles")]
+    public async Task NativeProtectedDirectoryPopulationAndColdHydrationKeepSourceOutsideNamespaceRole()
+    {
+        if (Environment.GetEnvironmentVariable("MIRRORPULSE_NATIVE_TEST") != "1")
+            Assert.Inconclusive("Requires the disposable NativeCloudFiles verification environment.");
+        MirrorPulseNamespaceExecutionSessionTests.AssertExpectedArchitecture();
+        string directory = Path.Combine(Path.GetTempPath(), "MirrorPulse-native-tests", Guid.NewGuid().ToString("N"));
+        var paths = new MirrorPulseStoragePaths(Path.Combine(directory, "sync"), Path.Combine(directory, "data"));
+        var registry = new CfSharpMirrorPulseCloudRootRegistry();
+        var instance = InstanceId.New();
+        var registration = AdapterRootRegistrationMapper.Map(AdapterId.Parse("example.source-context"), instance,
+            new AdapterRootDefinition("docs", "Docs", "Docs", false), RootRegistrationState.Active,
+            identityScope: RootIdentityScope.InstanceRoot);
+        var router = new MirrorPulseRootRouter(paths.SyncRootPath, [registration]);
+        using WindowsIdentity caller = WindowsIdentity.GetCurrent();
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(45));
+        try
+        {
+            registry.Register(new(paths.SyncRootPath, "0.1.0", Guid.NewGuid(), [1, 2, 3]));
+            await File.WriteAllTextAsync(Path.Combine(directory, ".mp-permission-fixture"), string.Empty, timeout.Token);
+            await using var role = new MirrorPulseNamespaceExecutionSession();
+            var worker = new MirrorPulseNormalUserWorkerTransportTests.IdentityProbeWorker(role)
+            {
+                DirectoryPage = new([new("cold", "v1", "file", "cold.bin", 4, null, null, false)], default, true),
+            };
+            var source = new MirrorPulseNormalUserWorkerTransport(role, worker, worker, worker, worker, worker);
+            await using var sourceAdmission = new MirrorPulseNamespaceWorkAdmission([registration.RootId]);
+            var provider = new MirrorPulseDemandProvider(router, source, new MirrorPulseAdapterDirectoryPageSource(source), sourceAdmission);
+            var state = new MirrorPulseCfSharpStateSession(paths);
+            await using var fileSystem = new MirrorPulseCloudFileSystemBuilder(paths).WithStateStore(state)
+                .WithContentProvider(provider).Build();
+            await MirrorPulseNamespaceRuntimeStartup.StartAsync(fileSystem, role, timeout.Token);
+            Assert.AreEqual(CloudPopulationPolicy.Full, CloudSyncRoot.Open(paths.SyncRootPath).GetInfo().PopulationPolicy);
+            await using var feed = fileSystem.CreateLocalChangeFeed();
+            await feed.StartAsync(timeout.Token);
+            await role.RunNamespaceOperationAsync(async () =>
+                await new MirrorPulseRootPopulationCoordinator(fileSystem, feed).PopulateAsync(router, timeout.Token));
+            CloudDirectory docs = fileSystem.GetDirectory("Docs");
+            SetProtectedFixtureUserOwner(fileSystem.Root, caller.User!);
+            SetProtectedFixtureUserOwner(docs, caller.User!);
+            await using var catalog = await MirrorPulseProductCatalog.OpenAsync(paths, timeout.Token);
+            await using var coordinator = new MirrorPulseNamespacePermissionCoordinator(catalog);
+            await using var rootGuard = await MirrorPulseWindowsNamespacePermissionLease.OpenAsync(fileSystem.Root, router, timeout.Token);
+            var preparations = new List<MirrorPulseNamespacePermissionPreparation>();
+            foreach (CloudDirectory item in new[] { fileSystem.Root, docs })
+            {
+                await using var lease = await MirrorPulseWindowsNamespacePermissionLease.OpenMetadataAsync(item, router, timeout.Token);
+                var original = await lease.InspectAsync(timeout.Token);
+                var baseline = new MirrorPulseNamespacePermissionBaseline(Guid.NewGuid(), original.RootId, original.LocalObject,
+                    original.RelativePath, true, original.OwnerSid, original.Dacl, original.ObservedAt);
+                var intent = new MirrorPulseNamespacePermissionIntent(Guid.NewGuid(), baseline.EvidenceId, baseline.LocalObject,
+                    baseline.RootId, baseline.RelativePath, MirrorPulseNamespacePermissionChangeKind.Protect,
+                    role.RoleSid.Value, baseline.OriginalDacl, MirrorPulseNamespacePermissionPolicy.CreateProtectedDacl(role, true),
+                    DateTimeOffset.UtcNow);
+                preparations.Add(new(baseline, intent));
+            }
+            await catalog.PrepareNamespacePermissionChangesAsync(preparations, timeout.Token);
+            await role.RunNamespaceOperationAsync(async () =>
+            {
+                // Retain both originals before changing any parent inheritance.
+                for (int index = preparations.Count - 1; index >= 0; index--)
+                {
+                    var preparation = preparations[index];
+                    var item = index == 0 ? fileSystem.Root : docs;
+                    var result = await coordinator.ApplyProtectedAsync(preparation.Intent.OperationId, item, router,
+                        cancellationToken: timeout.Token);
+                    Assert.AreEqual(MirrorPulseNamespacePermissionOutcome.Verified, result.Permission!.Outcome);
+                    Assert.AreEqual(CloudProtectedLocalOperationOutcome.Completed, result.Receipt!.Outcome);
+                    Assert.IsTrue(result.Receipt.Drained);
+                }
+            });
+            // This provider fixture initially contains only the two audited directories.
+            // Releasing its source gate is not product current-tree or Host readiness.
+            await role.RunNamespaceOperationAsync(async () =>
+            {
+                var localRoots = new List<CloudItem>();
+                await foreach (var item in fileSystem.Root.EnumerateLocalChildrenAsync(cancellationToken: timeout.Token)) localRoots.Add(item);
+                Assert.HasCount(1, localRoots); Assert.AreEqual(docs.FullPath, localRoots[0].FullPath);
+                var localChildren = new List<CloudItem>();
+                await foreach (var item in docs.EnumerateLocalChildrenAsync(cancellationToken: timeout.Token)) localChildren.Add(item);
+                Assert.IsEmpty(localChildren);
+            });
+            await using (var admitted = await sourceAdmission.BeginRecoveryAsync([registration.RootId], timeout.Token))
+                admitted.CompleteAfterFreshAudit();
+            await Assert.ThrowsAsync<UnauthorizedAccessException>(() =>
+                File.WriteAllTextAsync(Path.Combine(docs.FullPath, "ordinary.txt"), "not admitted", timeout.Token));
+            Assert.AreEqual(0, worker.Calls.Count(call => call == "directory"));
+            // Use an independent consumer, as in the existing external callback acceptance test.
+            // A directory enumeration inside the provider process produced no source callback.
+            var enumeration = await RunSourceConsumerAsync(directory, "enumerate", role, timeout.Token);
+            string[] local = enumeration.Names;
+            TestContext.WriteLine($"NativeSourceEnumeration: actualPopulationPolicy=Full; localEntries={local.Length}; sourcePages={worker.Calls.Count(call => call == "directory")}; sourceRanges={worker.Calls.Count(call => call == "range-open")}.");
+            Assert.IsTrue(local.Contains("cold.bin", StringComparer.OrdinalIgnoreCase));
+            Assert.IsGreaterThan(0, worker.Calls.Count(call => call == "directory"));
+            Assert.AreEqual(0, worker.Calls.Count(call => call == "range-open"));
+            var cold = await fileSystem.GetFile("Docs/cold.bin").InspectAsync(timeout.Token);
+            Assert.IsTrue(cold.IsPlaceholder);
+            await Assert.ThrowsAsync<UnauthorizedAccessException>(() =>
+                Task.Run(() => File.Delete(Path.Combine(docs.FullPath, "cold.bin")), timeout.Token));
+            // The same independent consumer drives FETCH_DATA, including the lazy source body.
+            await using var readRecovery = await sourceAdmission.BeginRecoveryAsync([registration.RootId], timeout.Token);
+            var pendingRead = RunSourceConsumerAsync(directory, "read", role, timeout.Token);
+            while (sourceAdmission.PendingReadCount == 0)
+            {
+                if (pendingRead.IsCompleted)
+                {
+                    _ = await pendingRead;
+                    Assert.Fail("The cold native read must reach pending admission while recovery owns its root.");
+                }
+                await Task.Delay(10, timeout.Token);
+            }
+            Assert.IsFalse(pendingRead.IsCompleted);
+            Assert.AreEqual(0, worker.Calls.Count(call => call == "range-open"));
+            foreach (var preparation in preparations)
+            {
+                CloudDirectory item = preparation.Baseline.RootId is null ? fileSystem.Root : docs;
+                await using var lease = await MirrorPulseWindowsNamespacePermissionLease.OpenMetadataAsync(item, router, timeout.Token);
+                var observed = await lease.InspectAsync(timeout.Token);
+                Assert.AreEqual(preparation.Baseline.LocalObject, observed.LocalObject);
+                Assert.AreEqual(preparation.Baseline.OwnerSid, observed.OwnerSid);
+                Assert.IsTrue(MirrorPulseNamespacePermissionDescriptor.MatchesNativeReadback(preparation.Intent.TargetDacl, observed.Dacl));
+            }
+            readRecovery.CompleteAfterFreshAudit(); await readRecovery.DisposeAsync();
+            CollectionAssert.AreEqual(new byte[] { 1, 2, 3, 4 },
+                (await pendingRead).Content);
+            Assert.AreEqual(0, sourceAdmission.PendingReadCount);
+            Assert.IsGreaterThan(0, worker.Calls.Count(call => call == "range-open"));
+            Assert.IsGreaterThan(0, worker.Calls.Count(call => call == "range-read"));
+            Assert.AreEqual(worker.Calls.Count(call => call == "range-open"), worker.Calls.Count(call => call == "range-dispose"));
+            foreach (var preparation in preparations)
+            {
+                CloudDirectory item = preparation.Baseline.RootId is null ? fileSystem.Root : docs;
+                await using var lease = await MirrorPulseWindowsNamespacePermissionLease.OpenMetadataAsync(item, router, timeout.Token);
+                var observed = await lease.InspectAsync(timeout.Token);
+                Assert.AreEqual(preparation.Baseline.LocalObject, observed.LocalObject);
+                Assert.AreEqual(preparation.Baseline.OwnerSid, observed.OwnerSid);
+                Assert.IsTrue(MirrorPulseNamespacePermissionDescriptor.MatchesNativeReadback(preparation.Intent.TargetDacl, observed.Dacl));
+            }
+            await using var sourceDrained = await sourceAdmission.BeginRecoveryAsync([registration.RootId], timeout.Token);
+            Assert.IsFalse(sourceAdmission.IsAdmitted(registration.RootId));
+            TestContext.WriteLine($"NativeSourceContext: productionStartupBoundary=True; externalOrdinaryConsumer=True; ordinaryEnumeration=True; inheritedDeleteProtection=True; coldHydration=True; coldNativeReadWaitedForExistingRecovery=True; noSourceBeforeFreshReadmission=True; lazyRangeDisposedAsNormalUser=True; rootAdmissionDrainedAfterLazySource=True; closedParentDacls=True; rootGuardRetained=True; elevatedCaller={new WindowsPrincipal(caller).IsInRole(WindowsBuiltInRole.Administrator)}; hostStrictIntegrated=False.");
+        }
+        finally
+        {
+            registry.Unregister(paths.SyncRootPath);
+            RestoreSourceContextFixtureForCleanup(directory, paths.SyncRootPath, caller.User!);
+            DeleteFixture(directory);
+        }
+    }
+
+    private static async Task<NamespaceSourceConsumerResult> RunSourceConsumerAsync(string directory, string mode,
+        MirrorPulseNamespaceExecutionSession role, CancellationToken token)
+    {
+        using WindowsIdentity caller = WindowsIdentity.GetCurrent();
+        Assert.AreNotEqual(true, caller.Groups?.Any(group => group.Value == role.RoleSid.Value));
+        var start = new ProcessStartInfo("dotnet")
+        {
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+        };
+        foreach (string argument in new[] { typeof(ProbeMarker).Assembly.Location,
+            "--namespace-source-consumer", directory, mode, role.RoleSid.Value })
+            start.ArgumentList.Add(argument);
+        using Process process = Process.Start(start) ?? throw new AssertFailedException("The source consumer did not start.");
+        Task<string> stdout = process.StandardOutput.ReadToEndAsync(token);
+        Task<string> stderr = process.StandardError.ReadToEndAsync(token);
+        try
+        {
+            await process.WaitForExitAsync(token);
+            Assert.AreEqual(0, process.ExitCode, await stderr);
+            var result = JsonSerializer.Deserialize<NamespaceSourceConsumerResult>(await stdout)
+                ?? throw new AssertFailedException("The source consumer returned no result.");
+            Assert.AreEqual(role.OwnerSid.Value, result.UserSid);
+            Assert.IsFalse(result.NamespaceRolePresent);
+            Assert.AreEqual(System.Runtime.InteropServices.RuntimeInformation.ProcessArchitecture.ToString(), result.ProcessArchitecture);
+            return result;
+        }
+        finally
+        {
+            if (!process.HasExited)
+            {
+                process.Kill(entireProcessTree: true);
+                await process.WaitForExitAsync(CancellationToken.None);
+            }
+        }
+    }
+
+    private static void RestoreSourceContextFixtureForCleanup(string directory, string syncRoot, SecurityIdentifier user)
+    {
+        if (!Directory.Exists(syncRoot)) return;
+        // The existing guard verifies the exact GUID fixture, marker and sync-root location.
+        RestoreRootGuardFixtureForCleanup(directory, syncRoot, user);
+        string docs = Path.Combine(syncRoot, "Docs");
+        if (!Directory.Exists(docs)) return;
+        // Cloud Files reparse tags have no directory-link target. Never follow a link.
+        if (new DirectoryInfo(docs).LinkTarget is not null)
+            throw new InvalidOperationException("Fixture cleanup cannot follow a directory link.");
+        var cleanup = new DirectorySecurity();
+        cleanup.SetAccessRuleProtection(isProtected: true, preserveInheritance: false);
+        cleanup.AddAccessRule(new FileSystemAccessRule(user, FileSystemRights.FullControl,
+            InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit, PropagationFlags.None, AccessControlType.Allow));
+        new DirectoryInfo(docs).SetAccessControl(cleanup);
+    }
+}

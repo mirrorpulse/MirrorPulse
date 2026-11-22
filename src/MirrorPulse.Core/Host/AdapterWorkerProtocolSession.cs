@@ -1,5 +1,7 @@
 using System.Collections.ObjectModel;
 using System.Text.Json;
+using MirrorPulse.Adapter.Sdk;
+using MirrorPulse.Core.CloudFiles;
 using MirrorPulse.Core.Contracts;
 
 namespace MirrorPulse.Core.Host;
@@ -7,19 +9,65 @@ namespace MirrorPulse.Core.Host;
 /// <summary>Owns the negotiated wire version and configured root bindings for one session.</summary>
 public sealed class AdapterWorkerProtocolSession
 {
+    internal const string DurableDirectoryMoveCapability = "local-durable-directory-move";
+    internal const string DurableDirectoryCopyCapability = "local-durable-directory-copy";
+    internal const string DurableDirectoryCopyPreparationCapability = "local-durable-directory-copy-preparation";
+
     private static readonly string[] RequiredCapabilities =
         ["root-addresses", "stable-operations", "conditional-targets", "bounded-streams", "cancel-ack"];
     private readonly RootRegistration[] _roots;
+    private IReadOnlySet<string>? _durableCopyRoots;
 
-    private AdapterWorkerProtocolSession(int version, RootRegistration[] roots)
+    private AdapterWorkerProtocolSession(int version, RootRegistration[] roots, string[] capabilities)
     {
         ProtocolVersion = version;
         _roots = roots;
+        Capabilities = Array.AsReadOnly(capabilities);
     }
 
     public int ProtocolVersion { get; }
+    internal IReadOnlyList<string> Capabilities { get; }
 
-    public JsonElement RoutePayload(string? rootKey, JsonElement payload)
+    internal void RecordConnectedCapabilities(JsonElement payload)
+    {
+        if (!Capabilities.Contains(DurableDirectoryCopyCapability, StringComparer.Ordinal)) return;
+        if (payload.ValueKind != JsonValueKind.Object || !payload.TryGetProperty("durableCopyRoots", out var roots) || roots.ValueKind != JsonValueKind.Array ||
+            roots.GetArrayLength() > _roots.Length)
+            throw new InvalidDataException("InvalidDurableCopyRoots");
+        var supported = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var item in roots.EnumerateArray())
+        {
+            if (item.ValueKind != JsonValueKind.String || item.GetString() is not { } root ||
+                !_roots.Any(candidate => candidate.UniquenessKey == root && candidate.State == RootRegistrationState.Active) ||
+                !supported.Add(root))
+                throw new InvalidDataException("InvalidDurableCopyRoots");
+        }
+        if (Interlocked.CompareExchange(ref _durableCopyRoots, supported, null) is not null)
+            throw new InvalidDataException("DuplicateDurableCopyRoots");
+    }
+
+    internal bool SupportsDurableDirectoryCopy(string? rootKey) =>
+        rootKey is not null && Volatile.Read(ref _durableCopyRoots)?.Contains(rootKey) == true;
+
+    internal bool SupportsDurableDirectoryCopyPreparation(string? rootKey) => SupportsDurableDirectoryCopy(rootKey) &&
+        Capabilities.Contains(DurableDirectoryCopyPreparationCapability, StringComparer.Ordinal);
+
+    internal static void AddDurableCopyMode(AdapterWorkerProtocolSession? protocol, string? rootKey,
+        MirrorPulseDurableDirectoryCopyMode mode, Guid? parentCopy, bool conditionalTarget, Dictionary<string, object?> payload)
+    {
+        if (mode == MirrorPulseDurableDirectoryCopyMode.Ordinary) return;
+        if (protocol?.SupportsDurableDirectoryCopy(rootKey) != true || !conditionalTarget)
+            throw new NotSupportedException("DurableDirectoryCopyRequiresNegotiatedRoot");
+        payload["durableDirectoryCopy"] = mode switch
+        {
+            MirrorPulseDurableDirectoryCopyMode.Start => "start",
+            MirrorPulseDurableDirectoryCopyMode.Resume => "resume",
+            _ => throw new ArgumentOutOfRangeException(nameof(mode)),
+        };
+        if (parentCopy is { } id) payload["durableDirectoryCopyParentId"] = id;
+    }
+
+    internal void RequireActiveRoot(string? rootKey)
     {
         if (rootKey is not null)
         {
@@ -27,6 +75,12 @@ public sealed class AdapterWorkerProtocolSession
             if (root is null) throw new InvalidDataException("UnknownRoot");
             if (root.State != RootRegistrationState.Active) throw new IOException("RootOffline");
         }
+        else if (ProtocolVersion == 2) throw new InvalidDataException("RootRequired");
+    }
+
+    public JsonElement RoutePayload(string? rootKey, JsonElement payload)
+    {
+        RequireActiveRoot(rootKey);
         if (ProtocolVersion == 1) return payload;
         if (string.IsNullOrWhiteSpace(rootKey)) throw new InvalidDataException("RootRequired");
         Dictionary<string, JsonElement> fields = payload.EnumerateObject().ToDictionary(p => p.Name, p => p.Value.Clone(), StringComparer.Ordinal);
@@ -70,6 +124,7 @@ public sealed class AdapterWorkerProtocolSession
         int selected = Math.Min(2, Math.Min(maximum, packageVersions.Maximum));
         if (selected < Math.Max(minimum, packageVersions.Minimum))
             throw new InvalidDataException("ProtocolVersionUnsupported");
+        string[] negotiated = [];
         if (selected == 2)
         {
             if (!hello.TryGetProperty("capabilities", out JsonElement capabilities) ||
@@ -82,9 +137,26 @@ public sealed class AdapterWorkerProtocolSession
                 throw new InvalidDataException("RequiredCapabilityMissing");
             if (configured.Length == 0 || configured.Select(r => r.UniquenessKey).Distinct(StringComparer.Ordinal).Count() != configured.Length)
                 throw new InvalidDataException("InvalidRoots");
+            negotiated = offered.Contains(AdapterDirectoryEffects.Capability, StringComparer.Ordinal)
+                ? [.. RequiredCapabilities, AdapterDirectoryEffects.Capability]
+                : RequiredCapabilities;
+            if (offered.Contains(AdapterOriginalDirectoryWire.Capability, StringComparer.Ordinal))
+            {
+                negotiated = [.. negotiated, AdapterOriginalDirectoryWire.Capability];
+                if (offered.Contains(AdapterAtomicDirectoryDeletionWire.Capability, StringComparer.Ordinal))
+                    negotiated = [.. negotiated, AdapterAtomicDirectoryDeletionWire.Capability];
+            }
+            if (offered.Contains(DurableDirectoryMoveCapability, StringComparer.Ordinal))
+                negotiated = [.. negotiated, DurableDirectoryMoveCapability];
+            if (offered.Contains(DurableDirectoryCopyCapability, StringComparer.Ordinal))
+            {
+                negotiated = [.. negotiated, DurableDirectoryCopyCapability];
+                if (offered.Contains(DurableDirectoryCopyPreparationCapability, StringComparer.Ordinal))
+                    negotiated = [.. negotiated, DurableDirectoryCopyPreparationCapability];
+            }
         }
         else if (configured.Length > 1) throw new InvalidDataException("MultipleRootsRequireProtocolV2");
-        return new(selected, configured);
+        return new(selected, configured, negotiated);
     }
 
     private static bool ReadVersion(JsonElement value, out int version)
@@ -100,7 +172,7 @@ public sealed class AdapterWorkerProtocolSession
         return JsonSerializer.SerializeToElement(new
         {
             selectedVersion = ProtocolVersion,
-            capabilities = RequiredCapabilities,
+            capabilities = Capabilities,
             roots = _roots.Select(root => new
             {
                 rootKey = root.UniquenessKey,

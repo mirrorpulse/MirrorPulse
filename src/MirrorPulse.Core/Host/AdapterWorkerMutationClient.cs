@@ -1,13 +1,14 @@
 using System.Diagnostics.CodeAnalysis;
 using System.Text.Json;
+using MirrorPulse.Adapter.Sdk;
 using MirrorPulse.Core.CloudFiles;
 using MirrorPulse.Core.Contracts;
 
 namespace MirrorPulse.Core.Host;
 
-/// <summary>Correlates one remote move or delete request with a connected Worker.</summary>
+/// <summary>Correlates one remote mutation at a time with a connected Worker.</summary>
 [SuppressMessage("Design", "CA1001", Justification =
-    "The owning Supervisor disposes the per-instance operation gate after the pipe closes.")]
+    "Close faults pending mutations and lets callers drain the managed-only operation gate.")]
 public sealed class AdapterWorkerMutationClient
 {
     private readonly AdapterWorkerReadRangeClient _channel;
@@ -15,11 +16,19 @@ public sealed class AdapterWorkerMutationClient
     private readonly WorkerSessionId _sessionId;
     private readonly SemaphoreSlim _operation = new(1, 1);
     private readonly object _pendingLock = new();
-    private TaskCompletionSource<string?>? _completion;
-    private Guid _requestId;
-    private Guid _operationId;
-    private string? _rootKey;
+    private PendingMutation? _pending;
     private bool _closed;
+
+    private sealed record PendingMutation(ControlFrameEnvelope Request, Guid OperationId, string? RootKey)
+    {
+        public TaskCompletionSource<MutationReply> Completion { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    }
+
+    private readonly record struct MutationReply(string? Revision, AdapterOwnedChildEffectReceipt? DirectoryReceipt = null)
+    {
+        internal AdapterDirectoryAdmission? Admission { get; init; }
+        internal AdapterAtomicDirectoryDeletionReceipt? AtomicReceipt { get; init; }
+    }
 
     public AdapterWorkerMutationClient(
         AdapterWorkerReadRangeClient channel,
@@ -45,13 +54,19 @@ public sealed class AdapterWorkerMutationClient
         MirrorPulseWorkerMoveRequest request,
         CancellationToken cancellationToken = default)
     {
-        return await SendAsync("Move", new
+        if (request.RequireDurableDirectoryMove && (!SupportsDurableDirectoryMove || !request.IsDirectory ||
+            request.OperationId is not { } operationId || operationId == Guid.Empty ||
+            string.IsNullOrEmpty(request.ExpectedRevision) || !request.DestinationMustBeAbsent))
+            throw new NotSupportedException("DurableDirectoryMoveRequiresNegotiatedOriginalRequest");
+        var payload = new Dictionary<string, object?>
         {
-            sourcePath = request.SourcePath,
-            destinationPath = request.DestinationPath,
-            expectedRevision = request.ExpectedRevision,
-            isDirectory = request.IsDirectory,
-        }, request.OperationId, request.RootKey, request.DestinationRootKey ?? request.RootKey,
+            ["sourcePath"] = request.SourcePath,
+            ["destinationPath"] = request.DestinationPath,
+            ["expectedRevision"] = request.ExpectedRevision,
+            ["isDirectory"] = request.IsDirectory,
+        };
+        if (request.RequireDurableDirectoryMove) payload.Add("durableDirectoryMove", true);
+        return await SendAsync("Move", payload, request.OperationId, request.RootKey, request.DestinationRootKey ?? request.RootKey,
             request.ExpectedRevision, request.DestinationMustBeAbsent, cancellationToken).ConfigureAwait(false) ??
             throw new IOException("The Adapter Worker did not return a moved revision.");
     }
@@ -62,9 +77,95 @@ public sealed class AdapterWorkerMutationClient
         ArgumentNullException.ThrowIfNull(request);
         if (request.InstanceId != _instanceId) throw new InvalidDataException("InstanceMismatch");
         if (_channel.ProtocolVersion != 2) throw new NotSupportedException("CreateDirectoryRequiresProtocolV2");
-        return await SendAsync("CreateDirectory", new { path = request.NormalizedPath, mustBeAbsent = request.MustBeAbsent },
+        var payload = new Dictionary<string, object?> { ["path"] = request.NormalizedPath, ["mustBeAbsent"] = request.MustBeAbsent };
+        AdapterWorkerProtocolSession.AddDurableCopyMode(_channel.Protocol, request.RootKey, request.DurableCopyMode, request.DurableParentCopyOperationId,
+            request.MustBeAbsent, payload);
+        return await SendAsync("CreateDirectory", payload,
             request.OperationId, request.RootKey, null, null, request.MustBeAbsent, cancellationToken).ConfigureAwait(false)
             ?? throw new InvalidDataException("DirectoryRevisionRequired");
+    }
+
+    internal async ValueTask PrepareDirectoryCopyAsync(MirrorPulseWorkerPrepareDirectoryCopyRequest request,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        if (request.InstanceId != _instanceId) throw new InvalidDataException("InstanceMismatch");
+        if (_channel.Protocol?.SupportsDurableDirectoryCopyPreparation(request.RootKey) != true)
+            throw new NotSupportedException("DurableDirectoryCopyPreparationUnavailable");
+        var payload = new Dictionary<string, object?>
+        {
+            ["path"] = request.NormalizedPath,
+            ["isDirectory"] = request.Length is null
+        };
+        if (request.ParentCopyOperationId is { } parent) payload["durableDirectoryCopyParentId"] = parent;
+        if (request.Length is { } length)
+        {
+            if (length < 0 || request.ContentSha256 is null) throw new ArgumentException("A complete upload descriptor is required.", nameof(request));
+            payload["length"] = length;
+            payload["contentSha256"] = Sha256Digest.Parse(request.ContentSha256).Hexadecimal;
+        }
+        else if (request.ContentSha256 is not null) throw new ArgumentException("A directory cannot carry a content descriptor.", nameof(request));
+        _ = await SendAsync("PrepareDirectoryCopy", payload, request.OperationId, request.RootKey, null, null,
+            destinationMustBeAbsent: true, cancellationToken).ConfigureAwait(false);
+    }
+
+    public async ValueTask<AdapterOwnedChildEffectReceipt> RetireOriginalDirectoryAsync(
+        AdapterDirectoryRetirementRequest request, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        var protocol = _channel.Protocol ?? throw new NotSupportedException("OriginalDirectoryEffectsUnsupported");
+        AdapterDirectoryEffects.RequireNegotiated(protocol.ProtocolVersion, protocol.Capabilities);
+        var frame = new ControlFrameEnvelope(protocol.ProtocolVersion, AdapterDirectoryRetirementWire.RequestMessage,
+            Guid.NewGuid(), _instanceId, _sessionId, false, AdapterProtocolJson.ToElement(request));
+        var retained = AdapterDirectoryRetirementWire.ReadRequest(ToSdkFrame(frame), protocol.Capabilities);
+        protocol.RequireActiveRoot(retained.Operation.RootKey);
+        if (retained.Operation.DestinationRootKey is { } destinationRoot)
+            protocol.RequireActiveRoot(destinationRoot);
+        var pending = new PendingMutation(frame, retained.Operation.OperationId, retained.Operation.RootKey);
+        var reply = await SendCoreAsync(pending, cancellationToken).ConfigureAwait(false);
+        return reply.DirectoryReceipt ?? throw new InvalidDataException("DirectoryRetirementReceiptRequired");
+    }
+
+    internal bool SupportsAtomicDirectoryDeletion => _channel.Protocol is { ProtocolVersion: 2 } protocol &&
+        protocol.Capabilities.Contains(AdapterOriginalDirectoryWire.Capability, StringComparer.Ordinal) &&
+        protocol.Capabilities.Contains(AdapterAtomicDirectoryDeletionWire.Capability, StringComparer.Ordinal);
+
+    internal bool SupportsDurableDirectoryMove => _channel.Protocol is { ProtocolVersion: 2 } protocol &&
+        protocol.Capabilities.Contains(AdapterWorkerProtocolSession.DurableDirectoryMoveCapability, StringComparer.Ordinal);
+
+    internal void RequireAtomicDirectorySupport(AdapterDirectoryAdmissionRequest request)
+    {
+        var protocol = _channel.Protocol;
+        if (protocol is null || !SupportsAtomicDirectoryDeletion)
+            throw new NotSupportedException("AtomicDirectoryDeletionUnsupported");
+        if (request.InstanceId != _instanceId.Value) throw new InvalidDataException("InstanceMismatch");
+        request.Validate();
+        foreach (var step in request.Operations)
+        {
+            protocol.RequireActiveRoot(step.Operation.RootKey);
+            if (step.OperationKind != "Delete") throw new NotSupportedException("AtomicDirectoryDeletionRequiresDeletePlan");
+        }
+    }
+
+    internal async ValueTask<AdapterDirectoryAdmission> AdmitAtomicDirectoryAsync(AdapterDirectoryAdmissionRequest request, CancellationToken token)
+    {
+        RequireAtomicDirectorySupport(request);
+        var operation = request.Operations[^1].Operation;
+        var frame = new ControlFrameEnvelope(2, AdapterOriginalDirectoryWire.AdmissionRequestMessage, Guid.NewGuid(),
+            _instanceId, _sessionId, false, AdapterProtocolJson.ToElement(request));
+        var reply = await SendCoreAsync(new(frame, operation.OperationId, operation.RootKey), token).ConfigureAwait(false);
+        return reply.Admission ?? throw new InvalidDataException("OriginalDirectoryAdmissionRequired");
+    }
+
+    internal async ValueTask<AdapterAtomicDirectoryDeletionReceipt> DeleteAtomicDirectoryAsync(AdapterAtomicDirectoryDeletionRequest request,
+        CancellationToken token)
+    {
+        RequireAtomicDirectorySupport(request.OriginalRequest);
+        var operation = request.OriginalRequest.Operations[^1].Operation;
+        var frame = new ControlFrameEnvelope(2, AdapterAtomicDirectoryDeletionWire.RequestMessage, Guid.NewGuid(),
+            _instanceId, _sessionId, false, AdapterProtocolJson.ToElement(request));
+        var reply = await SendCoreAsync(new(frame, operation.OperationId, operation.RootKey), token).ConfigureAwait(false);
+        return reply.AtomicReceipt ?? throw new InvalidDataException("AtomicDirectoryDeletionReceiptRequired");
     }
 
     private async ValueTask<string?> SendAsync(
@@ -83,32 +184,35 @@ public sealed class AdapterWorkerMutationClient
         if (requestId == Guid.Empty) throw new ArgumentException("The Worker operation ID must not be empty.", nameof(operationId));
         JsonElement routedPayload = _channel.MutationPayload(rootKey, payload, stableOperationId,
             destinationRootKey, expectedRevision, destinationMustBeAbsent);
+        var frame = new ControlFrameEnvelope(_channel.ProtocolVersion, messageType, requestId,
+            _instanceId, _sessionId, false, routedPayload);
+        var reply = await SendCoreAsync(new PendingMutation(frame, stableOperationId, rootKey), cancellationToken)
+            .ConfigureAwait(false);
+        return reply.Revision;
+    }
+
+    private async ValueTask<MutationReply> SendCoreAsync(PendingMutation pending, CancellationToken cancellationToken)
+    {
         await _operation.WaitAsync(cancellationToken).ConfigureAwait(false);
-        var completion = new TaskCompletionSource<string?>(TaskCreationOptions.RunContinuationsAsynchronously);
         try
         {
             lock (_pendingLock)
             {
                 ObjectDisposedException.ThrowIf(_closed, this);
-                _requestId = requestId;
-                _operationId = stableOperationId;
-                _rootKey = rootKey;
-                _completion = completion;
+                _pending = pending;
             }
 
-            await _channel.WriteControlAsync(new ControlFrameEnvelope(1, messageType, requestId,
-                _instanceId, _sessionId, false, routedPayload),
-                cancellationToken).ConfigureAwait(false);
-            return await completion.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
+            await _channel.WriteControlAsync(pending.Request, cancellationToken).ConfigureAwait(false);
+            return await pending.Completion.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
         }
         finally
         {
             lock (_pendingLock)
             {
-                if (ReferenceEquals(_completion, completion))
+                if (ReferenceEquals(_pending, pending))
                 {
-                    _completion = null;
-                    if (!completion.Task.IsCompleted)
+                    _pending = null;
+                    if (!pending.Completion.Task.IsCompleted)
                     {
                         _closed = true;
                     }
@@ -123,14 +227,14 @@ public sealed class AdapterWorkerMutationClient
     {
         lock (_pendingLock)
         {
-            return !_closed && _completion is not null && frame.RequestId == _requestId &&
+            return !_closed && _pending is { } pending && frame.RequestId == pending.Request.RequestId &&
                 frame.InstanceId == _instanceId && frame.WorkerSessionId == _sessionId;
         }
     }
 
     public ValueTask HandleResponseAsync(ControlFrameEnvelope frame)
     {
-        TaskCompletionSource<string?> completion;
+        PendingMutation pending;
         lock (_pendingLock)
         {
             if (!CanHandle(frame))
@@ -138,17 +242,58 @@ public sealed class AdapterWorkerMutationClient
                 throw new InvalidDataException("The Worker response has no matching mutation request.");
             }
 
-            completion = _completion!;
+            pending = _pending!;
         }
 
-        _channel.ValidateOperationResponse(frame, _rootKey, _operationId);
-        if (frame.MessageType == "MutationComplete")
+        var completion = pending.Completion;
+        if (pending.Request.MessageType is AdapterOriginalDirectoryWire.AdmissionRequestMessage or AdapterAtomicDirectoryDeletionWire.RequestMessage)
+        {
+            if (frame.MessageType == "OperationError")
+            {
+                if (!frame.IsResponse || frame.ProtocolVersion != 2)
+                    throw new InvalidDataException("AtomicDirectoryResponseProtocolMismatch");
+                // Typed requests carry their addresses inside the body. Local emits
+                // a correlated envelope error without a separate root or operation.
+                string error = frame.Payload.GetProperty("code").GetString() ?? "Unknown";
+                completion.TrySetException(new AdapterWorkerOperationException(error,
+                    directoryAdmission: pending.Request.MessageType == AdapterOriginalDirectoryWire.AdmissionRequestMessage));
+            }
+            else if (pending.Request.MessageType == AdapterOriginalDirectoryWire.AdmissionRequestMessage)
+            {
+                var admission = AdapterOriginalDirectoryWire.ReadAdmissionResponse(ToSdkFrame(pending.Request), ToSdkFrame(frame),
+                    _channel.Protocol?.Capabilities);
+                completion.TrySetResult(new MutationReply(null) { Admission = admission });
+            }
+            else
+            {
+                var receipt = AdapterAtomicDirectoryDeletionWire.ReadResponse(ToSdkFrame(pending.Request), ToSdkFrame(frame),
+                    _channel.Protocol?.Capabilities);
+                completion.TrySetResult(new MutationReply(null) { AtomicReceipt = receipt });
+            }
+            return ValueTask.CompletedTask;
+        }
+        if (pending.Request.MessageType == AdapterDirectoryRetirementWire.RequestMessage && frame.MessageType != "OperationError")
+        {
+            var receipt = AdapterDirectoryRetirementWire.ReadResponse(ToSdkFrame(pending.Request), ToSdkFrame(frame),
+                _channel.Protocol?.Capabilities);
+            completion.TrySetResult(new MutationReply(receipt.AcceptedRevision, receipt));
+            return ValueTask.CompletedTask;
+        }
+
+        _channel.ValidateOperationResponse(frame, pending.RootKey, pending.OperationId);
+        bool preparing = pending.Request.MessageType == "PrepareDirectoryCopy";
+        if (preparing && frame.MessageType == "DirectoryCopyPrepared")
+        {
+            completion.TrySetResult(new MutationReply(null));
+            return ValueTask.CompletedTask;
+        }
+        if (!preparing && frame.MessageType == "MutationComplete")
         {
             string? revision = frame.Payload.TryGetProperty("revision", out JsonElement value) &&
                 value.ValueKind is not JsonValueKind.Null and not JsonValueKind.Undefined
                 ? value.GetString()
                 : null;
-            completion.TrySetResult(revision);
+            completion.TrySetResult(new MutationReply(revision));
             return ValueTask.CompletedTask;
         }
 
@@ -163,9 +308,14 @@ public sealed class AdapterWorkerMutationClient
                     ? actualValue.GetString() : null;
                 completion.TrySetException(new MirrorPulseWorkerMutationConflictException(expected, actual));
             }
+            else if (code is "OperationUnsupported" or "CreateDirectoryUnsupported" or "CapabilityUnavailable")
+                completion.TrySetException(new NotSupportedException("The Worker rejected an unsupported mutation before execution."));
+            else if (code == "MutationOutcomeAmbiguous" && pending.Request.MessageType == "CreateDirectory" &&
+                pending.Request.Payload.TryGetProperty("durableDirectoryCopy", out _))
+                completion.TrySetException(new Sync.MirrorPulseMutationAmbiguousException("The Worker has no original directory copy evidence."));
             else
             {
-                completion.TrySetException(new IOException($"The Adapter Worker mutation failed: {code}."));
+                completion.TrySetException(new AdapterWorkerOperationException(code));
             }
 
             return ValueTask.CompletedTask;
@@ -174,12 +324,15 @@ public sealed class AdapterWorkerMutationClient
         throw new InvalidDataException("The Worker returned an unexpected mutation response.");
     }
 
+    private static AdapterControlFrame ToSdkFrame(ControlFrameEnvelope frame) => new(frame.ProtocolVersion, frame.MessageType,
+        frame.RequestId, frame.InstanceId.Value, frame.WorkerSessionId.Value, frame.IsResponse, frame.Payload);
+
     public void Close()
     {
         lock (_pendingLock)
         {
             _closed = true;
-            _completion?.TrySetException(new IOException("The Adapter Worker disconnected."));
+            _pending?.Completion.TrySetException(new IOException("The Adapter Worker disconnected."));
         }
     }
 }

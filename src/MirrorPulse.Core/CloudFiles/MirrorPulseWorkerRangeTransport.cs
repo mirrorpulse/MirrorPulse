@@ -1,3 +1,4 @@
+using System.Text.Json.Serialization;
 using MirrorPulse.Core.Contracts;
 
 namespace MirrorPulse.Core.CloudFiles;
@@ -9,7 +10,11 @@ public sealed record MirrorPulseWorkerReadRangeRequest(
     ReadOnlyMemory<byte> FileIdentity,
     long Offset,
     long Length,
-    string? RootKey = null);
+    string? RootKey = null)
+{
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? ExpectedRevision { get; init; }
+}
 
 public interface IMirrorPulseWorkerRangeTransport
 {
@@ -27,7 +32,15 @@ public sealed record MirrorPulseWorkerUploadRequest(
     Guid? OperationId = null,
     string? ExpectedContentSha256 = null,
     string? RootKey = null,
-    bool DestinationMustBeAbsent = true);
+    bool DestinationMustBeAbsent = true)
+{
+    /// <summary>Requires negotiated conditional targets before any upload frame may be sent.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public bool RequireConditionalTargetSupport { get; init; }
+
+    internal MirrorPulseDurableDirectoryCopyMode DurableCopyMode { get; init; }
+    internal Guid? DurableParentCopyOperationId { get; init; }
+}
 
 public interface IMirrorPulseWorkerUploadTransport
 {
@@ -36,7 +49,10 @@ public interface IMirrorPulseWorkerUploadTransport
         CancellationToken cancellationToken);
 }
 
-public sealed record MirrorPulseWorkerStatRequest(InstanceId InstanceId, string NormalizedPath, string? RootKey = null);
+public sealed record MirrorPulseWorkerStatRequest(InstanceId InstanceId, string NormalizedPath, string? RootKey = null)
+{
+    internal Guid? DurableDirectoryCopyOperationId { get; init; }
+}
 
 public interface IMirrorPulseWorkerStatTransport
 {

@@ -88,12 +88,26 @@ public sealed class AdapterWorkerReadRangeClient
             throw new ArgumentOutOfRangeException(nameof(request), "The Worker range or instance is invalid.");
         }
 
-        JsonElement payload = RoutePayload(request.RootKey, JsonSerializer.SerializeToElement(new
+        if (request.ExpectedRevision is { } revision)
+        {
+            if (string.IsNullOrWhiteSpace(revision) || revision.Length > 16_384 || revision.Contains('\0'))
+                throw new ArgumentException("A conditional range requires a bounded nonempty original revision.", nameof(request));
+            if (ProtocolVersion != 2)
+                throw new NotSupportedException("A revision-pinned range requires negotiated Worker V2 support before dispatch.");
+        }
+        JsonElement fields = JsonSerializer.SerializeToElement(new
         {
             path = request.NormalizedPath,
             offset = request.Offset,
             length = request.Length,
-        }));
+        });
+        if (request.ExpectedRevision is { } expectedRevision)
+        {
+            var conditional = fields.EnumerateObject().ToDictionary(field => field.Name, field => field.Value.Clone(), StringComparer.Ordinal);
+            conditional["expectedRevision"] = JsonSerializer.SerializeToElement(expectedRevision);
+            fields = JsonSerializer.SerializeToElement(conditional);
+        }
+        JsonElement payload = RoutePayload(request.RootKey, fields);
         await _operation.WaitAsync(cancellationToken).ConfigureAwait(false);
         TaskCompletionSource<Stream> completion = new(TaskCreationOptions.RunContinuationsAsynchronously);
         Guid requestId = Guid.NewGuid();

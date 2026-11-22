@@ -8,15 +8,44 @@ namespace MirrorPulse.Core.Tests;
 public sealed class TestResultGateTests
 {
     [TestMethod]
-    [DataRow("Passed", false, true)]
-    [DataRow("NotExecuted", false, false)]
-    [DataRow("Passed", true, false)]
-    public async Task DedicatedGateRejectsSkippedOrMissingRequiredResults(string outcome, bool omitLast, bool succeeds)
+    [DataRow("native", "Passed", false, false, true)]
+    [DataRow("native", "NotExecuted", false, false, false)]
+    [DataRow("native", "Passed", true, false, false)]
+    [DataRow("namespace", "Passed", false, false, true)]
+    [DataRow("namespace", "NotExecuted", false, false, false)]
+    [DataRow("namespace", "Passed", true, false, false)]
+    [DataRow("namespace", "Passed", false, true, false)]
+    [DataRow("cfsharpDelete", "Passed", false, false, true)]
+    [DataRow("cfsharpDelete", "NotExecuted", false, false, false)]
+    [DataRow("cfsharpDelete", "Failed", false, false, false)]
+    [DataRow("cfsharpDelete", "Passed", true, false, false)]
+    [DataRow("cfsharpDelete", "Passed", false, true, false)]
+    [DataRow("cfsharpRecreation", "Passed", false, false, true)]
+    [DataRow("cfsharpRecreation", "NotExecuted", false, false, false)]
+    [DataRow("cfsharpRecreation", "Failed", false, false, false)]
+    [DataRow("cfsharpRecreation", "Passed", true, false, false)]
+    [DataRow("cfsharpRecreation", "Passed", false, true, false)]
+    [DataRow("deferredP079", "Passed", false, false, true)]
+    [DataRow("deferredP079", "NotExecuted", false, false, false)]
+    [DataRow("deferredP079", "Failed", false, false, false)]
+    [DataRow("deferredP079", "Passed", true, false, false)]
+    [DataRow("deferredP079", "Passed", false, true, false)]
+    [DataRow("signedPreparedDirectoryCopy", "Passed", false, false, true)]
+    [DataRow("signedPreparedDirectoryCopy", "NotExecuted", false, false, false)]
+    [DataRow("signedPreparedDirectoryCopy", "Failed", false, false, false)]
+    [DataRow("signedPreparedDirectoryCopy", "Passed", true, false, false)]
+    [DataRow("signedPreparedDirectoryCopy", "Passed", false, true, false)]
+    [DataRow("fileTransferRecovery", "Passed", false, false, true)]
+    [DataRow("fileTransferRecovery", "NotExecuted", false, false, false)]
+    [DataRow("fileTransferRecovery", "Failed", false, false, false)]
+    [DataRow("fileTransferRecovery", "Passed", true, false, false)]
+    [DataRow("fileTransferRecovery", "Passed", false, true, false)]
+    public async Task DedicatedGateRejectsSkippedOrMissingRequiredResults(string suite, string outcome, bool omitLast, bool repeatFirst, bool succeeds)
     {
         string repository = SftpProtocolFixture.FindRepositoryRoot();
         using JsonDocument catalog = JsonDocument.Parse(
             await File.ReadAllTextAsync(Path.Combine(repository, "eng", "test-suites.json")));
-        string[] names = catalog.RootElement.GetProperty("required").GetProperty("native")
+        string[] names = catalog.RootElement.GetProperty("required").GetProperty(suite)
             .EnumerateArray().Select(item => item.GetString()!).ToArray();
         string root = Path.Combine(Path.GetTempPath(), $"MirrorPulse-trx-gate-{Guid.NewGuid():N}");
         Directory.CreateDirectory(root);
@@ -25,16 +54,23 @@ public sealed class TestResultGateTests
             XNamespace ns = "http://microsoft.com/schemas/VisualStudio/TeamTest/2010";
             var definitions = new XElement(ns + "TestDefinitions");
             var results = new XElement(ns + "Results");
-            foreach (string name in names.Take(names.Length - (omitLast ? 1 : 0)))
+            IEnumerable<string> selected = names.Take(names.Length - (omitLast ? 1 : 0));
+            if (repeatFirst) selected = selected.Append(names[0]);
+            foreach (string name in selected)
             {
-                string id = Guid.NewGuid().ToString();
                 int separator = name.LastIndexOf('.');
-                definitions.Add(new XElement(ns + "UnitTest", new XAttribute("id", id),
-                    new XAttribute("storage", "MirrorPulse.CloudFiles.CfSharp.Tests.dll"),
-                    new XElement(ns + "TestMethod", new XAttribute("className", name[..separator]),
-                        new XAttribute("name", name[(separator + 1)..]))));
-                results.Add(new XElement(ns + "UnitTestResult", new XAttribute("testId", id),
-                    new XAttribute("outcome", outcome)));
+                string[] cases = catalog.RootElement.TryGetProperty("requiredCases", out var mappings) && mappings.TryGetProperty(name, out var explicitCases)
+                    ? explicitCases.EnumerateArray().Select(item => item.GetString()!).ToArray() : [name[(separator + 1)..]];
+                foreach (string testCase in cases)
+                {
+                    string id = Guid.NewGuid().ToString();
+                    definitions.Add(new XElement(ns + "UnitTest", new XAttribute("id", id),
+                        new XAttribute("storage", "MirrorPulse.CloudFiles.CfSharp.Tests.dll"),
+                        new XElement(ns + "TestMethod", new XAttribute("className", name[..separator]),
+                            new XAttribute("name", name[(separator + 1)..]))));
+                    results.Add(new XElement(ns + "UnitTestResult", new XAttribute("testId", id),
+                        new XAttribute("executionId", Guid.NewGuid().ToString()), new XAttribute("testName", testCase), new XAttribute("outcome", outcome)));
+                }
             }
             new XDocument(new XElement(ns + "TestRun", definitions, results))
                 .Save(Path.Combine(root, "fixture.trx"));
@@ -47,7 +83,7 @@ public sealed class TestResultGateTests
             };
             foreach (string argument in new[] { "-NoProfile", "-File",
                 Path.Combine(repository, "eng", "verify-test-results.ps1"),
-                "-Suite", "native", "-ResultsDirectory", root })
+                "-Suite", suite, "-ResultsDirectory", root })
             {
                 start.ArgumentList.Add(argument);
             }

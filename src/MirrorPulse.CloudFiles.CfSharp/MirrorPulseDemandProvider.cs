@@ -2,6 +2,8 @@ using System.Runtime.Versioning;
 using CfSharp;
 using MirrorPulse.Core.CloudFiles;
 using MirrorPulse.Core.Contracts;
+using MirrorPulse.Core.State;
+using MirrorPulse.Core.Sync;
 
 namespace MirrorPulse.CloudFiles.CfSharp;
 
@@ -33,6 +35,12 @@ public sealed class MirrorPulseDemandProvider : ICloudDemandProvider
     private readonly IMirrorPulseWorkerRangeTransport _transport;
     private readonly IMirrorPulseDirectoryPageSource? _directoryPages;
     private readonly MirrorPulseRootRouter? _rootRouter;
+    private readonly MirrorPulseNamespaceWorkAdmission? _namespaceWork;
+    private readonly MirrorPulseManagedRootRenameApproval? _rootRenameApproval;
+    internal MirrorPulseNamespaceDirectoryPublisher? NamespacePublisher { get; set; }
+    // Observe the actual boundary before the SDK maps an exception to a native
+    // callback status. Tests use only synthetic fixture data; production has no observer.
+    internal Action<Exception>? NamespacePublicationFailureObservation { get; init; }
 
     public MirrorPulseDemandProvider(
         IEnumerable<InstanceId> activeInstances,
@@ -49,11 +57,15 @@ public sealed class MirrorPulseDemandProvider : ICloudDemandProvider
     public MirrorPulseDemandProvider(
         MirrorPulseRootRouter rootRouter,
         IMirrorPulseWorkerRangeTransport transport,
-        IMirrorPulseDirectoryPageSource? directoryPages = null)
+        IMirrorPulseDirectoryPageSource? directoryPages = null,
+        MirrorPulseNamespaceWorkAdmission? namespaceWork = null,
+        MirrorPulseProductCatalog? catalog = null)
         : this([], transport, directoryPages)
     {
         ArgumentNullException.ThrowIfNull(rootRouter);
         _rootRouter = rootRouter;
+        _namespaceWork = namespaceWork;
+        _rootRenameApproval = catalog is null ? null : new(rootRouter, catalog);
     }
 
     /// <summary>Connects a real CfSharp session while the current user has no active Adapters.</summary>
@@ -62,6 +74,25 @@ public sealed class MirrorPulseDemandProvider : ICloudDemandProvider
 
     public static MirrorPulseDemandProvider CreateWithoutAdapters(string syncRootPath) =>
         new(new MirrorPulseRootRouter(syncRootPath, []), new NoActiveAdapterRangeTransport());
+
+    public ValueTask<CloudProviderPolicyDecision> ApproveDeleteAsync(CloudProviderDeleteRequest request,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        cancellationToken.ThrowIfCancellationRequested();
+        return ValueTask.FromResult(_rootRouter is null ? CloudProviderPolicyDecision.Allow :
+            MirrorPulseRootNamespacePolicy.ApproveDelete(_rootRouter, request.NormalizedPath));
+    }
+
+    public ValueTask<CloudProviderPolicyDecision> ApproveRenameAsync(CloudProviderRenameRequest request,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        cancellationToken.ThrowIfCancellationRequested();
+        return _rootRenameApproval is null ? ValueTask.FromResult(CloudProviderPolicyDecision.Deny)
+            : _rootRenameApproval.EvaluateAsync(request.NormalizedPath, request.FileIdentity, request.TargetPath,
+                request.IsDirectory, request.SourceInScope, request.TargetInScope, cancellationToken);
+    }
 
     public ValueTask<CloudProviderDirectoryPage> FetchChildrenAsync(
         CloudProviderFetchPlaceholdersRequest request,
@@ -90,7 +121,11 @@ public sealed class MirrorPulseDemandProvider : ICloudDemandProvider
                 throw new InvalidDataException("The top-level Adapter roots have no continuation page.");
             }
 
-            return _rootRouter.CreateRootPage();
+            // Protected roots are materialized by controlled startup/recovery with
+            // durable birth provenance. Returning specifications here would let the
+            // library create them outside that boundary. Existing local roots remain
+            // visible to the filesystem when this callback completes with no new items.
+            return _namespaceWork is null ? _rootRouter.CreateRootPage() : new CloudProviderDirectoryPage([]);
         }
 
         if ((normalizedPath.Length == 0 || normalizedPath is "/" or "\\")
@@ -121,6 +156,10 @@ public sealed class MirrorPulseDemandProvider : ICloudDemandProvider
         }
 
         ReadOnlyMemory<byte> cursor = DecodeContinuation(continuationToken);
+        using var admission = _namespaceWork is null ? null : await _namespaceWork.EnterAfterRecoveryAsync(
+            [_rootRouter!.GetRegistration(instanceId, rootKey!).RootId], cancellationToken).ConfigureAwait(false);
+        if (_rootRouter is not null)
+            await _rootRouter.RequireCurrentCallbackAsync(new(instanceId, rootKey!, adapterPath), directoryIdentity, cancellationToken).ConfigureAwait(false);
         CloudRemoteDirectoryPage page = rootKey is null
             ? await _directoryPages.ReadPageAsync(instanceId, adapterPath, cursor, DirectoryPageSize, cancellationToken).ConfigureAwait(false)
             : await _directoryPages.ReadPageAsync(instanceId, rootKey, adapterPath, cursor, DirectoryPageSize, cancellationToken).ConfigureAwait(false);
@@ -140,9 +179,22 @@ public sealed class MirrorPulseDemandProvider : ICloudDemandProvider
             throw new InvalidDataException("The Adapter repeated a directory continuation cursor.");
         }
 
-        MirrorPulsePlaceholderBatchPlan plan = MirrorPulsePlaceholderBatchCoordinator.Plan(instanceId, page.Entries,
-            rootKey is null ? null : _rootRouter!.GetRegistration(instanceId, rootKey));
-        return new CloudProviderDirectoryPage(plan.Placeholders, next);
+        MirrorPulsePlaceholderBatchPlan plan = rootKey is null
+            ? MirrorPulsePlaceholderBatchCoordinator.Plan(instanceId, page.Entries)
+            : await MirrorPulsePlaceholderBatchCoordinator.PlanAsync(_rootRouter!, instanceId, rootKey, page.Entries, cancellationToken).ConfigureAwait(false);
+        var result = new CloudProviderDirectoryPage(plan.Placeholders, next);
+        if (NamespacePublisher is { } publisher)
+        {
+            if (!OperatingSystem.IsWindowsVersionAtLeast(10, 0, 26100))
+                throw new PlatformNotSupportedException("Protected source population requires Windows 11 24H2 or later.");
+            try { return await publisher.PublishAsync(normalizedPath, directoryIdentity, result, cancellationToken).ConfigureAwait(false); }
+            catch (Exception error)
+            {
+                NamespacePublicationFailureObservation?.Invoke(error);
+                throw;
+            }
+        }
+        return result;
     }
 
     private static ReadOnlyMemory<byte> DecodeContinuation(string? continuationToken)
@@ -187,7 +239,7 @@ public sealed class MirrorPulseDemandProvider : ICloudDemandProvider
             cancellationToken);
     }
 
-    public ValueTask<Stream> OpenReadAsync(
+    public async ValueTask<Stream> OpenReadAsync(
         string normalizedPath,
         ReadOnlyMemory<byte> encodedIdentity,
         long fileSize,
@@ -205,30 +257,41 @@ public sealed class MirrorPulseDemandProvider : ICloudDemandProvider
         }
 
         cancellationToken.ThrowIfCancellationRequested();
-        InstanceId instanceId;
-        string adapterPath = normalizedPath;
-        string? rootKey = null;
-        if (_rootRouter is null)
+        MirrorPulseNamespaceWorkAdmission.WorkLease? admission = null;
+        var stage = MirrorPulseProviderReadStage.Routing;
+        try
         {
-            CloudPlaceholderIdentity identity = CloudPlaceholderIdentity.Decode(encodedIdentity.Span);
-            instanceId = ResolveInstance(identity);
+            InstanceId instanceId;
+            string adapterPath = normalizedPath;
+            string? rootKey = null;
+            if (_rootRouter is null)
+            {
+                CloudPlaceholderIdentity identity = CloudPlaceholderIdentity.Decode(encodedIdentity.Span);
+                instanceId = ResolveInstance(identity);
+            }
+            else
+            {
+                MirrorPulseRoutedItem routed = _rootRouter.Resolve(normalizedPath, encodedIdentity.Span);
+                instanceId = routed.InstanceId;
+                adapterPath = routed.RelativePath;
+                rootKey = routed.RootKey;
+            }
+            byte[] retainedIdentity = encodedIdentity.ToArray();
+            stage = MirrorPulseProviderReadStage.WorkAdmission;
+            admission = _namespaceWork is null ? null : await _namespaceWork.EnterAfterRecoveryAsync(
+                [_rootRouter!.GetRegistration(instanceId, rootKey!).RootId], cancellationToken).ConfigureAwait(false);
+            stage = MirrorPulseProviderReadStage.IdentityValidation;
+            if (_rootRouter is not null)
+                await _rootRouter.RequireCurrentCallbackAsync(new(instanceId, rootKey!, adapterPath), retainedIdentity, cancellationToken).ConfigureAwait(false);
+            stage = MirrorPulseProviderReadStage.StreamCreation;
+            Stream stream = new WorkerRangeStream(_transport, instanceId, adapterPath, retainedIdentity, fileSize, rootKey, admission);
+            return stream;
         }
-        else
+        catch (Exception error)
         {
-            MirrorPulseRoutedItem routed = _rootRouter.Resolve(normalizedPath, encodedIdentity.Span);
-            instanceId = routed.InstanceId;
-            adapterPath = routed.RelativePath;
-            rootKey = routed.RootKey;
+            MirrorPulseProviderReadFailure.Record(stage, error);
+            admission?.Dispose(); throw;
         }
-
-        Stream stream = new WorkerRangeStream(
-            _transport,
-            instanceId,
-            adapterPath,
-            encodedIdentity.ToArray(),
-            fileSize,
-            rootKey);
-        return ValueTask.FromResult(stream);
     }
 
     private InstanceId ResolveInstance(CloudPlaceholderIdentity identity)
@@ -258,13 +321,18 @@ public sealed class MirrorPulseDemandProvider : ICloudDemandProvider
         string normalizedPath,
         byte[] encodedIdentity,
         long fileSize,
-        string? rootKey) : Stream
+        string? rootKey,
+        MirrorPulseNamespaceWorkAdmission.WorkLease? admission) : Stream
     {
         private long _position;
+        private readonly object _lifetime = new();
+        private readonly TaskCompletionSource _drained = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private int _reads;
+        private bool _closing;
 
-        public override bool CanRead => true;
+        public override bool CanRead => !Volatile.Read(ref _closing);
 
-        public override bool CanSeek => true;
+        public override bool CanSeek => !Volatile.Read(ref _closing);
 
         public override bool CanWrite => false;
 
@@ -275,6 +343,7 @@ public sealed class MirrorPulseDemandProvider : ICloudDemandProvider
             get => _position;
             set
             {
+                ObjectDisposedException.ThrowIf(Volatile.Read(ref _closing), this);
                 if (value < 0 || value > fileSize)
                 {
                     throw new ArgumentOutOfRangeException(nameof(value));
@@ -287,6 +356,17 @@ public sealed class MirrorPulseDemandProvider : ICloudDemandProvider
         public override async ValueTask<int> ReadAsync(
             Memory<byte> buffer,
             CancellationToken cancellationToken = default)
+        {
+            lock (_lifetime) { ObjectDisposedException.ThrowIf(_closing, this); _reads++; }
+            try { return await ReadCoreAsync(buffer, cancellationToken).ConfigureAwait(false); }
+            finally
+            {
+                lock (_lifetime)
+                    if (--_reads == 0 && _closing) ReleaseAdmission();
+            }
+        }
+
+        private async ValueTask<int> ReadCoreAsync(Memory<byte> buffer, CancellationToken cancellationToken)
         {
             if (buffer.IsEmpty || _position == fileSize)
             {
@@ -303,28 +383,32 @@ public sealed class MirrorPulseDemandProvider : ICloudDemandProvider
                 _position,
                 length,
                 rootKey);
-            await using Stream source = await transport.ReadRangeAsync(request, cancellationToken)
-                .ConfigureAwait(false);
-            if (!source.CanRead)
+            var stage = MirrorPulseProviderReadStage.RangeTransport;
+            try
             {
-                throw new InvalidDataException("The Adapter Worker returned an unreadable range stream.");
-            }
-
-            int received = 0;
-            while (received < length)
-            {
-                int count = await source.ReadAsync(buffer.Slice(received, length - received), cancellationToken)
+                await using Stream source = await transport.ReadRangeAsync(request, cancellationToken)
                     .ConfigureAwait(false);
-                if (count == 0)
+                stage = MirrorPulseProviderReadStage.RangeContent;
+                if (!source.CanRead)
+                    throw new InvalidDataException("The Adapter Worker returned an unreadable range stream.");
+
+                int received = 0;
+                while (received < length)
                 {
-                    throw new EndOfStreamException("The Adapter Worker returned a truncated range.");
+                    int count = await source.ReadAsync(buffer.Slice(received, length - received), cancellationToken)
+                        .ConfigureAwait(false);
+                    if (count == 0)
+                        throw new EndOfStreamException("The Adapter Worker returned a truncated range.");
+                    received += count;
                 }
-
-                received += count;
+                _position += received;
+                return received;
             }
-
-            _position += received;
-            return received;
+            catch (Exception error)
+            {
+                MirrorPulseProviderReadFailure.Record(stage, error);
+                throw;
+            }
         }
 
         public override int Read(byte[] buffer, int offset, int count) =>
@@ -350,6 +434,31 @@ public sealed class MirrorPulseDemandProvider : ICloudDemandProvider
         public override void SetLength(long value) => throw new NotSupportedException();
 
         public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing)
+            {
+                lock (_lifetime)
+                {
+                    _closing = true;
+                    if (_reads == 0) ReleaseAdmission();
+                }
+            }
+            base.Dispose(disposing);
+        }
+
+        public override async ValueTask DisposeAsync()
+        {
+            await base.DisposeAsync().ConfigureAwait(false);
+            await _drained.Task.ConfigureAwait(false);
+            GC.SuppressFinalize(this);
+        }
+
+        private void ReleaseAdmission()
+        {
+            admission?.Dispose(); _drained.TrySetResult();
+        }
     }
 
     private const int AdapterWorkerReadRangeLimit = 1024 * 1024;

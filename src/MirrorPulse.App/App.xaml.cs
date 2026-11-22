@@ -39,7 +39,13 @@ public partial class App : Application
     /// </summary>
     public App()
     {
+#if MIRRORPULSE_SHELL_PROBE
+        MirrorPulsePackagedShellProbeProgress.RecordFromEnvironment(MirrorPulsePackagedShellProbeStage.AppConstructing);
+#endif
         InitializeComponent();
+#if MIRRORPULSE_SHELL_PROBE
+        MirrorPulsePackagedShellProbeProgress.RecordFromEnvironment(MirrorPulsePackagedShellProbeStage.AppInitialized);
+#endif
     }
 
     /// <summary>
@@ -48,6 +54,9 @@ public partial class App : Application
     /// <param name="args">Details about the launch request and process.</param>
     protected override void OnLaunched(Microsoft.UI.Xaml.LaunchActivatedEventArgs args)
     {
+#if MIRRORPULSE_SHELL_PROBE
+        MirrorPulsePackagedShellProbeProgress.RecordFromEnvironment(MirrorPulsePackagedShellProbeStage.AppLaunched);
+#endif
         if (!MirrorPulsePlatform.IsCurrentSupported())
         {
             var close = new Button { Content = "Close" };
@@ -71,6 +80,7 @@ public partial class App : Application
         string? probeResult = Environment.GetEnvironmentVariable("MIRRORPULSE_PACKAGED_SHELL_PROBE_RESULT");
         if (!string.IsNullOrWhiteSpace(probeResult))
         {
+            MirrorPulsePackagedShellProbeProgress.Record(probeResult, MirrorPulsePackagedShellProbeStage.ProbeSelected);
             _ = MirrorPulsePackagedShellProbe.RunAsync(probeResult, this);
             return;
         }

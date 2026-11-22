@@ -18,6 +18,8 @@ public static class MirrorPulseAdapterRemoteBatchMapper
         ArgumentNullException.ThrowIfNull(registrations);
         ArgumentNullException.ThrowIfNull(batch);
         ArgumentNullException.ThrowIfNull(batch.Changes);
+        if (batch.BatchId.StartsWith(MirrorPulseRemotePollBatchScope.ReservedPrefix, StringComparison.Ordinal))
+            throw new InvalidDataException("The Adapter batch ID uses the Host-owned root polling namespace.");
         var roots = registrations
             .Where(root => root.InstanceId == instanceId && root.State == RootRegistrationState.Active)
             .ToDictionary(root => root.UniquenessKey, StringComparer.Ordinal);

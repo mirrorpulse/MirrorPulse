@@ -4,6 +4,9 @@ param(
     [Parameter(Mandatory)][ValidatePattern('^[0-9a-f]{40}$')][string]$ExpectedSourceSha,
     [switch]$RequireNative,
     [switch]$RequireInstalled,
+    [switch]$RequireInstalledShell,
+    [switch]$RequireNamespace,
+    [switch]$RequireNonAdminNamespace,
     [switch]$RequireOfficialCandidate
 )
 
@@ -35,16 +38,51 @@ foreach ($job in $expected.Keys) {
             throw "Invalid artifact evidence: $job"
         }
     }
-    if ($job -eq "official-package-arm64" -and
-        @($manifest.checks | Where-Object { $_.name -eq "signed-local-cli-regression" -and $_.executed -eq $true }).Count -ne 1) {
-        throw "The ARM64 CLI regression did not execute."
+    if ($job -eq "official-package-arm64") {
+        $ordinary = @($manifest.checks | Where-Object name -ceq 'namespace-nonadmin')
+        if ($RequireNonAdminNamespace -or $ordinary.Count -gt 0) {
+            if ($ordinary.Count -ne 1 -or $ordinary[0].executed -isnot [bool] -or $ordinary[0].executed -ne $true -or
+                $ordinary[0].observations.sourceSha -cne $ExpectedSourceSha) {
+                throw 'Actual ordinary-user namespace execution is missing, repeated, or from another source.'
+            }
+            . (Join-Path $PSScriptRoot 'namespace-nonadmin-evidence-policy.ps1')
+            Assert-OrdinaryUserNamespaceEvidence $ordinary[0].observations (Get-Content -LiteralPath (Join-Path $PSScriptRoot 'test-suites.json') -Raw | ConvertFrom-Json) 'Arm64'
+            foreach ($item in @(@{path='namespace-nonadmin/context.json';hash=$ordinary[0].observations.contextSha256},
+                @{path='namespace-nonadmin/namespace.trx';hash=$ordinary[0].observations.trxSha256})) {
+                $original = @($manifest.artifacts | Where-Object path -ceq $item.path)
+                if ($original.Count -ne 1 -or $original[0].sha256 -cne $item.hash -or $original[0].length -le 0) {
+                    throw 'The ordinary-user context or original TRX artifact is missing or differs from the check.'
+                }
+            }
+        }
+        $namespace = @($manifest.tests | Where-Object suite -ceq 'namespace')
+        if ($RequireNamespace -or $namespace.Count -gt 0) {
+            if ($namespace.Count -ne 1) { throw 'Dedicated ARM64 namespace execution is missing or repeated.' }
+            . (Join-Path $PSScriptRoot 'namespace-evidence-policy.ps1')
+            Assert-NamespaceTestExecution $namespace[0] (Get-Content -LiteralPath (Join-Path $PSScriptRoot 'test-suites.json') -Raw | ConvertFrom-Json)
+        }
+        $integration = @($manifest.checks | Where-Object name -ceq 'signed-local-cli-regression')
+        if ($integration.Count -ne 1 -or $integration[0].executed -ne $true) { throw 'The ARM64 CLI regression did not execute exactly once.' }
+        . (Join-Path $PSScriptRoot 'cli-regression-evidence-policy.ps1')
+        Assert-CliRegressionObservations $integration[0]
+        $crossPackage = @($manifest.checks | Where-Object name -ceq 'signed-cross-package-cli-transfers')
+        if ($crossPackage.Count -gt 0) {
+            if ($crossPackage.Count -ne 1 -or $crossPackage[0].executed -ne $true -or
+                $crossPackage[0].observations.schemaVersion -ne 3 -or $crossPackage[0].observations.sourceSha -cne $ExpectedSourceSha -or
+                $crossPackage[0].observations.runtime -cne 'win-arm64') { throw 'The signed cross-package transfer execution is repeated or from another source.' }
+            . (Join-Path $PSScriptRoot 'cli-transfer-evidence-policy.ps1')
+            Assert-CliTransferObservations $crossPackage[0].observations -RequireSingleRoot -RequirePreparedRestart
+        }
     }
-    if ($job -eq "official-package-arm64" -and $RequireInstalled) {
+    if ($job -eq "official-package-arm64" -and ($RequireInstalled -or $RequireInstalledShell)) {
         $installed = @($manifest.checks | Where-Object name -eq 'installed-msix')
         if ($installed.Count -ne 1 -or $installed[0].executed -ne $true -or $installed[0].uninstalled -ne $true -or
             $installed[0].osProductType -ne 1 -or $installed[0].osVersion -notmatch '^10\.0\.\d+\.\d+$' -or
             [version]$installed[0].osVersion -lt [version]'10.0.26100.0' -or
             $installed[0].minimumVersion -ne '10.0.26100.0') { throw "Supported desktop MSIX verification is missing." }
+        if ($RequireInstalledShell -and ($installed[0].shellRegistration -isnot [bool] -or
+            -not $installed[0].shellRegistration -or $installed[0].shellEntryPointVerified -isnot [bool] -or
+            -not $installed[0].shellEntryPointVerified)) { throw "Installed Shell registration and entry-point verification is missing." }
     }
     if ($job -eq "build-and-test") {
         $rejected = @($manifest.checks | Where-Object name -eq 'unsupported-server')
@@ -52,13 +90,11 @@ foreach ($job in $expected.Keys) {
             $rejected[0].hostRejected -ne $true -or $rejected[0].stateUntouched -ne $true -or
             $rejected[0].osProductType -notin @(2,3)) { throw "Unsupported Windows Server rejection is missing." }
         if ($RequireNative) {
+            . (Join-Path $PSScriptRoot 'test-execution-policy.ps1')
             $suiteCatalog = Get-Content -LiteralPath (Join-Path $PSScriptRoot "test-suites.json") -Raw | ConvertFrom-Json
-            $requiredNativeCount = @($suiteCatalog.required.native).Count
             $native = @($manifest.tests | Where-Object suite -eq "native")
-            if ($requiredNativeCount -le 0 -or $native.Count -ne 1 -or $native[0].skipped -ne 0 -or
-                @($native[0].categories | Where-Object { $_.category -eq "native" -and $_.executed -eq $requiredNativeCount }).Count -ne 1) {
-                throw "Native Cloud Files execution is missing."
-            }
+            if ($native.Count -ne 1) { throw 'Native Cloud Files execution is missing or repeated.' }
+            Assert-NativeTestExecution -Evidence $native[0] -Catalog $suiteCatalog
         }
     }
 }

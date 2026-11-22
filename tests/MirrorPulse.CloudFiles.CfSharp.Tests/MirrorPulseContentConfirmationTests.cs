@@ -14,6 +14,25 @@ public sealed class MirrorPulseContentConfirmationTests
 {
     public TestContext TestContext { get; set; } = null!;
     [TestMethod]
+    public void ObservedContentRequestKeepsTheRealAcceptedTargetAndCannotPrepareAnotherIdentity()
+    {
+        var binding = new MirrorPulseLocalFileBinding(ulong.MaxValue, Guid.NewGuid(), Guid.NewGuid());
+        var proof = new MirrorPulseContentAcceptanceProof(Guid.NewGuid(),
+            new(binding, MirrorPulseContentPreparation.ReplacePlaceholderIdentity, Convert.ToBase64String([9, 8, 7])),
+            Guid.NewGuid(), "accepted-object", "accepted-revision", 4, Convert.ToHexString(SHA256.HashData([1, 2, 3, 4])));
+        string original = System.Text.Json.JsonSerializer.Serialize(proof);
+        var request = MirrorPulseContentConfirmation.CreateObservationRequest(proof);
+        Assert.AreEqual(CloudContentPreparation.None, request.Preparation);
+        Assert.IsTrue(request.ExpectedPlaceholderIdentity.IsEmpty);
+        Assert.AreEqual(proof.AcceptedItemId, request.AcceptedIdentity.ItemId);
+        Assert.AreEqual(proof.RemoteId, request.AcceptedIdentity.RemoteId);
+        Assert.AreEqual(proof.AcceptedRevision, request.AcceptedIdentity.RemoteRevision);
+        Assert.AreEqual(proof.Sha256, Convert.ToHexString(request.ExpectedSha256.Span));
+        Assert.AreEqual(binding.LocalFileId, request.ExpectedBinding.LocalFileId);
+        Assert.AreEqual(original, System.Text.Json.JsonSerializer.Serialize(proof));
+    }
+
+    [TestMethod]
     public void ProductProofMapsFullNativeBindingAndExactAcceptedIdentityToPublicRequest()
     {
         var binding = new MirrorPulseLocalFileBinding(ulong.MaxValue, Guid.NewGuid(), Guid.NewGuid());
@@ -56,6 +75,8 @@ public sealed class MirrorPulseContentConfirmationTests
             await using CloudFileSystem fileSystem = new MirrorPulseCloudFileSystemBuilder(paths).WithStateStore(state)
                 .WithContentProvider(MirrorPulseDemandProvider.CreateWithoutAdapters(paths.SyncRootPath)).Build();
             await fileSystem.StartAsync();
+            await using CloudLocalChangeFeed feed = fileSystem.CreateLocalChangeFeed();
+            await feed.StartAsync();
             byte[] bytes = [1, 2, 3, 4, 5];
             await File.WriteAllBytesAsync(Path.Combine(paths.SyncRootPath, "content.bin"), bytes);
             CloudFile file = fileSystem.GetFile("content.bin");
@@ -109,6 +130,9 @@ public sealed class MirrorPulseContentConfirmationTests
             CollectionAssert.AreEqual(bytes, await File.ReadAllBytesAsync(file.FullPath));
             if (!tracked)
             {
+                using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+                CloudLocalChangeBatch beforeEdit = await feed.ReadBatchAsync(timeout.Token);
+                long sequence = beforeEdit.Changes.Count == 0 ? 0 : beforeEdit.Changes.Max(change => change.Sequence);
                 await using (var edit = new FileStream(file.FullPath, FileMode.Open, FileAccess.Write, FileShare.Read))
                 {
                     await edit.WriteAsync(new byte[] { 5, 4, 3, 2, 1 });
@@ -119,6 +143,15 @@ public sealed class MirrorPulseContentConfirmationTests
                 Assert.AreEqual(snapshot.LocalBinding, dirty.LocalBinding);
                 Assert.AreEqual(CloudSynchronizationState.NotInSync, dirty.SynchronizationState);
                 Assert.IsFalse(MirrorPulseJournalContentPolicy.IsAcceptedObservation(dirty, instance, "accepted"));
+                CloudLocalChangeBatch afterEdit;
+                do
+                {
+                    afterEdit = await feed.ReadBatchAsync(timeout.Token);
+                    if (!afterEdit.Changes.Any(change => change.Sequence > sequence && change.Kind == CloudLocalChangeKind.ContentUpdate))
+                        await Task.Delay(20, timeout.Token);
+                } while (!afterEdit.Changes.Any(change => change.Sequence > sequence && change.Kind == CloudLocalChangeKind.ContentUpdate));
+                Assert.IsTrue(afterEdit.Changes.Any(change => change.RelativePath == "content.bin" &&
+                    change.Sequence > sequence && change.Kind == CloudLocalChangeKind.ContentUpdate));
             }
         }
         finally

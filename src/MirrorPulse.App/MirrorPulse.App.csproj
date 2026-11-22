@@ -8,15 +8,24 @@
     <ApplicationIcon Condition="Exists('Assets\AppIcon.ico')">Assets\AppIcon.ico</ApplicationIcon>
     <Platforms>x64;ARM64</Platforms>
     <RuntimeIdentifiers>win-x64;win-arm64</RuntimeIdentifiers>
+    <!-- CLI runtime files share the package root; the RID App must use them too. -->
+    <SelfContained Condition="'$(RuntimeIdentifier)' != ''">true</SelfContained>
     <PublishProfile Condition="Exists('Properties\PublishProfiles\win-$(Platform).pubxml')">win-$(Platform).pubxml</PublishProfile>
     <UseWinUI>true</UseWinUI>
     <WinUISDKReferences>false</WinUISDKReferences>
     <EnableMsixTooling>true</EnableMsixTooling>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
-    <DefineConstants Condition="'$(MirrorPulseShellProbe)'=='true'">$(DefineConstants);MIRRORPULSE_SHELL_PROBE</DefineConstants>
+    <DefineConstants Condition="'$(MirrorPulseShellProbe)'=='true'">$(DefineConstants);MIRRORPULSE_SHELL_PROBE;DISABLE_XAML_GENERATED_MAIN</DefineConstants>
   </PropertyGroup>
 
+  <!-- The disposable CI probe must report SDK deployment errors without a dialog.
+       Keep the SDK initializer and its original failing exit status enabled. -->
+  <PropertyGroup Condition="'$(MirrorPulseShellProbe)'=='true'">
+    <WindowsAppSDKDeploymentManagerAutoInitializeOptions_Default>false</WindowsAppSDKDeploymentManagerAutoInitializeOptions_Default>
+    <WindowsAppSDKDeploymentManagerAutoInitializeOptions_OnErrorShowUI>false</WindowsAppSDKDeploymentManagerAutoInitializeOptions_OnErrorShowUI>
+    <WindowsAppSDKDeploymentManagerAutoInitializeOptions_None>true</WindowsAppSDKDeploymentManagerAutoInitializeOptions_None>
+  </PropertyGroup>
   <ItemGroup>
     <Content Include="Assets\SplashScreen.scale-200.png" />
     <Content Include="Assets\LockScreenLogo.scale-200.png" />

@@ -1,0 +1,523 @@
+using System.Security.Cryptography;
+using System.Text.Json;
+using System.Text.Json.Serialization;
+using Microsoft.Data.Sqlite;
+using MirrorPulse.Core.Contracts;
+using MirrorPulse.Core.Sync;
+
+namespace MirrorPulse.Core.State;
+
+/// <summary>The completed source and target audits that authorized one directory target's first native start.</summary>
+public sealed record MirrorPulseDirectoryTransferTargetActivation(Guid SourceAuditId, Guid TargetAuditId, string RoleSid);
+
+internal sealed record MirrorPulseDirectoryTransferTargetBirth(Guid TransferId, int Ordinal,
+    MirrorPulseNamespaceBirthIntent Birth, MirrorPulseNamespaceBirthPlan Plan)
+{
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public Guid? RecoveryInitializationId { get; init; }
+}
+
+public sealed partial class MirrorPulseProductCatalog
+{
+    private const string DirectoryTransferBirthTable = """
+        CREATE TABLE namespace_directory_transfer_target_births(
+            transfer_id TEXT NOT NULL REFERENCES namespace_directory_transfer_target_verifications(transfer_id),
+            ordinal INTEGER NOT NULL CHECK(ordinal BETWEEN 0 AND 65535),
+            birth_id TEXT NOT NULL UNIQUE REFERENCES namespace_birth_intents(operation_id),
+            item_id TEXT NOT NULL UNIQUE,
+            payload BLOB NOT NULL CHECK(length(payload) BETWEEN 1 AND 262144),
+            fingerprint BLOB NOT NULL CHECK(length(fingerprint)=32),
+            PRIMARY KEY(transfer_id,ordinal))
+        """;
+
+    private static async Task EnsureDirectoryTransferBirthSchemaAsync(SqliteConnection connection, long originalVersion,
+        CancellationToken token)
+    {
+        using var transaction = connection.BeginTransaction();
+        await using var sql = connection.CreateCommand();
+        sql.Transaction = transaction;
+        sql.CommandText = "SELECT sql FROM sqlite_master WHERE name='namespace_directory_transfer_target_births';";
+        var existing = await sql.ExecuteScalarAsync(token).ConfigureAwait(false);
+        if (existing is null && originalVersion < 112)
+        {
+            sql.CommandText = DirectoryTransferBirthTable;
+            await sql.ExecuteNonQueryAsync(token).ConfigureAwait(false);
+        }
+        else if (existing is not string text ||
+            NormalizeRetiredTransferIndexSql(text) != NormalizeRetiredTransferIndexSql(DirectoryTransferBirthTable))
+        {
+            throw new InvalidDataException("The original directory transfer target birth schema is missing or changed.");
+        }
+        if (originalVersion < 112)
+        {
+            sql.CommandText = "SELECT 1 FROM namespace_directory_transfer_target_births LIMIT 1;";
+            if (await sql.ExecuteScalarAsync(token).ConfigureAwait(false) is not null)
+                throw new InvalidDataException("An earlier catalog cannot supply original directory transfer births.");
+            sql.CommandText = "PRAGMA user_version=112;";
+            await sql.ExecuteNonQueryAsync(token).ConfigureAwait(false);
+        }
+        transaction.Commit();
+    }
+
+    internal async Task<MirrorPulseDirectoryTransferTargetBirth> PrepareNamespaceDirectoryTransferBirthAsync(
+        MirrorPulseDirectoryTransferTargetBirth target, CancellationToken token)
+    {
+        ArgumentNullException.ThrowIfNull(target);
+        await _gate.WaitAsync(token).ConfigureAwait(false);
+        try
+        {
+            ThrowIfDisposed();
+            using var transaction = _connection.BeginTransaction();
+            using var validation = BeginNamespaceRecoveryValidationReadPhase(transaction);
+            var (admission, verification) = await ReadDirectoryTransferBirthEvidenceAsync(target.TransferId, transaction, token).ConfigureAwait(false);
+            ValidateDirectoryTransferBirth(admission, verification, target);
+            var retained = await ReadDirectoryTransferBirthRowAsync(target.TransferId, target.Ordinal, null, transaction, token).ConfigureAwait(false);
+            if (retained is not null)
+            {
+                if (retained != target) throw new InvalidOperationException("The original directory transfer target birth is immutable.");
+                await ValidateDirectoryTransferBirthArtifactsAsync(retained, transaction, token).ConfigureAwait(false);
+                transaction.Commit();
+                return retained;
+            }
+            await RequireDirectoryTransferBirthRecoveryAsync(target, transaction, token).ConfigureAwait(false);
+            var parent = await ReadDirectoryTransferBirthParentAsync(admission, target, transaction, token).ConfigureAwait(false);
+            if (target.Birth.ParentLocalObject != parent.Context.Member.LocalObject ||
+                target.Birth.BornParent != parent.BornParent ||
+                target.Birth.ParentEvidenceId != (parent.BornParent is null ? parent.Context.Member.OriginId : Guid.Empty) ||
+                target.Birth.ParentPermissionOperationId != (parent.BornParent is null ? parent.PermissionOperationId : Guid.Empty))
+                throw new InvalidOperationException("A directory transfer birth requires its exact current target parent.");
+
+            await RequireNamespaceTransferRoutesAsync([admission.SourceRoute, admission.TargetRoute], transaction, token,
+                requireSingleRoot: true).ConfigureAwait(false);
+            await RequireNamespaceMoveRootUnfencedAsync(target.Birth.RootId, null, transaction, token,
+                allowedTransfer: target.TransferId).ConfigureAwait(false);
+            await RequireNamespaceTransferIdAvailableAsync(target.Birth.OperationId, transaction, token).ConfigureAwait(false);
+            await ValidateNamespaceBirthCurrentParentAsync(target.Birth, transaction, token).ConfigureAwait(false);
+            await RequireNamespaceBirthUnoccupiedMemberNameAsync(target.Birth, transaction, token).ConfigureAwait(false);
+            await using var sql = _connection.CreateCommand();
+            sql.Transaction = transaction;
+            sql.CommandText = """
+                SELECT 1 FROM namespace_permission_local_identities WHERE item_id=$item
+                UNION ALL SELECT 1 FROM namespace_birth_plans WHERE item_id=$item
+                UNION ALL SELECT 1 FROM namespace_remote_birth_entries WHERE item_id=$item LIMIT 1;
+                """;
+            sql.Parameters.AddWithValue("$item", target.Plan.ItemId.ToString("D"));
+            if (await sql.ExecuteScalarAsync(token).ConfigureAwait(false) is not null)
+                throw new InvalidOperationException("A directory transfer target cannot adopt an existing public identity.");
+            byte[] payload = JsonSerializer.SerializeToUtf8Bytes(target, TopologyJsonOptions);
+            if (payload.Length > 262_144) throw new ArgumentException("The directory transfer birth is not bounded.", nameof(target));
+            validation.Dispose();
+            await InsertNamespaceTransferBirthArtifactsAsync(target.Birth, target.Plan, transaction, token).ConfigureAwait(false);
+            sql.CommandText = """
+                INSERT INTO namespace_directory_transfer_target_births(transfer_id,ordinal,birth_id,item_id,payload,fingerprint)
+                VALUES($transfer,$ordinal,$birth,$item,$payload,$hash);
+                """;
+            sql.Parameters.AddWithValue("$transfer", target.TransferId.ToString("D"));
+            sql.Parameters.AddWithValue("$ordinal", target.Ordinal);
+            sql.Parameters.AddWithValue("$birth", target.Birth.OperationId.ToString("D"));
+            sql.Parameters.AddWithValue("$payload", payload);
+            sql.Parameters.AddWithValue("$hash", SHA256.HashData(payload));
+            await sql.ExecuteNonQueryAsync(token).ConfigureAwait(false);
+            transaction.Commit();
+            return target;
+        }
+        finally { _gate.Release(); }
+    }
+
+    internal async Task<IReadOnlyList<(Guid TransferId, int Ordinal)>> ReadStartedUnregisteredDirectoryTransferBirthsAsync(Guid? transferId,
+        CancellationToken token)
+    {
+        await _gate.WaitAsync(token).ConfigureAwait(false);
+        try
+        {
+            ThrowIfDisposed();
+            using var transaction = BeginNamespaceRecoveryReadSnapshot();
+            await RequireDirectoryTransferFenceIndexAsync(transaction, token).ConfigureAwait(false);
+            await using var query = _connection.CreateCommand();
+            query.Transaction = transaction;
+            query.CommandText = """
+                SELECT b.transfer_id,b.ordinal FROM namespace_directory_transfer_target_births b
+                JOIN namespace_birth_starts s ON s.operation_id=b.birth_id
+                WHERE EXISTS(SELECT 1 FROM namespace_directory_transfer_fences f WHERE f.transfer_id=b.transfer_id)
+                AND ($transfer IS NULL OR b.transfer_id=$transfer)
+                AND NOT EXISTS(SELECT 1 FROM namespace_members m WHERE m.member_id=b.birth_id)
+                ORDER BY b.transfer_id,b.ordinal LIMIT 2049;
+                """;
+            query.Parameters.AddWithValue("$transfer", (object?)transferId?.ToString("D") ?? DBNull.Value);
+            var pending = new List<(Guid, int)>();
+            await using (var reader = await query.ExecuteReaderAsync(token).ConfigureAwait(false))
+                while (await reader.ReadAsync(token).ConfigureAwait(false))
+                    pending.Add((ParseNamespaceMemberId(reader.GetString(0)), reader.GetInt32(1)));
+            if (pending.Count > 2048) throw new InvalidDataException("Pending directory transfer births exceed the root bound.");
+            transaction.Commit();
+            return pending.AsReadOnly();
+        }
+        finally { _gate.Release(); }
+    }
+
+    internal async Task<MirrorPulseDirectoryTransferTargetBirth?> ReadNamespaceDirectoryTransferBirthAsync(
+        Guid transferId, int ordinal, CancellationToken token)
+    {
+        await _gate.WaitAsync(token).ConfigureAwait(false);
+        try
+        {
+            ThrowIfDisposed();
+            using var transaction = BeginNamespaceRecoveryReadSnapshot();
+            var result = await ReadDirectoryTransferBirthRowAsync(transferId, ordinal, null, transaction, token).ConfigureAwait(false);
+            if (result is not null)
+            {
+                var (admission, verification) = await ReadDirectoryTransferBirthEvidenceAsync(transferId, transaction, token).ConfigureAwait(false);
+                ValidateRetainedDirectoryTransferBirth(admission, verification, result);
+                await ValidateDirectoryTransferBirthArtifactsAsync(result, transaction, token).ConfigureAwait(false);
+            }
+            transaction.Commit();
+            return result;
+        }
+        finally { _gate.Release(); }
+    }
+
+    private async Task RequireRegisteredDirectoryTransferTargetPrefixAsync(Guid transferId, DateTimeOffset preparedAt,
+        SqliteTransaction transaction, CancellationToken token, Guid? startedBirthId = null)
+    {
+        // Before the replacement role is installed, current ACL snapshots can be
+        // incoherent. Admit rotation for a known remote copy prefix and any registered
+        // native target prefix. Fresh protection, native inventory and Worker bytes
+        // are checked before dispatch or publication.
+        var copy = await ReadDirectoryTransferCopyCoreAsync(transferId, transaction, token).ConfigureAwait(false);
+        if (copy.Steps.Any(step => step.StartedAt is not null && step.AcceptedAt is null && !step.Durable))
+            throw new MirrorPulseMutationAmbiguousException("The original directory copy effect needs its correlated Worker receipt.");
+        var plan = copy.Admission;
+        var verification = await ReadDirectoryTransferTargetCoreAsync(copy, transaction, token).ConfigureAwait(false);
+        if (verification is null)
+        {
+            if (startedBirthId is not null)
+                throw new InvalidOperationException("A started directory target requires its original whole-tree verification.");
+            await using var query = _connection.CreateCommand();
+            query.Transaction = transaction;
+            query.CommandText = "SELECT 1 FROM namespace_directory_transfer_target_births WHERE transfer_id=$transfer LIMIT 1;";
+            query.Parameters.AddWithValue("$transfer", transferId.ToString("D"));
+            if (await query.ExecuteScalarAsync(token).ConfigureAwait(false) is not null)
+                throw new InvalidDataException("The target birth lost its original whole-tree verification.");
+            return;
+        }
+        var members = new Dictionary<Guid, Guid> { [plan.SourceParent.Context.Member.MemberId] = plan.TargetParent.Context.Member.MemberId };
+        Guid targetRoot = Guid.Empty;
+        bool missing = false;
+        bool retainsStartedTarget = false;
+        for (int ordinal = 0; ordinal < plan.Members.Count; ordinal++)
+        {
+            var target = await ReadDirectoryTransferBirthRowAsync(transferId, ordinal, null, transaction, token).ConfigureAwait(false);
+            if (target is null) { missing = true; continue; }
+            if (missing) throw new InvalidDataException("The directory transfer target has a gap before a retained birth.");
+            ValidateRetainedDirectoryTransferBirth(plan, verification, target);
+            await ValidateDirectoryTransferBirthArtifactsAsync(target, transaction, token).ConfigureAwait(false);
+            var member = await ReadNamespaceMemberCoreAsync(target.Birth.OperationId, transaction, token).ConfigureAwait(false);
+            var source = plan.Members[ordinal].Source.Protection.Context;
+            if (member is null)
+            {
+                var pendingStart = await ReadNamespaceBirthStartRowAsync(target.Birth.OperationId, transaction, token).ConfigureAwait(false);
+                if (target.Birth.PreparedAt > preparedAt ||
+                    (startedBirthId == target.Birth.OperationId
+                        ? pendingStart is not { Version: 2 } || pendingStart.StartedAt > preparedAt
+                        : pendingStart is not null) ||
+                    await ReadNamespaceBirthObservationRowAsync(target.Birth.OperationId, transaction, token).ConfigureAwait(false) is not null ||
+                    !members.ContainsKey(source.Location.ParentMemberId!.Value))
+                    throw new InvalidOperationException("Role recovery before source deletion requires every original registered target member.");
+                await RequireNamespaceBirthReservationAsync(target.Birth, transaction, token).ConfigureAwait(false);
+                // Only the immediately next reservation may be waiting for its first SDK creation.
+                retainsStartedTarget = startedBirthId == target.Birth.OperationId;
+                missing = true;
+                continue;
+            }
+            if (member.Origin != MirrorPulseNamespaceMemberOrigin.ProtectedBirth ||
+                member.OriginId != target.Birth.OperationId || member.RootId != plan.TargetRoute.RootId ||
+                member.ParentMemberId != members[source.Location.ParentMemberId!.Value] ||
+                member.RelativePath != target.Birth.RelativePath || member.IsDirectory != target.Birth.IsDirectory ||
+                member.RegisteredAt > preparedAt)
+                throw new InvalidOperationException("Role recovery before source deletion requires every original registered target member.");
+            var proof = await ReadNamespaceMemberProofAsync(member, false, transaction, token).ConfigureAwait(false);
+            var identity = await ReadNamespaceMemberIdentityCoreAsync(member, transaction, token).ConfigureAwait(false);
+            var start = await ReadNamespaceBirthStartRowAsync(target.Birth.OperationId, transaction, token).ConfigureAwait(false)
+                ?? throw new InvalidDataException("A registered directory target lost its first native start.");
+            string creationRole = await ReadDirectoryTransferCreationRoleCoreAsync(plan, target, start, transaction, token).ConfigureAwait(false);
+            if (proof.RoleSid != creationRole ||
+                identity.ItemId != target.Plan.ItemId || identity.RemoteId != target.Plan.RemoteId)
+                throw new InvalidOperationException("Role recovery before source deletion requires original target protection and identity.");
+            members.Add(source.Member.MemberId, member.MemberId);
+            if (ordinal == 0) targetRoot = member.MemberId;
+        }
+        if (startedBirthId is not null && !retainsStartedTarget)
+            throw new InvalidOperationException("The directory audit requires its exact started and unregistered target.");
+        if (targetRoot == Guid.Empty) return;
+        var tree = await ReadNamespaceMemberTreeCoreAsync(targetRoot, transaction, token).ConfigureAwait(false);
+        var expected = members.Values.ToHashSet();
+        expected.Remove(plan.TargetParent.Context.Member.MemberId);
+        if (!expected.SetEquals(tree.Select(member => member.MemberId)))
+            throw new InvalidOperationException("Role recovery before source deletion requires the exact registered target inventory.");
+    }
+
+    private async Task<Guid?> ReadDirectoryTransferReservedTargetForAuditAsync(MirrorPulseNamespaceInitializationIntent intent,
+        SqliteTransaction transaction, CancellationToken token)
+    {
+        if (intent.DirectoryTransferOperationId is not { } transferId) return null;
+        var plan = await ReadDirectoryTransferAdmissionCoreAsync(transferId, transaction, token).ConfigureAwait(false)
+            ?? throw new InvalidDataException("The directory transfer audit lost its original admission.");
+        if (intent.DirectoryTransferStartedBirthId is { } startedBirth)
+        {
+            await RequireDirectoryTransferInitializationAsync(intent, transaction, token).ConfigureAwait(false);
+            return intent.Roots.Single().RootId == plan.TargetRoute.RootId ? startedBirth : null;
+        }
+        if (intent.Roots.Single().RootId != plan.TargetRoute.RootId) return null;
+        int ordinal;
+        await using (var query = _connection.CreateCommand())
+        {
+            query.Transaction = transaction;
+            query.CommandText = """
+                SELECT b.ordinal FROM namespace_directory_transfer_target_births b
+                WHERE b.transfer_id=$transfer
+                  AND NOT EXISTS (SELECT 1 FROM namespace_members m WHERE m.member_id=b.birth_id)
+                  AND NOT EXISTS (SELECT 1 FROM namespace_birth_starts s WHERE s.operation_id=b.birth_id)
+                  AND NOT EXISTS (SELECT 1 FROM namespace_birth_observations o WHERE o.operation_id=b.birth_id)
+                LIMIT 2;
+                """;
+            query.Parameters.AddWithValue("$transfer", transferId.ToString("D"));
+            await using var reader = await query.ExecuteReaderAsync(token).ConfigureAwait(false);
+            if (!await reader.ReadAsync(token).ConfigureAwait(false)) return null;
+            ordinal = reader.GetInt32(0);
+            if (await reader.ReadAsync(token).ConfigureAwait(false))
+                throw new InvalidDataException("The directory transfer audit has competing unstarted target reservations.");
+        }
+        var target = await ReadDirectoryTransferBirthRowAsync(transferId, ordinal, null, transaction, token).ConfigureAwait(false)
+            ?? throw new InvalidDataException("The directory transfer audit lost its selected target.");
+        var (_, verification) = await ReadDirectoryTransferBirthEvidenceAsync(transferId, transaction, token).ConfigureAwait(false);
+        ValidateRetainedDirectoryTransferBirth(plan, verification, target);
+        await ValidateDirectoryTransferBirthArtifactsAsync(target, transaction, token).ConfigureAwait(false);
+        if (target.Birth.PreparedAt > intent.PreparedAt)
+            throw new InvalidOperationException("The directory transfer audit cannot adopt a later selected target.");
+        return target.Birth.OperationId;
+    }
+
+    private async Task<MirrorPulseNamespaceMemberProtectionSnapshot> ReadDirectoryTransferBirthParentAsync(
+        MirrorPulseDirectoryTransferAdmission admission, MirrorPulseDirectoryTransferTargetBirth target, SqliteTransaction transaction, CancellationToken token,
+        string? activatedRole = null)
+    {
+        int ordinal = target.Ordinal;
+        string? recoveredRole = activatedRole ?? (target.RecoveryInitializationId is not null ? target.Birth.RoleSid : null);
+        if (ordinal == 0)
+        {
+            var original = admission.TargetParent;
+            var current = await ReadNamespaceMemberProtectionSnapshotCoreAsync(original.Context.Member.MemberId, transaction, token).ConfigureAwait(false);
+            if (!MatchesDirectoryTransferProtection(original, current, recoveredRole))
+                throw new InvalidOperationException("The original directory transfer destination parent changed.");
+            return current!;
+        }
+        string path = ParentMovePath(admission.Members[ordinal].TargetRelativePath);
+        int parentOrdinal = ordinal - 1;
+        while (parentOrdinal >= 0 && admission.Members[parentOrdinal].TargetRelativePath != path) parentOrdinal--;
+        var parent = await ReadDirectoryTransferBirthRowAsync(admission.Command.CommandId, parentOrdinal, null, transaction, token).ConfigureAwait(false)
+            ?? throw new InvalidOperationException("A directory transfer child requires its original parent birth.");
+        var snapshot = await ReadNamespaceMemberProtectionSnapshotCoreAsync(parent.Birth.OperationId, transaction, token).ConfigureAwait(false);
+        if (snapshot?.BornParent is not { } born || born.BirthOperationId != parent.Birth.OperationId ||
+            snapshot.Context.Location.RelativePath != path || snapshot.Context.Location.CurrentPositionOperationId is not null ||
+            !snapshot.Context.Member.IsDirectory || snapshot.Context.Member.RootId != admission.TargetRoute.RootId ||
+            snapshot.Context.Protection.RoleSid != (activatedRole ?? target.Birth.RoleSid) ||
+            snapshot.Identity.ItemId != parent.Plan.ItemId || snapshot.Identity.RemoteId != parent.Plan.RemoteId)
+            throw new InvalidOperationException("The directory transfer child requires its original registered protected parent.");
+        return snapshot;
+    }
+
+    private async Task ValidateDirectoryTransferActivationStartAsync(MirrorPulseNamespaceBirthIntent birth,
+        MirrorPulseNamespaceBirthStart start, MirrorPulseDirectoryTransferTargetActivation activation,
+        SqliteTransaction transaction, CancellationToken token)
+    {
+        if (birth.TransferEntry is not { Version: 2 } owner ||
+            await ReadDirectoryTransferBirthRowAsync(null, null, birth.OperationId, transaction, token).ConfigureAwait(false) is not { } target ||
+            target.Birth != birth || target.TransferId != owner.OperationId ||
+            await ReadNamespaceBirthObservationRowAsync(birth.OperationId, transaction, token).ConfigureAwait(false) is not null ||
+            await ReadNamespaceMemberForBirthCoreAsync(birth.OperationId, transaction, token).ConfigureAwait(false) is not null)
+            throw new InvalidOperationException("Directory transfer activation requires its original selected, unstarted target.");
+        var (admission, verification) = await ReadDirectoryTransferBirthEvidenceAsync(target.TransferId, transaction, token).ConfigureAwait(false);
+        ValidateRetainedDirectoryTransferBirth(admission, verification, target);
+        var targetAudit = await RequireDirectoryTransferActivationAuditsAsync(admission, target, start, activation, transaction, token)
+            .ConfigureAwait(false);
+        await RequireNamespaceTransferRoutesAsync([admission.SourceRoute, admission.TargetRoute], transaction, token, requireSingleRoot: true)
+            .ConfigureAwait(false);
+        await RequireNamespaceMoveRootUnfencedAsync(birth.RootId, null, transaction, token, allowedTransfer: target.TransferId)
+            .ConfigureAwait(false);
+        var parent = await ReadDirectoryTransferBirthParentAsync(admission, target, transaction, token, activation.RoleSid).ConfigureAwait(false);
+        if (parent.Context.Protection.VerifiedAt > targetAudit.CompletedAt)
+            throw new InvalidOperationException("Directory target activation requires the audited target parent protection.");
+        var claim = new NamespaceBirthParentClaim(parent.BornParent is null ? parent.PermissionOperationId : Guid.Empty,
+            parent.BornParent, activation.RoleSid, start.StartedAt);
+        _ = await ValidateNamespaceBirthLineageAsync(birth, null, true, claim, transaction, token).ConfigureAwait(false);
+    }
+
+    private async Task<MirrorPulseNamespaceInitializationCompletion> RequireDirectoryTransferActivationAuditsAsync(MirrorPulseDirectoryTransferAdmission admission,
+        MirrorPulseDirectoryTransferTargetBirth target, MirrorPulseNamespaceBirthStart start,
+        MirrorPulseDirectoryTransferTargetActivation activation, SqliteTransaction transaction, CancellationToken token)
+    {
+        var source = await RequireDirectoryTransferTargetAuditAsync(activation.SourceAuditId, target.TransferId,
+            admission.SourceRoute.RootId, start.StartedAt, transaction, token).ConfigureAwait(false);
+        var destination = await RequireDirectoryTransferTargetAuditAsync(activation.TargetAuditId, target.TransferId,
+            admission.TargetRoute.RootId, start.StartedAt, transaction, token).ConfigureAwait(false);
+        if (activation.RoleSid == target.Birth.RoleSid || source.RoleSid != activation.RoleSid ||
+            destination.RoleSid != activation.RoleSid || source.CompletedAt < target.Birth.PreparedAt ||
+            destination.CompletedAt < target.Birth.PreparedAt)
+            throw new InvalidOperationException("Directory target activation requires both original audits under its new role.");
+        return destination;
+    }
+
+    private async Task ValidateDirectoryTransferActivationReferenceAsync(MirrorPulseNamespaceBirthStart start,
+        MirrorPulseDirectoryTransferTargetActivation activation, SqliteTransaction? transaction, CancellationToken token)
+    {
+        using var owned = transaction is null ? BeginNamespaceRecoveryReadSnapshot() : null;
+        var snapshot = transaction ?? owned!;
+        var target = await ReadDirectoryTransferBirthRowAsync(null, null, start.OperationId, snapshot, token).ConfigureAwait(false)
+            ?? throw new InvalidDataException("The reactivated start lost its original selected directory target.");
+        var (admission, verification) = await ReadDirectoryTransferBirthEvidenceAsync(target.TransferId, snapshot, token).ConfigureAwait(false);
+        ValidateRetainedDirectoryTransferBirth(admission, verification, target);
+        await RequireDirectoryTransferActivationAuditsAsync(admission, target, start, activation, snapshot, token).ConfigureAwait(false);
+        owned?.Commit();
+    }
+
+    private async Task ValidateCurrentDirectoryTransferBirthRegistrationAsync(MirrorPulseNamespaceBirthIntent birth,
+        MirrorPulseNamespaceMemberRegistration member, SqliteTransaction transaction, CancellationToken token)
+    {
+        var target = await ReadDirectoryTransferBirthRowAsync(null, null, birth.OperationId, transaction, token).ConfigureAwait(false)
+            ?? throw new InvalidDataException("The directory target registration lost its original owner.");
+        var (admission, verification) = await ReadDirectoryTransferBirthEvidenceAsync(target.TransferId, transaction, token).ConfigureAwait(false);
+        ValidateRetainedDirectoryTransferBirth(admission, verification, target);
+        await RequireDirectoryTransferBirthRecoveryAsync(target, transaction, token).ConfigureAwait(false);
+        var start = await ReadNamespaceBirthStartRowAsync(birth.OperationId, transaction, token).ConfigureAwait(false)
+            ?? throw new InvalidDataException("The directory registration lost its first native start.");
+        string creationRole = await ReadDirectoryTransferCreationRoleCoreAsync(admission, target, start, transaction, token).ConfigureAwait(false);
+        bool activated = creationRole != birth.RoleSid;
+        var parent = await ReadDirectoryTransferBirthParentAsync(admission, target, transaction, token, activated ? creationRole : null).ConfigureAwait(false);
+        if (target.Birth != birth || member.ParentMemberId != parent.Context.Member.MemberId ||
+            birth.ParentLocalObject != parent.Context.Member.LocalObject ||
+            (activated ? birth.BornParent?.BirthOperationId != parent.BornParent?.BirthOperationId : birth.BornParent != parent.BornParent))
+            throw new InvalidOperationException("The directory transfer must register its original birth under its exact current parent.");
+        await RequireNamespaceTransferRoutesAsync([admission.SourceRoute, admission.TargetRoute], transaction, token,
+            requireSingleRoot: true).ConfigureAwait(false);
+    }
+
+    private async Task<(MirrorPulseDirectoryTransferAdmission Admission, MirrorPulseDirectoryTransferTargetVerification Verification)>
+        ReadDirectoryTransferBirthEvidenceAsync(Guid transferId, SqliteTransaction transaction, CancellationToken token)
+    {
+        _namespaceRecoveryReadSnapshots.TryGetValue(transaction, out var snapshot);
+        if (snapshot?.DirectoryTransferBirthEvidence.TryGetValue(transferId, out var retained) == true) return retained;
+        var copy = await ReadDirectoryTransferCopyCoreAsync(transferId, transaction, token).ConfigureAwait(false);
+        var verification = await ReadDirectoryTransferTargetCoreAsync(copy, transaction, token).ConfigureAwait(false)
+            ?? throw new InvalidOperationException("Directory transfer target birth requires its original whole target verification.");
+        var result = (copy.Admission, verification);
+        if (snapshot is not null) snapshot.DirectoryTransferBirthEvidence[transferId] = result;
+        return result;
+    }
+
+    private static void ValidateDirectoryTransferBirth(MirrorPulseDirectoryTransferAdmission admission,
+        MirrorPulseDirectoryTransferTargetVerification verification, MirrorPulseDirectoryTransferTargetBirth target)
+    {
+        ArgumentNullException.ThrowIfNull(target.Birth);
+        ArgumentNullException.ThrowIfNull(target.Plan);
+        ValidateNamespaceBirth(target.Birth);
+        ValidateNamespaceBirthPlan(target.Plan);
+        ValidateNamespaceBirthPlanReference(target.Plan, target.Birth);
+        if (target.TransferId != admission.Command.CommandId || target.Ordinal < 0 || target.Ordinal >= admission.Members.Count)
+            throw new ArgumentException("The birth must identify an exact directory transfer member.", nameof(target));
+        var member = admission.Members[target.Ordinal];
+        var verified = verification.Members[target.Ordinal];
+        if (target.Birth.TransferEntry != MirrorPulseNamespaceTransferBirthReference.Create(verification, member.CopyOperationId) ||
+            target.Birth.RootId != admission.TargetRoute.RootId || target.Birth.RelativePath != member.TargetRelativePath ||
+            target.Birth.IsDirectory != verified.IsDirectory || target.RecoveryInitializationId == Guid.Empty ||
+            (target.RecoveryInitializationId is null) != (target.Birth.RoleSid == admission.TargetParent.Context.Protection.RoleSid) ||
+            target.Birth.PreparedAt < verification.VerifiedAt || target.Plan.PreparedAt != target.Birth.PreparedAt ||
+            target.Plan.RemoteRevision != verified.Revision || target.Plan.Content != verified.Content ||
+            admission.Members.Any(source => source.Source.Protection.Identity.ItemId == target.Plan.ItemId))
+            throw new ArgumentException("The birth must retain the verified member, destination, role and a separate public identity.", nameof(target));
+    }
+
+    private static void ValidateRetainedDirectoryTransferBirth(MirrorPulseDirectoryTransferAdmission admission,
+        MirrorPulseDirectoryTransferTargetVerification verification, MirrorPulseDirectoryTransferTargetBirth target)
+    {
+        try { ValidateDirectoryTransferBirth(admission, verification, target); }
+        catch (Exception error) when (error is ArgumentException or InvalidOperationException)
+        { throw new InvalidDataException("The original directory transfer target birth is inconsistent.", error); }
+    }
+
+    private async Task<MirrorPulseDirectoryTransferTargetBirth?> ReadDirectoryTransferBirthRowAsync(Guid? transferId, int? ordinal,
+        Guid? birthId, SqliteTransaction? transaction, CancellationToken token)
+    {
+        await using var sql = _connection.CreateCommand();
+        sql.Transaction = transaction;
+        sql.CommandText = birthId.HasValue
+            ? "SELECT transfer_id,ordinal,birth_id,item_id,payload,fingerprint FROM namespace_directory_transfer_target_births WHERE birth_id=$id;"
+            : "SELECT transfer_id,ordinal,birth_id,item_id,payload,fingerprint FROM namespace_directory_transfer_target_births WHERE transfer_id=$id AND ordinal=$ordinal;";
+        sql.Parameters.AddWithValue("$id", (birthId ?? transferId!.Value).ToString("D"));
+        if (!birthId.HasValue) sql.Parameters.AddWithValue("$ordinal", ordinal!.Value);
+        await using var reader = await sql.ExecuteReaderAsync(token).ConfigureAwait(false);
+        if (!await reader.ReadAsync(token).ConfigureAwait(false)) return null;
+        var row = ReadNamespaceMovePayload<MirrorPulseDirectoryTransferTargetBirth>((byte[])reader[4], (byte[])reader[5],
+            262_144, value =>
+            {
+                if (value.Birth is null || value.Plan is null || value.Birth.TransferEntry?.Version != 2)
+                    throw new ArgumentException("The directory transfer target owner is incomplete.");
+                ValidateNamespaceBirth(value.Birth);
+                ValidateNamespaceBirthPlan(value.Plan);
+                ValidateNamespaceBirthPlanReference(value.Plan, value.Birth);
+            });
+        if (reader.GetString(0) != row.TransferId.ToString("D") || reader.GetInt64(1) != row.Ordinal ||
+            reader.GetString(2) != row.Birth.OperationId.ToString("D") || reader.GetString(3) != row.Plan.ItemId.ToString("D"))
+            throw new InvalidDataException("The directory transfer target birth index changed.");
+        return row;
+    }
+
+    private async Task ValidateDirectoryTransferBirthArtifactsAsync(MirrorPulseDirectoryTransferTargetBirth target,
+        SqliteTransaction transaction, CancellationToken token)
+    {
+        if (await ReadNamespaceBirthRowAsync(target.Birth.OperationId, transaction, token).ConfigureAwait(false) != target.Birth ||
+            await ReadNamespaceBirthPlanRowAsync(target.Birth.OperationId, transaction, token).ConfigureAwait(false) != target.Plan)
+            throw new InvalidDataException("The directory transfer birth lost its immutable admission or public identity plan.");
+        await RequireDirectoryTransferBirthRecoveryAsync(target, transaction, token).ConfigureAwait(false);
+    }
+
+    private async Task RequireDirectoryTransferBirthRecoveryAsync(MirrorPulseDirectoryTransferTargetBirth target,
+        SqliteTransaction transaction, CancellationToken token)
+    {
+        if (target.RecoveryInitializationId is not { } initializationId) return;
+        var completed = await RequireDirectoryTransferTargetAuditAsync(initializationId, target.TransferId, target.Birth.RootId,
+            target.Birth.PreparedAt, transaction, token).ConfigureAwait(false);
+        if (completed.RoleSid != target.Birth.RoleSid)
+            throw new InvalidOperationException("A recovered target birth requires its audited target-root role.");
+    }
+
+    private async Task<MirrorPulseNamespaceInitializationCompletion> RequireDirectoryTransferTargetAuditAsync(Guid initializationId,
+        Guid transferId, RootId targetRoot, DateTimeOffset usedAt, SqliteTransaction transaction, CancellationToken token)
+    {
+        var status = await ReadNamespaceInitializationStatusCoreAsync(initializationId, transaction, token).ConfigureAwait(false);
+        if (status.Intent.DirectoryTransferOperationId != transferId ||
+            status.Completion is not { } completed || completed.ScopeRoot != targetRoot || completed.CompletedAt > usedAt)
+            throw new InvalidOperationException("Directory transfer recovery requires its original completed target-root role audit.");
+        return completed;
+    }
+
+    private async Task ValidateDirectoryTransferBirthReferenceIndexAsync(MirrorPulseNamespaceBirthIntent birth,
+        SqliteTransaction? transaction, CancellationToken token)
+    {
+        using var owned = transaction is null ? BeginNamespaceRecoveryReadSnapshot() : null;
+        var snapshot = transaction ?? owned!;
+        var target = await ReadDirectoryTransferBirthRowAsync(null, null, birth.OperationId, snapshot, token).ConfigureAwait(false);
+        if (target is null || target.Birth != birth)
+            throw new InvalidDataException("The birth lost its original directory transfer owner.");
+        try
+        {
+            var (admission, verification) = await ReadDirectoryTransferBirthEvidenceAsync(target.TransferId, snapshot, token).ConfigureAwait(false);
+            ValidateRetainedDirectoryTransferBirth(admission, verification, target);
+            if (await ReadNamespaceBirthPlanRowAsync(birth.OperationId, snapshot, token).ConfigureAwait(false) != target.Plan)
+                throw new InvalidDataException("The directory transfer birth lost its immutable public identity plan.");
+            await RequireDirectoryTransferBirthRecoveryAsync(target, snapshot, token).ConfigureAwait(false);
+        }
+        catch (Exception error) when (error is FileNotFoundException or InvalidOperationException)
+        { throw new InvalidDataException("The directory transfer birth lost its original verified target evidence.", error); }
+        owned?.Commit();
+    }
+}

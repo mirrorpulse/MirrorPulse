@@ -9,6 +9,11 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+. (Join-Path $PSScriptRoot 'installed-startup-diagnostics.ps1')
+. (Join-Path $PSScriptRoot 'installed-shell-observations.ps1')
+. (Join-Path $PSScriptRoot 'installed-shell-process-boundary.ps1')
+. (Join-Path $PSScriptRoot 'installed-runtime-layout.ps1')
+. (Join-Path $PSScriptRoot 'installed-runtime-originals.ps1')
 if (-not $IsWindows) {
     throw "MSIX Cloud Files verification requires Windows."
 }
@@ -27,6 +32,25 @@ $installed = $null
 $uninstallFailed = $false
 $aliasPath = $null
 $packageName = "0B72358D-6DC9-479D-8C28-F0232B42A0B3"
+$verificationPhase = 'Build'
+$hostAttemptedAt = $null
+$statusExitCode = $null
+$shellAttemptedAt = $null
+$probeProcess = $null
+$shellOutputPrepared = $false
+$shellEntryPointVerified = $false
+$installedInputPreparation = $null
+$installedInputCompletion = $null
+$installedProcessImageBindings = @()
+$installedProcessImageCompletion = $null
+$installedManagedModuleBindings = @()
+$installedManagedModuleCompletion = $null
+$workspaceRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
+$installedSourceSha = $env:GITHUB_SHA
+if ([string]::IsNullOrEmpty($installedSourceSha)) { $installedSourceSha = git -C $workspaceRoot rev-parse HEAD }
+if ($installedSourceSha -cnotmatch '^[0-9a-f]{40}$' -or (git -C $workspaceRoot rev-parse HEAD) -cne $installedSourceSha) {
+    throw 'Installed runtime verification requires the exact checked-out source revision.'
+}
 
 if (Get-AppxPackage -Name $packageName | Select-Object -First 1) {
     throw "The verification user already has MirrorPulse installed; use a clean test user."
@@ -72,6 +96,7 @@ try {
         if ($packageEntries -notcontains "host\MirrorPulse.Host.exe") {
             throw "The MSIX payload does not contain host\MirrorPulse.Host.exe."
         }
+        Assert-InstalledAppRuntimeLayout -Archive $archive
     }
     finally {
         $archive.Dispose()
@@ -83,6 +108,13 @@ try {
     if ($null -eq $installed) {
         throw "The test MSIX package was not installed for the current user."
     }
+    $installedInputPreparation = Start-InstalledRuntimeOriginals -Workspace $workspaceRoot -PackagePath $package.FullName `
+        -InstallLocation $installed.InstallLocation -Runtime $Runtime -SourceSha $installedSourceSha `
+        -OutputDirectory (Join-Path $workspaceRoot 'artifacts/test-results/installed-msix-originals')
+    . (Join-Path $PSScriptRoot 'installed-process-images.ps1')
+    . (Join-Path $PSScriptRoot 'installed-managed-modules.ps1')
+    Initialize-InstalledProcessImageReader
+    $installedInputManifest = Get-Content -LiteralPath (Join-Path $installedInputPreparation.outputDirectory 'prepared.json') -Raw | ConvertFrom-Json -DateKind String
 
     [xml]$manifest = Get-AppxPackageManifest -Package $installed.PackageFullName
     $namespace = New-Object System.Xml.XmlNamespaceManager($manifest.NameTable)
@@ -124,15 +156,36 @@ try {
     if ($versionOutput -notmatch "MirrorPulse mp") {
         throw "The registered mp.exe alias did not return the CLI version: $versionOutput"
     }
-    $statusOutput = (& $mpCommand.Source --json status 2>&1 | Out-String).Trim()
-    if ($LASTEXITCODE -ne 0) {
+    $verificationPhase = 'HostAutoStart'
+    $hostAttemptedAt = [DateTimeOffset]::UtcNow
+    $statusProcess = Invoke-InstalledStatusWithImageBinding -AliasPath $mpCommand.Source -Prepared $installedInputManifest `
+        -ExpectedPackageFullName $installed.PackageFullName -PreparedSha256 $installedInputPreparation.preparedSha256 -ObserveManagedModules
+    $statusOutput = $statusProcess.output
+    $statusExitCode = $statusProcess.exitCode
+    $installedProcessImageBindings += $statusProcess.imageBinding
+    $installedManagedModuleBindings += $statusProcess.managedModuleBinding
+    if ($statusExitCode -ne 0) {
         throw "The installed CLI did not auto-start its packaged Host: $statusOutput"
     }
     $status = $statusOutput | ConvertFrom-Json
     if ($status.kind -ne "result" -or $null -eq $status.data.instances) {
         throw "The packaged CLI status result is invalid."
     }
+    $hostStatusOutput = (& $mpCommand.Source --json host status 2>&1 | Out-String).Trim()
+    if ($LASTEXITCODE -ne 0) { throw 'The original installed Host lifecycle status could not identify its running process.' }
+    $hostStatus = $hostStatusOutput | ConvertFrom-Json
+    if ($hostStatus.kind -cne 'result' -or $hostStatus.data.processId -le 0) { throw 'The original installed Host lifecycle status has no process identity.' }
+    $installedHostProcess = [Diagnostics.Process]::GetProcessById([int]$hostStatus.data.processId)
+    try {
+        $installedProcessImageBindings += Get-InstalledProcessImageBinding -Process $installedHostProcess -Prepared $installedInputManifest `
+            -Role Host -RelativePath 'host/MirrorPulse.Host.exe' -ExpectedPackageFullName $installed.PackageFullName `
+            -PreparedSha256 $installedInputPreparation.preparedSha256
+        $installedManagedModuleBindings += Get-InstalledManagedModuleBinding -Process $installedHostProcess -Prepared $installedInputManifest `
+            -Role Host -RelativePath 'host/MirrorPulse.Host.exe' -ExpectedPackageFullName $installed.PackageFullName `
+            -PreparedSha256 $installedInputPreparation.preparedSha256
+    } finally { $installedHostProcess.Dispose() }
     & $mpCommand.Source --json host stop 2>$null | Out-Null
+    $verificationPhase = 'Shell'
 
     if ($VerifyShell) {
         $resultPath = Join-Path $packageRoot "packaged-shell-probe.result"
@@ -141,20 +194,35 @@ try {
             throw "The installed MirrorPulse app executable was not found."
         }
 
+        $shellAttemptedAt = [DateTimeOffset]::UtcNow
+        $entryPoint=Get-InstalledManagedEntryPoint -AssemblyPath (Join-Path $installed.InstallLocation 'MirrorPulse.App.dll')
+        if ($entryPoint.type -cne 'MirrorPulse.App.MirrorPulsePackagedShellProbeEntryPoint' -or $entryPoint.method -cne 'Main') {
+            throw 'The installed App assembly does not contain the requested Shell probe entry point.'
+        }
+        $shellEntryPointVerified = $true
+
+        Initialize-InstalledShellProbeOutput -ResultPath $resultPath
+        $shellOutputPrepared = $true
         $env:MIRRORPULSE_PACKAGED_SHELL_PROBE_RESULT = $resultPath
         try {
-            $probeProcess = Start-Process -FilePath $appExe -WindowStyle Hidden -PassThru
-            $deadline = [DateTime]::UtcNow.AddMinutes(2)
-            while (-not (Test-Path -LiteralPath $resultPath) -and [DateTime]::UtcNow -lt $deadline) {
-                if ($probeProcess.HasExited) { break }
-                Start-Sleep -Milliseconds 500
+            $expectedHostRoot = if ($env:MIRRORPULSE_SYNC_ROOT) { $env:MIRRORPULSE_SYNC_ROOT } else {
+                Join-Path ([Environment]::GetFolderPath([Environment+SpecialFolder]::UserProfile)) 'MirrorPulse'
             }
+            $probeProcess = [Diagnostics.Process]::Start((New-InstalledShellProbeStartInfo -ExecutablePath $appExe -ResultPath $resultPath -ExpectedHostRoot $expectedHostRoot))
+            $deadline = [DateTime]::UtcNow.AddMinutes(2)
+            $installedProcessImageBindings += Get-InstalledProcessImageBinding -Process $probeProcess -Prepared $installedInputManifest `
+                -Role App -RelativePath 'MirrorPulse.App.exe' -ExpectedPackageFullName $installed.PackageFullName `
+                -PreparedSha256 $installedInputPreparation.preparedSha256
+            $installedManagedModuleBindings += Get-InstalledManagedModuleBinding -Process $probeProcess -Prepared $installedInputManifest `
+                -Role App -RelativePath 'MirrorPulse.App.exe' -ExpectedPackageFullName $installed.PackageFullName `
+                -PreparedSha256 $installedInputPreparation.preparedSha256
+            $probeObservation = Wait-InstalledShellProbeResult -Process $probeProcess -ResultPath $resultPath -DeadlineUtc $deadline
         }
         finally {
             Remove-Item Env:\MIRRORPULSE_PACKAGED_SHELL_PROBE_RESULT -ErrorAction SilentlyContinue
         }
 
-        if (-not (Test-Path -LiteralPath $resultPath)) {
+        if ($probeObservation.resultState -cnotin @('Success','Failure')) {
             throw "The packaged App process did not report a Shell probe result."
         }
 
@@ -166,7 +234,55 @@ try {
         Write-Output "Verified packaged Shell registration for $($installed.PackageFullName)."
     }
 
+    $installedInputCompletion = Complete-InstalledRuntimeOriginals -Workspace $workspaceRoot -SourceSha $installedSourceSha `
+        -InstallLocation $installed.InstallLocation -OutputDirectory $installedInputPreparation.outputDirectory `
+        -PreparedSha256 $installedInputPreparation.preparedSha256
+    $installedProcessImageCompletion = Complete-InstalledProcessImageBindings -Workspace $workspaceRoot `
+        -OutputDirectory $installedInputPreparation.outputDirectory -Prepared $installedInputManifest -Bindings $installedProcessImageBindings `
+        -PreparedSha256 $installedInputPreparation.preparedSha256 -CollectedSha256 $installedInputCompletion.collectedSha256 `
+        -ExpectedPackageFullName $installed.PackageFullName -VerifyShell $VerifyShell.IsPresent
+    $installedManagedModuleCompletion = Complete-InstalledManagedModuleBindings -Workspace $workspaceRoot `
+        -OutputDirectory $installedInputPreparation.outputDirectory -Prepared $installedInputManifest -Bindings $installedManagedModuleBindings `
+        -PreparedSha256 $installedInputPreparation.preparedSha256 -CollectedSha256 $installedInputCompletion.collectedSha256 `
+        -ExpectedPackageFullName $installed.PackageFullName -VerifyShell $VerifyShell.IsPresent
     Write-Output "Verified installed MSIX $($installed.PackageFullName), mp.exe alias, packaged Host auto-start, Cloud Files, and .mpadapter identities."
+}
+catch {
+    if ($verificationPhase -eq 'HostAutoStart' -and $EvidencePath -and $null -ne $hostAttemptedAt) {
+        try {
+            $roots=[Collections.Generic.List[string]]::new()
+            if ($env:MIRRORPULSE_DATA_ROOT) { $roots.Add([IO.Path]::GetFullPath($env:MIRRORPULSE_DATA_ROOT)) }
+            $local=[Environment]::GetFolderPath([Environment+SpecialFolder]::LocalApplicationData)
+            $roots.Add((Join-Path $local 'MirrorPulse'))
+            if ($null -ne $installed) {
+                $packageData=Join-Path (Join-Path $local 'Packages') $installed.PackageFamilyName
+                $roots.Add((Join-Path $packageData 'LocalCache/Local/MirrorPulse'))
+                $roots.Add((Join-Path $packageData 'LocalState/MirrorPulse'))
+                $processes=@(Get-InstalledHostExitObservation -ExpectedExecutable (Join-Path $installed.InstallLocation 'host/MirrorPulse.Host.exe'))
+            } else { $processes=@() }
+            $diagnostics=Get-InstalledHostStartupDiagnostics -DataRoots $roots.ToArray() -Since $hostAttemptedAt
+            $directory=[IO.Path]::GetDirectoryName([IO.Path]::GetFullPath($EvidencePath))
+            New-Item -ItemType Directory -Path $directory -Force|Out-Null
+            [ordered]@{schemaVersion=1;sourceSha=$env:GITHUB_SHA;runId=$env:GITHUB_RUN_ID;runtime=$Runtime;
+                phase='HostAutoStart';verified=$false;hostAutoStart=$false;cliExitCode=$statusExitCode;
+                attemptedAt=$hostAttemptedAt.ToString('O');processes=$processes;diagnostics=$diagnostics}|
+                ConvertTo-Json -Depth 7|Set-Content -LiteralPath (Join-Path $directory 'installed-startup-failure.json') -Encoding utf8
+            Write-Host "Installed startup diagnostics retained: $($diagnostics.records.Count) bounded Host records."
+        } catch { Write-Host 'Installed startup diagnostics were unavailable; the original verification failure is retained.' }
+    }
+    if ($verificationPhase -eq 'Shell' -and $VerifyShell -and $EvidencePath -and $null -ne $shellAttemptedAt) {
+        try {
+            $observation=Get-InstalledShellProbeObservation -Process $probeProcess -ResultPath $resultPath
+            $directory=[IO.Path]::GetDirectoryName([IO.Path]::GetFullPath($EvidencePath))
+            New-Item -ItemType Directory -Path $directory -Force|Out-Null
+            [ordered]@{schemaVersion=1;sourceSha=$env:GITHUB_SHA;runId=$env:GITHUB_RUN_ID;runtime=$Runtime;
+                phase='Shell';verified=$false;shellRegistration=$false;entryPointVerified=$shellEntryPointVerified;outputPrepared=$shellOutputPrepared;attemptedAt=$shellAttemptedAt.ToString('O');probe=$observation;
+                processBoundary=(Get-InstalledShellProbeProcessBoundary -Process $probeProcess)}|
+                ConvertTo-Json -Depth 5|Set-Content -LiteralPath (Join-Path $directory 'installed-shell-failure.json') -Encoding utf8
+            Write-Host 'Installed Shell failure observations retained.'
+        } catch { Write-Host 'Installed Shell observations were unavailable; the original verification failure is retained.' }
+    }
+    throw
 }
 finally {
     if ($null -ne $installed) {
@@ -191,10 +307,14 @@ finally {
 }
 if ($EvidencePath) {
     [ordered]@{
-        schemaVersion=1;runtime=$Runtime;packageSha256=$packageSha256
+        schemaVersion=1;runtime=$Runtime;packageSha256=$packageSha256;sourceSha=$installedSourceSha;runId=$env:GITHUB_RUN_ID
         osVersion=$osVersion;osProductType=[int]$os.ProductType;minimumVersion="10.0.26100.0"
         installedIdentity=$true;cliAlias=$true;hostAutoStart=$true
         cloudFilesExtension=$true;adapterAssociation=$true;uninstalled=$true
         shellRegistration=$VerifyShell.IsPresent
-    } | ConvertTo-Json | Set-Content -LiteralPath $EvidencePath -Encoding utf8
+        shellEntryPointVerified=$shellEntryPointVerified
+        runtimeInputOriginals=$installedInputCompletion
+        processImageOriginals=$installedProcessImageCompletion
+        managedModuleOriginals=$installedManagedModuleCompletion
+    } | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $EvidencePath -Encoding utf8
 }

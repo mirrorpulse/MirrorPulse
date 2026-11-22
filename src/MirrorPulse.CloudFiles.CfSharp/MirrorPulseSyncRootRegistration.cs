@@ -77,13 +77,15 @@ public sealed class MirrorPulseSyncRootRegistrationService
     public MirrorPulseSyncRootRegistrationResult Register(MirrorPulseSyncRootDefinition definition)
     {
         ArgumentNullException.ThrowIfNull(definition);
-        Directory.CreateDirectory(definition.Path);
+        MirrorPulseSyncRootDirectory.EnsureExists(definition.Path);
 
         var options = SyncRootRegistrationOptions.CreateBuilder(ProviderName, definition.ProviderVersion)
             .WithProviderId(definition.ProviderId)
             .WithSyncRootIdentity(definition.Identity)
             .WithHydrationPolicy(CloudHydrationPolicy.Full, CloudHydrationPolicyModifiers.None)
+            .WithPopulationPolicy(CloudPopulationPolicy.Full)
             .WithInSyncPolicy(CloudInSyncPolicy.None)
+            .AllowHardLinks(false)
             .WithRootMarkedInSync(true)
             .WithExistingRegistrationUpdate(true)
             .Build();

@@ -1,5 +1,5 @@
 [
-  { "package": "CfSharp*", "version": "0.1.0-preview.3", "repositoryFile": "eng/license-texts/CfSharp.0.1.0-preview.3.LICENSE.txt", "url": "https://raw.githubusercontent.com/MirrorPulse/CfSharp/b65b6b7a81c411e8af84f421e4259825e91536d6/LICENSE" },
+  { "package": "CfSharp*", "version": "0.1.0-preview.15", "repositoryFile": "eng/license-texts/CfSharp.0.1.0-preview.15.LICENSE.txt", "url": "https://raw.githubusercontent.com/mirrorpulse/cfsharp/6d34178a84949d2eae2f1d5dafa85b3620619589/LICENSE" },
   { "package": "Microsoft.Data.Sqlite*", "version": "8.0.31", "url": "https://raw.githubusercontent.com/dotnet/efcore/4caf9eeca38ab8bbc8857b975a8f0ad29ad2ea7f/LICENSE.txt" },
   { "package": "Microsoft.Windows.SDK.BuildTools.WinApp", "version": "0.7.1", "repositoryFile": "eng/license-texts/Microsoft.Windows.SDK.BuildTools.WinApp.0.7.1.LICENSE.txt", "url": "https://raw.githubusercontent.com/microsoft/WinAppCli/e3cd0b94f3e7b776ac51ba0564f4908094e979b5/LICENSE" },
   { "package": "SQLitePCLRaw.*", "version": "2.1.12", "url": "https://raw.githubusercontent.com/ericsink/SQLitePCL.raw/v2.1.12/LICENSE.TXT" },

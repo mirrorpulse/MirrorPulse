@@ -57,7 +57,64 @@ public sealed class MirrorPulseControlException : Exception
 /// </summary>
 public sealed class MirrorPulseControlClient
 {
+    public Task<MirrorPulseControlNamespaceInitialization> InitializeNamespaceProtectionAsync(Guid operationId,
+        CancellationToken cancellationToken = default) => SendAsync<NamespaceProtectionInitializeArguments, MirrorPulseControlNamespaceInitialization>(
+            MirrorPulseControlCommands.NamespaceProtectionInitialize, new(operationId), cancellationToken);
+
+    public Task<MirrorPulseControlNamespaceInitialization> GetNamespaceInitializationStatusAsync(Guid operationId,
+        CancellationToken cancellationToken = default) => SendAsync<NamespaceProtectionInitializationStatusArguments, MirrorPulseControlNamespaceInitialization>(
+            MirrorPulseControlCommands.NamespaceProtectionInitializationStatus, new(operationId), cancellationToken);
+
+    public Task<MirrorPulseControlNamespaceInitialization> RecoverNamespaceCurrentTreeAsync(Guid operationId,
+        CancellationToken cancellationToken = default) => SendAsync<NamespaceProtectionRecoverCurrentArguments, MirrorPulseControlNamespaceInitialization>(
+            MirrorPulseControlCommands.NamespaceProtectionRecoverCurrent, new(operationId), cancellationToken);
+
+    public Task<MirrorPulseControlNamespaceInitialization> RecoverNamespaceRootAsync(Guid operationId, Guid rootId,
+        CancellationToken cancellationToken = default) => SendAsync<NamespaceProtectionRecoverRootArguments, MirrorPulseControlNamespaceInitialization>(
+            MirrorPulseControlCommands.NamespaceProtectionRecoverRoot, new(operationId, rootId), cancellationToken);
+
+    public Task<IReadOnlyList<MirrorPulseControlNamespaceInitialization>> GetNamespaceInitializationsAsync(
+        Guid? afterOperationId = null, int limit = 256, CancellationToken cancellationToken = default) =>
+        SendAsync<NamespaceProtectionInitializationsArguments, IReadOnlyList<MirrorPulseControlNamespaceInitialization>>(
+            MirrorPulseControlCommands.NamespaceProtectionInitializations, new(afterOperationId, limit), cancellationToken);
+
+    public Task<IReadOnlyList<MirrorPulseControlPermissionCapture>> GetNamespacePermissionCapturesAsync(Guid rootId,
+        Guid? afterManifestId = null, int limit = 256, CancellationToken cancellationToken = default) =>
+        SendAsync<NamespaceProtectionCapturesArguments, IReadOnlyList<MirrorPulseControlPermissionCapture>>(
+            MirrorPulseControlCommands.NamespaceProtectionCaptures, new(rootId, afterManifestId, limit), cancellationToken);
+
+    public Task<MirrorPulseControlOriginalTreeRecovery> RecoverNamespaceOriginalTreeAsync(Guid manifestId,
+        CancellationToken cancellationToken = default) =>
+        SendAsync<NamespaceProtectionRecoverTreeArguments, MirrorPulseControlOriginalTreeRecovery>(
+            MirrorPulseControlCommands.NamespaceProtectionRecoverTree, new(manifestId), cancellationToken);
+
     private readonly MirrorPulseControlClientOptions _options;
+
+    /// <summary>Waits within the existing request budget while lifecycle queries and stop remain available.</summary>
+    /// <remarks>A timeout leaves the Host's initialization and durable recovery ownership intact.</remarks>
+    public async Task<MirrorPulseHostStatus> WaitForHostReadyAsync(CancellationToken cancellationToken = default)
+    {
+        using var timeout = new CancellationTokenSource(_options.RequestTimeout);
+        using var stop = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeout.Token);
+        try
+        {
+            while (true)
+            {
+                var status = await GetHostStatusAsync(stop.Token).ConfigureAwait(false);
+                if (status.State is "Running" or "Degraded") return status;
+                if (status.State is not ("Created" or "Starting"))
+                    throw new MirrorPulseControlException(new ControlError(MirrorPulseControlErrorCodes.HostStartFailed,
+                        "The Host stopped or failed during initialization.", MirrorPulse.Core.Contracts.ErrorCategory.Native, retryable: true));
+                await Task.Delay(TimeSpan.FromMilliseconds(100), stop.Token).ConfigureAwait(false);
+            }
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested && timeout.IsCancellationRequested)
+        {
+            throw new MirrorPulseControlException(new ControlError(MirrorPulseControlErrorCodes.RequestTimeout,
+                "The Host has not completed initialization within the request timeout. Its lifecycle status remains available.",
+                MirrorPulse.Core.Contracts.ErrorCategory.Network, retryable: true));
+        }
+    }
     private readonly string _pipeName;
 
     public MirrorPulseControlClient(MirrorPulseControlClientOptions? options = null)
@@ -228,6 +285,184 @@ public sealed class MirrorPulseControlClient
             MirrorPulseControlCommands.InstanceList,
             new(limit, cursor), cancellationToken);
 
+    public Task<IReadOnlyList<MirrorPulseControlRootStatus>> GetRootsAsync(CancellationToken cancellationToken = default) =>
+        SendAsync<ControlEmptyArguments, IReadOnlyList<MirrorPulseControlRootStatus>>(
+            MirrorPulseControlCommands.RootList, new(), cancellationToken);
+
+    public Task<MirrorPulseControlRootRecovery> RecoverRootRenameAsync(Guid operationId,
+        CancellationToken cancellationToken = default) =>
+        SendAsync<RootRecoverArguments, MirrorPulseControlRootRecovery>(
+            MirrorPulseControlCommands.RootRecover, new(operationId), cancellationToken);
+
+    public Task<MirrorPulseControlRootRenamePreparation> PrepareRootRenameAsync(Guid rootId, string label,
+        CancellationToken cancellationToken = default) =>
+        SendAsync<RootPrepareRenameArguments, MirrorPulseControlRootRenamePreparation>(
+            MirrorPulseControlCommands.RootPrepareRename, new(rootId, label), cancellationToken);
+
+    public Task<MirrorPulseControlRootExecution> ExecuteRootRenameAsync(Guid operationId,
+        CancellationToken cancellationToken = default) =>
+        SendAsync<RootExecuteRenameArguments, MirrorPulseControlRootExecution>(
+            MirrorPulseControlCommands.RootExecuteRename, new(operationId), cancellationToken);
+
+    public Task<MirrorPulseControlRootCancellation> CancelRootRenameAsync(Guid operationId,
+        CancellationToken cancellationToken = default) =>
+        SendAsync<RootCancelRenameArguments, MirrorPulseControlRootCancellation>(
+            MirrorPulseControlCommands.RootCancelRename, new(operationId), cancellationToken);
+
+    public Task<MirrorPulseControlNamespaceMemberCreation> CreateNamespaceMemberAsync(Guid operationId, Guid parentMemberId,
+        string name, bool isDirectory = false, CancellationToken cancellationToken = default) =>
+        SendAsync<NamespaceMemberCreateArguments, MirrorPulseControlNamespaceMemberCreation>(
+            MirrorPulseControlCommands.NamespaceMemberCreate, new(operationId, parentMemberId, name, isDirectory), cancellationToken);
+
+    public Task<MirrorPulseControlNamespaceImportPreparation> PrepareNamespaceImportAsync(Guid operationId, Guid parentMemberId,
+        string name, string sourcePath, CancellationToken cancellationToken = default) =>
+        SendAsync<NamespaceMemberPrepareImportArguments, MirrorPulseControlNamespaceImportPreparation>(
+            MirrorPulseControlCommands.NamespaceMemberPrepareImport, new(operationId, parentMemberId, name, sourcePath), cancellationToken);
+
+    public Task<MirrorPulseControlNamespaceMemberCreation> ExecuteNamespaceImportAsync(Guid operationId,
+        CancellationToken cancellationToken = default) =>
+        SendAsync<NamespaceMemberImportArguments, MirrorPulseControlNamespaceMemberCreation>(
+            MirrorPulseControlCommands.NamespaceMemberImport, new(operationId), cancellationToken);
+
+    public Task<MirrorPulseControlNamespaceImportStatus> GetNamespaceImportStatusAsync(Guid operationId,
+        CancellationToken cancellationToken = default) =>
+        SendAsync<NamespaceMemberImportStatusArguments, MirrorPulseControlNamespaceImportStatus>(
+            MirrorPulseControlCommands.NamespaceMemberImportStatus, new(operationId), cancellationToken);
+
+    public Task<MirrorPulseControlNamespaceReplacementPreparation> PrepareNamespaceReplacementAsync(Guid operationId, Guid memberId,
+        string sourcePath, CancellationToken cancellationToken = default) =>
+        SendAsync<NamespaceMemberPrepareReplaceArguments, MirrorPulseControlNamespaceReplacementPreparation>(
+            MirrorPulseControlCommands.NamespaceMemberPrepareReplace, new(operationId, memberId, sourcePath), cancellationToken);
+
+    public Task<MirrorPulseControlNamespaceReplacementCompletion> ExecuteNamespaceReplacementAsync(Guid operationId,
+        CancellationToken cancellationToken = default) => SendAsync<NamespaceMemberReplaceArguments, MirrorPulseControlNamespaceReplacementCompletion>(
+            MirrorPulseControlCommands.NamespaceMemberReplace, new(operationId), cancellationToken);
+
+    public Task<MirrorPulseControlNamespaceReplacementStatus> GetNamespaceReplacementStatusAsync(Guid operationId,
+        CancellationToken cancellationToken = default) => SendAsync<NamespaceMemberReplacementStatusArguments, MirrorPulseControlNamespaceReplacementStatus>(
+            MirrorPulseControlCommands.NamespaceMemberReplacementStatus, new(operationId), cancellationToken);
+
+    public Task<MirrorPulseControlNamespaceMemberInspection> InspectNamespaceMemberAsync(string relativePath, bool isDirectory = false,
+        CancellationToken cancellationToken = default) =>
+        SendAsync<NamespaceMemberInspectArguments, MirrorPulseControlNamespaceMemberInspection>(
+            MirrorPulseControlCommands.NamespaceMemberInspect, new(relativePath, isDirectory), cancellationToken);
+
+    public Task<MirrorPulseControlNamespaceMemberMovePreparation> PrepareNamespaceMemberMoveAsync(Guid operationId, Guid memberId,
+        Guid targetParentMemberId, string targetName, CancellationToken cancellationToken = default) =>
+        SendAsync<NamespaceMemberPrepareMoveArguments, MirrorPulseControlNamespaceMemberMovePreparation>(
+            MirrorPulseControlCommands.NamespaceMemberPrepareMove, new(operationId, memberId, targetParentMemberId, targetName), cancellationToken);
+
+    public Task<IReadOnlyList<MirrorPulseControlNamespaceMemberTreeEntry>> GetNamespaceMemberTreeAsync(Guid memberId,
+        CancellationToken cancellationToken = default) =>
+        SendAsync<NamespaceMemberTreeArguments, IReadOnlyList<MirrorPulseControlNamespaceMemberTreeEntry>>(
+            MirrorPulseControlCommands.NamespaceMemberTree, new(memberId), cancellationToken);
+
+    public Task<MirrorPulseControlNamespaceMemberMoveResult> ExecuteNamespaceMemberMoveAsync(Guid operationId,
+        CancellationToken cancellationToken = default) =>
+        SendAsync<NamespaceMemberMoveArguments, MirrorPulseControlNamespaceMemberMoveResult>(
+            MirrorPulseControlCommands.NamespaceMemberMove, new(operationId), cancellationToken);
+
+    public Task<MirrorPulseControlNamespaceMemberMoveStatus> GetNamespaceMemberMoveStatusAsync(Guid operationId,
+        CancellationToken cancellationToken = default) =>
+        SendAsync<NamespaceMemberMoveStatusArguments, MirrorPulseControlNamespaceMemberMoveStatus>(
+            MirrorPulseControlCommands.NamespaceMemberMoveStatus, new(operationId), cancellationToken);
+
+    public Task<MirrorPulseControlNamespaceMemberRetirementPreparation> PrepareNamespaceMemberRetirementAsync(Guid operationId,
+        Guid memberId, CancellationToken cancellationToken = default) =>
+        PrepareNamespaceMemberRetirementAsync(operationId, memberId, false, cancellationToken);
+
+    public Task<MirrorPulseControlNamespaceMemberRetirementPreparation> PrepareNamespaceMemberRetirementAsync(Guid operationId,
+        Guid memberId, bool recursive, CancellationToken cancellationToken = default) =>
+        SendAsync<NamespaceMemberPrepareRetirementArguments, MirrorPulseControlNamespaceMemberRetirementPreparation>(
+            MirrorPulseControlCommands.NamespaceMemberPrepareRetirement, new(operationId, memberId, recursive), cancellationToken);
+
+    public Task<MirrorPulseControlNamespaceMemberRetirementResult> ExecuteNamespaceMemberRetirementAsync(Guid operationId,
+        CancellationToken cancellationToken = default) =>
+        ExecuteNamespaceMemberRetirementAsync(operationId, false, cancellationToken);
+
+    public Task<MirrorPulseControlNamespaceMemberRetirementResult> ExecuteNamespaceMemberRetirementAsync(Guid operationId,
+        bool recursive, CancellationToken cancellationToken = default) =>
+        SendAsync<NamespaceMemberRetirementArguments, MirrorPulseControlNamespaceMemberRetirementResult>(
+            MirrorPulseControlCommands.NamespaceMemberRetirement, new(operationId, recursive), cancellationToken);
+
+    public Task<MirrorPulseControlNamespaceMemberRetirementResult> GetNamespaceMemberRetirementAsync(Guid operationId,
+        CancellationToken cancellationToken = default) =>
+        GetNamespaceMemberRetirementAsync(operationId, false, cancellationToken);
+
+    public Task<MirrorPulseControlNamespaceMemberRetirementResult> GetNamespaceMemberRetirementAsync(Guid operationId,
+        bool recursive, CancellationToken cancellationToken = default) =>
+        SendAsync<NamespaceMemberRetirementStatusArguments, MirrorPulseControlNamespaceMemberRetirementResult>(
+            MirrorPulseControlCommands.NamespaceMemberRetirementStatus, new(operationId, recursive), cancellationToken);
+
+    public Task<MirrorPulseControlRemoteRetirementStatus> GetNamespaceRemoteRetirementStatusAsync(Guid operationId,
+        CancellationToken cancellationToken = default) =>
+        SendAsync<NamespaceRemoteRetirementStatusArguments, MirrorPulseControlRemoteRetirementStatus>(
+            MirrorPulseControlCommands.NamespaceRemoteRetirementStatus, new(operationId), cancellationToken);
+
+    public Task<MirrorPulseControlRemoteRetirementPage> GetNamespaceRemoteRetirementsAsync(Guid rootId,
+        Guid? afterOperationId = null, int limit = 64, CancellationToken cancellationToken = default) =>
+        SendAsync<NamespaceRemoteRetirementsArguments, MirrorPulseControlRemoteRetirementPage>(
+            MirrorPulseControlCommands.NamespaceRemoteRetirements, new(rootId, afterOperationId, limit), cancellationToken);
+
+    public Task<MirrorPulseControlRemoteDeleteStatus> GetNamespaceRemoteDeleteStatusAsync(Guid commandId,
+        CancellationToken cancellationToken = default) =>
+        SendAsync<NamespaceRemoteDeleteStatusArguments, MirrorPulseControlRemoteDeleteStatus>(
+            MirrorPulseControlCommands.NamespaceRemoteDeleteStatus, new(commandId), cancellationToken);
+
+    public Task<MirrorPulseControlRemoteUpdateStatus> GetNamespaceRemoteUpdateStatusAsync(Guid operationId,
+        CancellationToken cancellationToken = default) =>
+        SendAsync<NamespaceRemoteUpdateStatusArguments, MirrorPulseControlRemoteUpdateStatus>(
+            MirrorPulseControlCommands.NamespaceRemoteUpdateStatus, new(operationId), cancellationToken);
+
+    public Task<MirrorPulseControlTransferStatus> GetNamespaceTransferStatusAsync(Guid operationId,
+        CancellationToken cancellationToken = default) =>
+        SendAsync<NamespaceTransferStatusArguments, MirrorPulseControlTransferStatus>(
+            MirrorPulseControlCommands.NamespaceTransferStatus, new(operationId), cancellationToken);
+
+    public Task<MirrorPulseControlTransfers> GetNamespaceTransfersAsync(Guid rootId,
+        CancellationToken cancellationToken = default) =>
+        SendAsync<NamespaceTransfersArguments, MirrorPulseControlTransfers>(
+            MirrorPulseControlCommands.NamespaceTransfers, new(rootId), cancellationToken);
+
+    public Task<MirrorPulseControlTransferStatus> PrepareNamespaceTransferAsync(Guid operationId, Guid sourceMemberId,
+        Guid targetParentMemberId, string targetName, CancellationToken cancellationToken = default) =>
+        SendAsync<NamespaceTransferPrepareArguments, MirrorPulseControlTransferStatus>(MirrorPulseControlCommands.NamespaceTransferPrepare,
+            new(operationId, sourceMemberId, targetParentMemberId, targetName), cancellationToken);
+
+    public Task<MirrorPulseControlTransferStatus> MoveNamespaceTransferAsync(Guid operationId, Guid sourceMemberId,
+        Guid targetParentMemberId, string targetName, CancellationToken cancellationToken = default) =>
+        SendAsync<NamespaceTransferMoveArguments, MirrorPulseControlTransferStatus>(MirrorPulseControlCommands.NamespaceTransferMove,
+            new(operationId, sourceMemberId, targetParentMemberId, targetName), cancellationToken);
+
+    public Task<MirrorPulseControlTransferStatus> ResumeNamespaceTransferAsync(Guid operationId,
+        CancellationToken cancellationToken = default) => SendAsync<NamespaceTransferResumeArguments, MirrorPulseControlTransferStatus>(
+            MirrorPulseControlCommands.NamespaceTransferResume, new(operationId), cancellationToken);
+
+    public Task<MirrorPulseControlRemoteUpdates> GetNamespaceRemoteUpdatesAsync(Guid rootId,
+        CancellationToken cancellationToken = default) =>
+        SendAsync<NamespaceRemoteUpdatesArguments, MirrorPulseControlRemoteUpdates>(
+            MirrorPulseControlCommands.NamespaceRemoteUpdates, new(rootId), cancellationToken);
+
+    public Task<MirrorPulseControlRemoteUpdateStatus> RecoverNamespaceRemoteUpdateAsync(Guid operationId,
+        CancellationToken cancellationToken = default) =>
+        SendAsync<NamespaceRemoteUpdateRecoverArguments, MirrorPulseControlRemoteUpdateStatus>(
+            MirrorPulseControlCommands.NamespaceRemoteUpdateRecover, new(operationId), cancellationToken);
+
+    public Task<MirrorPulseControlRemoteDeletePage> GetNamespaceRemoteDeletesAsync(Guid rootId, Guid? afterCommandId = null,
+        int limit = 64, CancellationToken cancellationToken = default) =>
+        SendAsync<NamespaceRemoteDeletesArguments, MirrorPulseControlRemoteDeletePage>(
+            MirrorPulseControlCommands.NamespaceRemoteDeletes, new(rootId, afterCommandId, limit), cancellationToken);
+
+    public Task<MirrorPulseControlRemoteDeleteStatus> RecoverNamespaceRemoteDeleteAsync(Guid commandId,
+        CancellationToken cancellationToken = default) =>
+        SendAsync<NamespaceRemoteDeleteRecoverArguments, MirrorPulseControlRemoteDeleteStatus>(
+            MirrorPulseControlCommands.NamespaceRemoteDeleteRecover, new(commandId), cancellationToken);
+
+    public Task<MirrorPulseControlNamespaceBirthRecoveryResult> ExecuteNamespaceBirthRecoveryAsync(Guid recoveryId,
+        CancellationToken cancellationToken = default) =>
+        SendAsync<NamespaceBirthRecoverArguments, MirrorPulseControlNamespaceBirthRecoveryResult>(
+            MirrorPulseControlCommands.NamespaceBirthRecover, new(recoveryId), cancellationToken);
+
     public Task<MirrorPulseControlConflictList> GetConflictsAsync(
         int? limit = null,
         string? cursor = null,
@@ -326,6 +561,11 @@ public sealed class MirrorPulseControlClient
         SendAsync<ConflictResolveArguments, MirrorPulseAppStatusResponse>(
             MirrorPulseControlCommands.ConflictResolve,
             new(conflictId, action, preservedPath), cancellationToken);
+
+    public Task<MirrorPulseControlConflictVersionRefresh> RefreshConflictVersionAsync(Guid commandId, Guid conflictId,
+        CancellationToken cancellationToken = default) =>
+        SendAsync<ConflictRefreshVersionArguments, MirrorPulseControlConflictVersionRefresh>(
+            MirrorPulseControlCommands.ConflictRefreshVersion, new(commandId, conflictId), cancellationToken);
 
     private async Task<System.IO.Pipes.NamedPipeClientStream> ConnectAsync(
         CancellationToken cancellationToken)

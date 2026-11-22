@@ -1,3 +1,4 @@
+using MirrorPulse.Adapter.Sdk;
 using MirrorPulse.Core.Contracts;
 
 namespace MirrorPulse.Core.CloudFiles;
@@ -21,13 +22,32 @@ public sealed record MirrorPulseWorkerMoveRequest(
     Guid? OperationId = null,
     string? RootKey = null,
     string? DestinationRootKey = null,
-    bool DestinationMustBeAbsent = true);
+    bool DestinationMustBeAbsent = true)
+{
+    /// <summary>Requires restart-safe replay on the actual session that will send this request.</summary>
+    internal bool RequireDurableDirectoryMove { get; init; }
+}
+
+internal enum MirrorPulseDurableDirectoryCopyMode { Ordinary, Start, Resume }
 
 public sealed record MirrorPulseWorkerCreateDirectoryRequest(InstanceId InstanceId, string RootKey,
-    string NormalizedPath, Guid OperationId, bool MustBeAbsent = true);
+    string NormalizedPath, Guid OperationId, bool MustBeAbsent = true)
+{
+    internal MirrorPulseDurableDirectoryCopyMode DurableCopyMode { get; init; }
+    internal Guid? DurableParentCopyOperationId { get; init; }
+}
+
+public sealed record MirrorPulseWorkerPrepareDirectoryCopyRequest(InstanceId InstanceId, string RootKey,
+    string NormalizedPath, Guid OperationId, Guid? ParentCopyOperationId, long? Length, string? ContentSha256);
 
 public interface IMirrorPulseWorkerMutationTransport
 {
+    bool SupportsDurableDirectoryMove(InstanceId instanceId) => false;
+    bool SupportsDurableDirectoryCopy(InstanceId instanceId, string rootKey) => false;
+    bool SupportsDurableDirectoryCopyPreparation(InstanceId instanceId, string rootKey) => false;
+    ValueTask PrepareDirectoryCopyAsync(MirrorPulseWorkerPrepareDirectoryCopyRequest request, CancellationToken cancellationToken) =>
+        ValueTask.FromException(new NotSupportedException("DurableDirectoryCopyPreparationUnavailable"));
+
     ValueTask<string> CreateDirectoryAsync(MirrorPulseWorkerCreateDirectoryRequest request,
         CancellationToken cancellationToken) => ValueTask.FromException<string>(new NotSupportedException("CreateDirectoryUnsupported"));
 
@@ -38,6 +58,13 @@ public interface IMirrorPulseWorkerMutationTransport
     ValueTask<string> MoveAsync(
         MirrorPulseWorkerMoveRequest request,
         CancellationToken cancellationToken);
+}
+
+/// <summary>Returns the Worker receipt for a sealed, original directory retirement request.</summary>
+public interface IMirrorPulseOriginalDirectoryRetirementTransport
+{
+    ValueTask<AdapterOwnedChildEffectReceipt> RetireOriginalDirectoryAsync(
+        AdapterDirectoryRetirementRequest request, CancellationToken cancellationToken);
 }
 
 public sealed class MirrorPulseWorkerMutationConflictException : IOException

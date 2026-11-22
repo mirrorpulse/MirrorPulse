@@ -30,7 +30,14 @@ public sealed record MirrorPulseRemoteSnapshotEntry(
     CloudItemKind ItemKind,
     string RelativePath,
     long? Length,
-    MirrorPulseRemoteSnapshotMetadata Metadata);
+    MirrorPulseRemoteSnapshotMetadata Metadata)
+{
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public MirrorPulseRemoteSnapshotIdentity? PublicIdentity { get; init; }
+}
+
+/// <summary>The public address selected when this backend observation was captured.</summary>
+public sealed record MirrorPulseRemoteSnapshotIdentity(Guid ItemId, string RemoteId);
 
 /// <summary>JSON-safe projection of CfSharp placeholder metadata.</summary>
 public sealed record MirrorPulseRemoteSnapshotMetadata(
@@ -42,7 +49,7 @@ public sealed record MirrorPulseRemoteSnapshotMetadata(
     DateTimeOffset? ChangeTime);
 
 /// <summary>Stores each Adapter instance snapshot with replace-on-write semantics.</summary>
-public sealed class MirrorPulseFileRemotePollSnapshotStore : IMirrorPulseRemotePollSnapshotStore
+public sealed partial class MirrorPulseFileRemotePollSnapshotStore : IMirrorPulseRootRemotePollSnapshotStore
 {
     private const int MaximumSnapshotBytes = 32 * 1024 * 1024;
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
@@ -127,6 +134,9 @@ public sealed class MirrorPulseFileRemotePollSnapshotStore : IMirrorPulseRemoteP
             if (string.IsNullOrWhiteSpace(entry.RemoteRevision) || string.IsNullOrWhiteSpace(entry.RelativePath) ||
                 entry.Metadata is null || entry.Metadata.Kind != entry.ItemKind)
                 throw new InvalidDataException("The remote poll snapshot contains an incomplete object.");
+            if (entry.PublicIdentity is { } identity &&
+                (identity.ItemId == Guid.Empty || string.IsNullOrWhiteSpace(identity.RemoteId)))
+                throw new InvalidDataException("The remote poll snapshot contains an incomplete public address.");
         }
     }
 }

@@ -8,16 +8,17 @@ namespace MirrorPulse.CloudFiles.CfSharp;
 [SupportedOSPlatform("windows10.0.16299")]
 public sealed class MirrorPulseCfSharpFullRescanAdapter
 {
-    private readonly MirrorPulseFullRescanCoordinator _coordinator;
+    private readonly CloudLocalChangeFeed _feed;
+    private readonly Func<CancellationToken, ValueTask<int>> _rescan;
 
     public MirrorPulseCfSharpFullRescanAdapter(
         CloudLocalChangeFeed feed,
         Func<CancellationToken, ValueTask<int>> rescan)
     {
         ArgumentNullException.ThrowIfNull(feed);
-        _coordinator = new MirrorPulseFullRescanCoordinator(
-            rescan,
-            feed.AcknowledgeFullRescanAsync);
+        ArgumentNullException.ThrowIfNull(rescan);
+        _feed = feed;
+        _rescan = rescan;
     }
 
     public ValueTask<MirrorPulseFullRescanResult> HandleAsync(
@@ -25,11 +26,18 @@ public sealed class MirrorPulseCfSharpFullRescanAdapter
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(batch);
-        return _coordinator.HandleAsync(
-            new MirrorPulseLocalChangeSignal(batch.RequiresFullRescan),
-            cancellationToken);
+        return HandleAsync(new MirrorPulseLocalChangeSignal(batch.RequiresFullRescan), cancellationToken);
     }
 
     public ValueTask<MirrorPulseFullRescanResult> HandleAsync(MirrorPulseLocalChangeSignal signal,
-        CancellationToken cancellationToken = default) => _coordinator.HandleAsync(signal, cancellationToken);
+        CancellationToken cancellationToken = default)
+    {
+        CloudLocalChangeRescan? boundary = null;
+        var coordinator = new MirrorPulseFullRescanCoordinator(token =>
+        {
+            boundary = _feed.BeginFullRescan();
+            return _rescan(token);
+        }, token => _feed.AcknowledgeFullRescanAsync(boundary!, token));
+        return coordinator.HandleAsync(signal, cancellationToken);
+    }
 }

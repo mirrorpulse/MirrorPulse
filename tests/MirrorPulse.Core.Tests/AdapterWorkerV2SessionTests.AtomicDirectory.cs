@@ -1,0 +1,432 @@
+using System.Security.Cryptography;
+using Microsoft.Data.Sqlite;
+using MirrorPulse.Adapter.Sdk;
+using MirrorPulse.Core.CloudFiles;
+using MirrorPulse.Core.Configuration;
+using MirrorPulse.Core.Contracts;
+using MirrorPulse.Core.Host;
+using MirrorPulse.Core.Security;
+using MirrorPulse.Core.State;
+using MirrorPulse.Core.Sync;
+
+namespace MirrorPulse.Core.Tests;
+
+public sealed partial class AdapterWorkerV2SessionTests
+{
+    [TestMethod]
+    public async Task RealHostNegotiatesAndRecoversADurableContainerMoveAcrossWorkerOwners()
+    {
+        using var fixture = new AtomicHostFixture();
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        CancellationToken token = deadline.Token;
+        InstanceId instance = fixture.Topology.Instances.Single().InstanceId;
+        MirrorPulseWorkerMoveRequest request;
+        string accepted;
+        string originalFileRevision;
+        await using (var catalog = await MirrorPulseProductCatalog.OpenAsync(fixture.Paths, token))
+        {
+            await catalog.SaveAdapterTopologyAsync(fixture.Topology, token);
+            await using var worker = new AdapterInstanceProcessSupervisor(catalog, new WindowsCredentialManagerStore());
+            await worker.StartAsync(fixture.Topology);
+            while (!worker.IsConnected(instance)) await Task.Delay(25, token);
+            Assert.IsTrue(worker.SupportsDurableDirectoryMove(instance));
+            string? revision = await worker.StatAsync(new(instance, "tree", "docs"), token);
+            Assert.IsNotNull(revision);
+            originalFileRevision = await worker.StatAsync(new(instance, "tree/first.txt", "docs"), token)
+                ?? throw new InvalidOperationException("The fixture did not return the original file revision.");
+            request = new(instance, "tree", "moved", revision, true, Guid.NewGuid(), "docs", "docs")
+            { RequireDurableDirectoryMove = true };
+            accepted = await worker.MoveAsync(request, token);
+            Assert.AreEqual(revision, accepted);
+        }
+
+        Directory.CreateDirectory(fixture.Tree);
+        string successor = Path.Combine(fixture.Tree, "later.txt");
+        await File.WriteAllTextAsync(successor, "later source", token);
+        await using var reopened = await MirrorPulseProductCatalog.OpenAsync(fixture.Paths, token);
+        await using var restarted = new AdapterInstanceProcessSupervisor(reopened, new WindowsCredentialManagerStore());
+        await restarted.StartAsync(fixture.Topology);
+        while (!restarted.IsConnected(instance)) await Task.Delay(25, token);
+        Assert.AreEqual(accepted, await restarted.MoveAsync(request, token));
+        Assert.AreEqual("later source", await File.ReadAllTextAsync(successor, token));
+        Assert.AreEqual("first", await File.ReadAllTextAsync(Path.Combine(fixture.Source, "moved", "first.txt"), token));
+        Assert.AreEqual("second", await File.ReadAllTextAsync(Path.Combine(fixture.Source, "moved", "second.txt"), token));
+        string movedFile = Path.Combine(fixture.Source, "moved", "first.txt");
+        await File.WriteAllTextAsync(movedFile, "later content on the original object", token);
+        string? changedRevision = await restarted.StatAsync(new(instance, "moved/first.txt", "docs"), token);
+        Assert.AreNotEqual(originalFileRevision, changedRevision);
+        Assert.IsTrue(MirrorPulseLocalDirectoryMoveRevision.IsSameObject(originalFileRevision, changedRevision, isDirectory: false));
+        File.Move(movedFile, Path.Combine(fixture.Source, "retained-first.txt"));
+        await File.WriteAllTextAsync(movedFile, "later replacement object", token);
+        string? replacementRevision = await restarted.StatAsync(new(instance, "moved/first.txt", "docs"), token);
+        Assert.IsFalse(MirrorPulseLocalDirectoryMoveRevision.IsSameObject(originalFileRevision, replacementRevision, isDirectory: false));
+    }
+
+    [TestMethod]
+    public async Task RealHostAndLocalWorkerRecoverWholeBatchAfterCatalogCommitInterruption()
+    {
+        using var fixture = new AtomicHostFixture();
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        CancellationToken token = deadline.Token;
+        AdapterDirectoryAdmissionRequest request;
+        byte[] nativeReceipt;
+        await using (var catalog = await MirrorPulseProductCatalog.OpenAsync(fixture.Paths, token))
+        {
+            await catalog.SaveAdapterTopologyAsync(fixture.Topology, token);
+            await using var supervisor = await fixture.StartAsync(catalog, token);
+            request = await fixture.ReadRequestAsync(supervisor, token);
+            await PrepareAtomicOwnersAsync(catalog, request, token);
+            Guid interruptedMember = request.Operations[1].Operation.OperationId;
+            await RunRetirementCatalogSqlAsync(fixture.Paths, $"""
+                CREATE TRIGGER interrupt_atomic_accept BEFORE UPDATE ON mutation_intents
+                WHEN NEW.operation_id='{interruptedMember:D}' AND NEW.state={(int)MirrorPulseMutationState.RemoteAccepted}
+                BEGIN SELECT RAISE(ABORT,'interrupted atomic receipt acceptance'); END;
+                """);
+            await Assert.ThrowsExactlyAsync<SqliteException>(() => supervisor.ExecuteAtomicDirectoryDeletionAsync(request, token).AsTask());
+            Assert.IsFalse(Directory.Exists(fixture.Tree));
+            nativeReceipt = await File.ReadAllBytesAsync(fixture.Receipt(request.AdmissionId), token);
+            var retained = await catalog.ReadAtomicDirectoryBatchAsync(request.AdmissionId, token);
+            Assert.IsNotNull(retained);
+            Assert.IsNull(retained.Receipt);
+            await RequireAtomicOwnerStatesAsync(catalog, request, MirrorPulseMutationState.Executing, token);
+            await Assert.ThrowsExactlyAsync<InvalidOperationException>(() => catalog.StartOriginalDirectoryLeafAsync(
+                request.Operations[0].Operation.OperationId, token));
+        }
+        Directory.CreateDirectory(fixture.Tree);
+        string successor = Path.Combine(fixture.Tree, "later.txt");
+        await File.WriteAllTextAsync(successor, "later independent generation", token);
+        AdapterAtomicDirectoryDeletionReceipt accepted;
+        await using (var reopened = await MirrorPulseProductCatalog.OpenAsync(fixture.Paths, token))
+        {
+            await RunRetirementCatalogSqlAsync(fixture.Paths, "DROP TRIGGER interrupt_atomic_accept;");
+            await using var restarted = await fixture.StartAsync(reopened, token);
+            var changed = request with
+            {
+                Operations = [request.Operations[1], request.Operations[0], request.Operations[2]],
+            };
+            changed = changed with { RequestFingerprint = changed.CalculateFingerprint() };
+            await Assert.ThrowsExactlyAsync<InvalidDataException>(() => restarted.ExecuteAtomicDirectoryDeletionAsync(changed, token).AsTask());
+            accepted = await restarted.ExecuteAtomicDirectoryDeletionAsync(request, token);
+            var evidence = AdapterProtocolJson.Decode<System.Text.Json.JsonElement>(Convert.FromBase64String(accepted.BackendEvidence));
+            Assert.AreEqual(Convert.ToHexString(SHA256.HashData(nativeReceipt)), evidence.GetProperty("nativeReceiptSha256").GetString());
+            Assert.HasCount(request.Operations.Count, accepted.DeletedOriginals);
+            await RequireAtomicOwnerStatesAsync(reopened, request, MirrorPulseMutationState.RemoteAccepted, token);
+            var ordinary = new MirrorPulseMutationProjectionRecovery(reopened);
+            Assert.IsEmpty(await ordinary.RepairAsync((_, _) => ValueTask.FromResult(false),
+                (_, _) => throw new AssertFailedException("An ordinary missing-row check cannot project an atomic directory effect."), token));
+            Guid operationId = request.Operations[0].Operation.OperationId;
+            await Assert.ThrowsExactlyAsync<InvalidOperationException>(() => reopened.TransitionMutationAsync(operationId,
+                MirrorPulseMutationState.RemoteAccepted, MirrorPulseMutationState.Acknowledged, cancellationToken: token));
+        }
+        await using var final = await MirrorPulseProductCatalog.OpenAsync(fixture.Paths, token);
+        await using var offline = new AdapterInstanceProcessSupervisor(final, new WindowsCredentialManagerStore());
+        var replayed = await offline.ExecuteAtomicDirectoryDeletionAsync(request, token);
+        CollectionAssert.AreEqual(AdapterProtocolJson.Encode(accepted), AdapterProtocolJson.Encode(replayed));
+        Assert.AreEqual("later independent generation", await File.ReadAllTextAsync(successor, token));
+        Assert.AreEqual("peer", await File.ReadAllTextAsync(Path.Combine(fixture.Source, "peer.txt"), token));
+    }
+
+    [TestMethod]
+    public async Task DirectoryTransferTransportReplaysItsOwnedDeletionWithoutTouchingLaterOccupants()
+    {
+        using var fixture = new AtomicHostFixture();
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        CancellationToken token = deadline.Token;
+        AdapterAtomicDirectoryDeletionRequest request;
+        string receiptFingerprint;
+        await using (var catalog = await MirrorPulseProductCatalog.OpenAsync(fixture.Paths, token))
+        {
+            await catalog.SaveAdapterTopologyAsync(fixture.Topology, token);
+            await using var supervisor = await fixture.StartAsync(catalog, token);
+            var transport = (IMirrorPulseDirectoryTransferDeletionTransport)supervisor;
+            var originals = await fixture.ReadRequestAsync(supervisor, token);
+            Assert.IsTrue(transport.SupportsDirectoryTransferDeletion(new(originals.InstanceId)));
+            var admission = await transport.AdmitDirectoryTransferSourceAsync(originals, token);
+            Assert.IsTrue(Directory.Exists(fixture.Tree));
+            request = MirrorPulseProductCatalog.CreateDirectoryTransferSourceDeleteRequest(originals, admission);
+            var deleted = await transport.DeleteDirectoryTransferSourceAsync(request, token);
+            Assert.HasCount(3, deleted.DeletedOriginals);
+            Assert.IsFalse(Directory.Exists(fixture.Tree));
+            Assert.IsNull(await catalog.ReadAtomicDirectoryBatchAsync(originals.AdmissionId, token));
+            receiptFingerprint = deleted.Fingerprint();
+        }
+
+        Directory.CreateDirectory(fixture.Tree);
+        string successor = Path.Combine(fixture.Tree, "later.txt");
+        await File.WriteAllTextAsync(successor, "later generation", token);
+        await using var reopened = await MirrorPulseProductCatalog.OpenAsync(fixture.Paths, token);
+        await using var restarted = await fixture.StartAsync(reopened, token);
+        var recovery = (IMirrorPulseDirectoryTransferDeletionTransport)restarted;
+        var replay = await recovery.DeleteDirectoryTransferSourceAsync(request, token);
+        Assert.AreEqual(receiptFingerprint, replay.Fingerprint());
+        Assert.AreEqual("later generation", await File.ReadAllTextAsync(successor, token));
+        Assert.AreEqual("peer", await File.ReadAllTextAsync(Path.Combine(fixture.Source, "peer.txt"), token));
+    }
+
+    [TestMethod]
+    public async Task RealHostAndLocalWorkerReplayOriginalCopyReceiptsAcrossSessions()
+    {
+        if (Environment.GetEnvironmentVariable("MP_S06_DURABLE_COPY_FIXTURE") != "1")
+            Assert.Inconclusive("Requires the pre-release Local Worker with durable directory copy.");
+        using var fixture = new AtomicHostFixture();
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        CancellationToken token = deadline.Token;
+        var instance = fixture.Topology.Instances.Single().InstanceId;
+        Guid createId = Guid.NewGuid();
+        Guid uploadId = Guid.NewGuid();
+        byte[] bytes = [3, 7, 13, 19];
+        var create = new MirrorPulseWorkerCreateDirectoryRequest(instance, "docs", "copied", createId)
+        { DurableCopyMode = MirrorPulseDurableDirectoryCopyMode.Resume };
+        var stat = new MirrorPulseWorkerStatRequest(instance, "copied", "docs")
+        { DurableDirectoryCopyOperationId = createId };
+        string target = Path.Combine(fixture.Source, "copied");
+        string digest = Convert.ToHexString(SHA256.HashData(bytes));
+        var prepareDirectory = new MirrorPulseWorkerPrepareDirectoryCopyRequest(instance, "docs", "copied", createId, null, null, null);
+        var prepareFile = new MirrorPulseWorkerPrepareDirectoryCopyRequest(instance, "docs", "copied/payload.bin", uploadId,
+            createId, bytes.Length, digest);
+        string directoryRevision;
+        string fileRevision;
+        await using var catalog = await MirrorPulseProductCatalog.OpenAsync(fixture.Paths, token);
+        await catalog.SaveAdapterTopologyAsync(fixture.Topology, token);
+        await using (var preparingWorker = await fixture.StartAsync(catalog, token))
+        {
+            Assert.IsTrue(preparingWorker.SupportsDurableDirectoryCopyPreparation(instance, "docs"));
+            Assert.IsFalse(preparingWorker.SupportsDurableDirectoryCopyPreparation(instance, "other"));
+            await preparingWorker.PrepareDirectoryCopyAsync(prepareDirectory, token);
+        }
+        Assert.IsFalse(Directory.Exists(target));
+
+        await using (var creatingWorker = await fixture.StartAsync(catalog, token))
+        {
+            await creatingWorker.PrepareDirectoryCopyAsync(prepareDirectory, token);
+            Assert.IsFalse(Directory.Exists(target));
+            directoryRevision = await creatingWorker.CreateDirectoryAsync(create, token);
+            Assert.AreEqual(directoryRevision, await creatingWorker.StatAsync(stat, token));
+            await creatingWorker.PrepareDirectoryCopyAsync(prepareFile, token);
+        }
+        Assert.IsFalse(File.Exists(Path.Combine(target, "payload.bin")));
+
+        await using (var uploadingWorker = await fixture.StartAsync(catalog, token))
+        {
+            using var input = new MemoryStream(bytes, writable: false);
+            fileRevision = await uploadingWorker.UploadAsync(Upload(input), token);
+            Assert.IsNotNull(await uploadingWorker.StatAsync(stat, token));
+        }
+
+        Directory.Move(target, target + ".previous");
+        Directory.CreateDirectory(target);
+        string successor = Path.Combine(target, "payload.bin");
+        await File.WriteAllTextAsync(successor, "later target", token);
+        await using var restarted = await fixture.StartAsync(catalog, token);
+        Assert.AreEqual(directoryRevision, await restarted.CreateDirectoryAsync(create, token));
+        using var retained = new MemoryStream(bytes, writable: false);
+        Assert.AreEqual(fileRevision, await restarted.UploadAsync(Upload(retained), token));
+        await Assert.ThrowsAsync<IOException>(async () => await restarted.StatAsync(stat, token));
+        await Assert.ThrowsExactlyAsync<MirrorPulseWorkerMutationConflictException>(async () =>
+            await restarted.CreateDirectoryAsync(new(instance, "docs", "copied/child", Guid.NewGuid())
+            { DurableCopyMode = MirrorPulseDurableDirectoryCopyMode.Start, DurableParentCopyOperationId = createId }, token));
+        Assert.IsFalse(Directory.Exists(Path.Combine(target, "child")));
+        Assert.AreEqual("later target", await File.ReadAllTextAsync(successor, token));
+        CollectionAssert.AreEqual(bytes, await File.ReadAllBytesAsync(Path.Combine(target + ".previous", "payload.bin"), token));
+
+        MirrorPulseWorkerUploadRequest Upload(Stream input) =>
+            new(instance, "copied/payload.bin", null, input, bytes.Length, uploadId, digest, "docs")
+            { DurableCopyMode = MirrorPulseDurableDirectoryCopyMode.Resume, DurableParentCopyOperationId = createId, RequireConditionalTargetSupport = true };
+    }
+
+    [TestMethod]
+    public async Task AtomicDirectoryReservationRollsBackAllOwnersBeforeAnyWorkerMutation()
+    {
+        using var fixture = new AtomicHostFixture();
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(25));
+        CancellationToken token = deadline.Token;
+        await using var catalog = await MirrorPulseProductCatalog.OpenAsync(fixture.Paths, token);
+        await catalog.SaveAdapterTopologyAsync(fixture.Topology, token);
+        await using var supervisor = await fixture.StartAsync(catalog, token);
+        var request = await fixture.ReadRequestAsync(supervisor, token);
+        await PrepareAtomicOwnersAsync(catalog, request, token);
+        Guid interruptedMember = request.Operations[1].Operation.OperationId;
+        await RunRetirementCatalogSqlAsync(fixture.Paths, $"""
+            CREATE TRIGGER interrupt_atomic_start BEFORE UPDATE ON mutation_intents
+            WHEN NEW.operation_id='{interruptedMember:D}' AND NEW.state={(int)MirrorPulseMutationState.Executing}
+            BEGIN SELECT RAISE(ABORT,'interrupted atomic request reservation'); END;
+            """);
+        await Assert.ThrowsExactlyAsync<SqliteException>(() => supervisor.ExecuteAtomicDirectoryDeletionAsync(request, token).AsTask());
+        await RequireAtomicOwnerStatesAsync(catalog, request, MirrorPulseMutationState.Prepared, token);
+        Assert.IsNull(await catalog.ReadAtomicDirectoryBatchAsync(request.AdmissionId, token));
+        Assert.IsFalse(File.Exists(fixture.Receipt(request.AdmissionId)));
+        Assert.AreEqual("first", await File.ReadAllTextAsync(Path.Combine(fixture.Tree, "first.txt"), token));
+        Assert.AreEqual("second", await File.ReadAllTextAsync(Path.Combine(fixture.Tree, "second.txt"), token));
+        await RunRetirementCatalogSqlAsync(fixture.Paths, "DROP TRIGGER interrupt_atomic_start;");
+        var accepted = await supervisor.ExecuteAtomicDirectoryDeletionAsync(request, token);
+        Assert.HasCount(3, accepted.DeletedOriginals);
+        await RequireAtomicOwnerStatesAsync(catalog, request, MirrorPulseMutationState.RemoteAccepted, token);
+    }
+
+    [TestMethod]
+    public async Task AtomicBatchLedgerMigratesSchema106AndRefusesLostSchema107Evidence()
+    {
+        using var fixture = new AtomicHostFixture();
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(25));
+        CancellationToken token = deadline.Token;
+        await using (var original = await MirrorPulseProductCatalog.OpenAsync(fixture.Paths, token))
+            await original.SaveAdapterTopologyAsync(fixture.Topology, token);
+        await RunRetirementCatalogSqlAsync(fixture.Paths, "DROP TABLE original_atomic_directory_batches; PRAGMA user_version=106;");
+        await using (var migrated = await MirrorPulseProductCatalog.OpenAsync(fixture.Paths, token))
+        {
+            await using var supervisor = await fixture.StartAsync(migrated, token);
+            var request = await fixture.ReadRequestAsync(supervisor, token);
+            await PrepareAtomicOwnersAsync(migrated, request, token);
+            var receipt = await supervisor.ExecuteAtomicDirectoryDeletionAsync(request, token);
+            var changed = receipt with { ReceiptId = Guid.NewGuid() };
+            await Assert.ThrowsExactlyAsync<InvalidDataException>(() => migrated.AcceptAtomicDirectoryBatchAsync(request.AdmissionId, changed, token));
+            await RunRetirementCatalogSqlAsync(fixture.Paths, """
+                UPDATE original_atomic_directory_batches SET receipt_hash=zeroblob(32);
+                """);
+            await Assert.ThrowsExactlyAsync<InvalidDataException>(() => migrated.ReadAtomicDirectoryBatchAsync(request.AdmissionId, token));
+        }
+        await RunRetirementCatalogSqlAsync(fixture.Paths, "DROP TABLE original_atomic_directory_batches;");
+        await Assert.ThrowsExactlyAsync<InvalidDataException>(async () =>
+        {
+            await using var invalid = await MirrorPulseProductCatalog.OpenAsync(fixture.Paths, token);
+        });
+    }
+
+    [TestMethod]
+    public async Task RealHostAndLocalWorkerRecoverWhenTheWorkerExitsAfterCommitWithoutReplying()
+    {
+        if (Environment.GetEnvironmentVariable("MP_S06_ATOMIC_FIXTURE_LOST_REPLY") != "1")
+            Assert.Inconclusive("Requires the isolated pre-release Worker with the original process-exit fault.");
+        using var fixture = new AtomicHostFixture();
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(25));
+        CancellationToken token = deadline.Token;
+        AdapterDirectoryAdmissionRequest request;
+        byte[] nativeReceipt;
+        await using (var catalog = await MirrorPulseProductCatalog.OpenAsync(fixture.Paths, token))
+        {
+            await catalog.SaveAdapterTopologyAsync(fixture.Topology, token);
+            await using var supervisor = await fixture.StartAsync(catalog, token);
+            request = await fixture.ReadRequestAsync(supervisor, token);
+            await PrepareAtomicOwnersAsync(catalog, request, token);
+            string cut = Path.Combine(Path.GetDirectoryName(fixture.Receipt(request.AdmissionId))!, request.AdmissionId.ToString("N") + ".fixture-lose-reply");
+            await File.WriteAllTextAsync(cut, string.Empty, token);
+            await Assert.ThrowsExactlyAsync<IOException>(() => supervisor.ExecuteAtomicDirectoryDeletionAsync(request, token).AsTask());
+            Assert.IsTrue(File.Exists(cut + ".observed"));
+            Assert.IsFalse(Directory.Exists(fixture.Tree));
+            nativeReceipt = await File.ReadAllBytesAsync(fixture.Receipt(request.AdmissionId), token);
+            Assert.IsNull((await catalog.ReadAtomicDirectoryBatchAsync(request.AdmissionId, token))!.Receipt);
+            await RequireAtomicOwnerStatesAsync(catalog, request, MirrorPulseMutationState.Executing, token);
+        }
+        Directory.CreateDirectory(fixture.Tree);
+        string successor = Path.Combine(fixture.Tree, "later.txt");
+        await File.WriteAllTextAsync(successor, "later occupant", token);
+        await using var reopened = await MirrorPulseProductCatalog.OpenAsync(fixture.Paths, token);
+        await using var restarted = await fixture.StartAsync(reopened, token);
+        var recovered = await restarted.ExecuteAtomicDirectoryDeletionAsync(request, token);
+        var evidence = AdapterProtocolJson.Decode<System.Text.Json.JsonElement>(Convert.FromBase64String(recovered.BackendEvidence));
+        Assert.AreEqual(Convert.ToHexString(SHA256.HashData(nativeReceipt)), evidence.GetProperty("nativeReceiptSha256").GetString());
+        Assert.AreEqual("later occupant", await File.ReadAllTextAsync(successor, token));
+        await RequireAtomicOwnerStatesAsync(reopened, request, MirrorPulseMutationState.RemoteAccepted, token);
+    }
+
+    private static async Task PrepareAtomicOwnersAsync(MirrorPulseProductCatalog catalog, AdapterDirectoryAdmissionRequest request,
+        CancellationToken token)
+    {
+        foreach (var step in request.Operations)
+        {
+            var operation = step.Operation;
+            var intent = new MirrorPulseMutationIntent(operation.OperationId, new(request.InstanceId), operation.RootKey,
+                MirrorPulseWorkerChangeKind.Delete, operation.Path, null, operation.IsDirectory,
+                operation.Preconditions!.ExpectedRevision, null, null, MirrorPulseMutationOrigin.Journal)
+            { JournalItemId = Guid.NewGuid() };
+            await catalog.PrepareMutationAsync(intent, token);
+        }
+    }
+
+    private static async Task RequireAtomicOwnerStatesAsync(MirrorPulseProductCatalog catalog, AdapterDirectoryAdmissionRequest request,
+        MirrorPulseMutationState expected, CancellationToken token)
+    {
+        foreach (var step in request.Operations)
+        {
+            var mutation = await catalog.ReadMutationAsync(step.Operation.OperationId, token);
+            Assert.IsNotNull(mutation);
+            Assert.AreEqual(expected, mutation.State);
+            Assert.IsNull(mutation.AcceptedRevision);
+        }
+    }
+
+    private sealed class AtomicHostFixture : IDisposable
+    {
+        private readonly string _directory = Path.Combine(Path.GetTempPath(), "MirrorPulse-tests", Guid.NewGuid().ToString("N"));
+        private readonly InstanceId _instance = InstanceId.New();
+        public MirrorPulseStoragePaths Paths { get; }
+        public string Source { get; }
+        public string Tree => Path.Combine(Source, "tree");
+        public MirrorPulseAdapterTopology Topology { get; }
+
+        public AtomicHostFixture()
+        {
+            string? executable = Environment.GetEnvironmentVariable("MP_S06_ATOMIC_LOCAL_WORKER_EXE");
+            if (string.IsNullOrWhiteSpace(executable))
+                Assert.Inconclusive("Requires the actual Local Worker executable for the combined gate.");
+            Assert.IsTrue(File.Exists(executable));
+            Paths = new(Path.Combine(_directory, "sync"), Path.Combine(_directory, "data"));
+            string cache = Path.Combine(_directory, "transfers");
+            string fixture = Path.Combine(cache, "temporary", "mp-local-atomic-" + Guid.NewGuid().ToString("N"));
+            Source = Path.Combine(fixture, "source");
+            Directory.CreateDirectory(Tree);
+            File.WriteAllText(Path.Combine(fixture, ".mp-atomic-test-fixture"), Path.GetFileName(fixture));
+            File.WriteAllText(Path.Combine(Tree, "first.txt"), "first");
+            File.WriteAllText(Path.Combine(Tree, "second.txt"), "second");
+            File.WriteAllText(Path.Combine(Source, "peer.txt"), "peer");
+            var adapter = new AdapterId("example.atomic-local");
+            InstallId install = InstallId.New();
+            var manifest = new AdapterManifest(1, adapter, "Atomic Local fixture", "1.0.0", new(2, 2),
+                new Dictionary<string, string> { ["win-x64"] = Path.GetFileName(executable), ["win-arm64"] = Path.GetFileName(executable) },
+                new(null), new(null, null), new(true, false, true, true), ["en-US"], "1.0.0");
+            var installed = new InstalledAdapter(manifest, install, Path.GetDirectoryName(executable)!,
+                new(new string('A', 64)), AdapterInstallSource.LocalFile, null, true, DateTimeOffset.UtcNow, AdapterLifecycleState.Installed);
+            var instance = new AdapterInstance(adapter, install, _instance, "Atomic Local",
+                new Dictionary<string, string> { ["root.docs.sourceDirectory"] = Source }, [], Path.Combine(_directory, "files"),
+                cache, true, AdapterLifecycleState.Enabled, null, DateTimeOffset.UtcNow);
+            Topology = new([installed], [instance],
+                [new(adapter, _instance, RootId.New(), "docs", "Docs", "Docs", false, RootRegistrationState.Active, DateTimeOffset.UtcNow)]);
+        }
+
+        public string Receipt(Guid admissionId) => Path.Combine(Paths.DataRootPath, "state", "workers", _instance.Value.ToString("N"),
+            admissionId.ToString("N") + ".committed.json");
+
+        public async Task<AdapterInstanceProcessSupervisor> StartAsync(MirrorPulseProductCatalog catalog, CancellationToken token)
+        {
+            var supervisor = new AdapterInstanceProcessSupervisor(catalog, new WindowsCredentialManagerStore());
+            try
+            {
+                await supervisor.StartAsync(Topology);
+                while (!supervisor.IsConnected(_instance)) await Task.Delay(25, token);
+                return supervisor;
+            }
+            catch { await supervisor.DisposeAsync(); throw; }
+        }
+
+        public async Task<AdapterDirectoryAdmissionRequest> ReadRequestAsync(AdapterInstanceProcessSupervisor supervisor, CancellationToken token)
+        {
+            var operations = new List<AdapterOriginalDirectoryOperation>();
+            foreach (string path in new[] { "tree/second.txt", "tree/first.txt", "tree" })
+            {
+                string? revision = await supervisor.StatAsync(new(_instance, path, "docs"), token);
+                Assert.IsNotNull(revision);
+                operations.Add(new("Delete", new(Guid.NewGuid(), "docs", path, Preconditions: new(revision), IsDirectory: path == "tree")));
+            }
+            var request = new AdapterDirectoryAdmissionRequest(1, _instance.Value, Guid.NewGuid(), operations, string.Empty);
+            return request with { RequestFingerprint = request.CalculateFingerprint() };
+        }
+
+        public void Dispose()
+        {
+            string directory = Path.GetFullPath(_directory);
+            if (!SourceDirectoryPathNormalizer.IsWithin(Path.Combine(Path.GetTempPath(), "MirrorPulse-tests"), directory))
+                throw new InvalidOperationException("The test directory escaped its expected parent.");
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+}

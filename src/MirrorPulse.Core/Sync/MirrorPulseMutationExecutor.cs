@@ -16,9 +16,14 @@ public sealed class MirrorPulseMutationExecutor(MirrorPulseProductCatalog catalo
         ArgumentNullException.ThrowIfNull(verify);
         ArgumentNullException.ThrowIfNull(acknowledge);
         if (record.State == MirrorPulseMutationState.Acknowledged) return;
+        if (record.State == MirrorPulseMutationState.Superseded)
+            throw new MirrorPulseMutationAmbiguousException("The original mutation is owned by its durable coalescing plan.");
         if (record.State == MirrorPulseMutationState.Conflict)
             throw new MirrorPulseWorkerMutationConflictException(record.Intent.ExpectedRevision, record.AcceptedRevision);
         if (record.State == MirrorPulseMutationState.Prepared) throw new MirrorPulseMutationAmbiguousException();
+        if (record.Intent.Kind is (MirrorPulseWorkerChangeKind.Delete or MirrorPulseWorkerChangeKind.Move) &&
+            await _catalog.HasTypedDirectoryMutationOwnerAsync(record.Intent.OperationId, cancellationToken).ConfigureAwait(false))
+            throw new MirrorPulseMutationAmbiguousException("The directory mutation requires typed retirement recovery.");
         if (record.State == MirrorPulseMutationState.RemoteAccepted &&
             await _catalog.ReadContentAcceptanceProofAsync(record.Intent.OperationId, cancellationToken).ConfigureAwait(false) is { } retained)
         {
@@ -55,6 +60,14 @@ public sealed class MirrorPulseMutationExecutor(MirrorPulseProductCatalog catalo
         ArgumentNullException.ThrowIfNull(mutate);
         ArgumentNullException.ThrowIfNull(acknowledge);
         MirrorPulseMutationRecord record = await _catalog.PrepareMutationAsync(intent, cancellationToken).ConfigureAwait(false);
+        await ExecutePreparedAsync(record, mutate, acknowledge, cancellationToken).ConfigureAwait(false);
+    }
+
+    internal async ValueTask ExecutePreparedAsync(MirrorPulseMutationRecord record,
+        Func<CancellationToken, ValueTask<string?>> mutate,
+        Func<string?, CancellationToken, ValueTask> acknowledge, CancellationToken cancellationToken)
+    {
+        MirrorPulseMutationIntent intent = record.Intent;
         if (record.State == MirrorPulseMutationState.Acknowledged) return;
         if (record.State != MirrorPulseMutationState.Prepared) throw new MirrorPulseMutationAmbiguousException();
         await _catalog.TransitionMutationAsync(intent.OperationId, record.State, MirrorPulseMutationState.Executing,
@@ -64,7 +77,8 @@ public sealed class MirrorPulseMutationExecutor(MirrorPulseProductCatalog catalo
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
             await _catalog.TransitionMutationAsync(intent.OperationId, MirrorPulseMutationState.Executing,
-                exception is MirrorPulseWorkerMutationConflictException ? MirrorPulseMutationState.Conflict : MirrorPulseMutationState.Ambiguous,
+                exception is MirrorPulseWorkerMutationConflictException ? MirrorPulseMutationState.Conflict :
+                    exception is NotSupportedException ? MirrorPulseMutationState.Prepared : MirrorPulseMutationState.Ambiguous,
                 cancellationToken: cancellationToken).ConfigureAwait(false);
             throw;
         }

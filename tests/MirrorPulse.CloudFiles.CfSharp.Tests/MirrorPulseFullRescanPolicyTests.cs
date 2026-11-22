@@ -1,8 +1,10 @@
 using System.Diagnostics;
+using System.Reflection;
 using System.Runtime.Versioning;
 using System.Security.AccessControl;
 using System.Security.Cryptography;
 using System.Security.Principal;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 using CfSharp;
 using CfSharp.Native;
@@ -19,6 +21,10 @@ namespace MirrorPulse.CloudFiles.CfSharp.Tests;
 [SupportedOSPlatform("windows10.0.19041")]
 public sealed class MirrorPulseFullRescanPolicyTests
 {
+    private static readonly string LoadedCfSharpVersion = typeof(CloudFileSystem).Assembly
+        .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion
+        ?? typeof(CloudFileSystem).Assembly.GetName().Version?.ToString() ?? "unknown";
+
     public TestContext TestContext { get; set; } = null!;
 
     [TestMethod]
@@ -73,24 +79,26 @@ public sealed class MirrorPulseFullRescanPolicyTests
                 if (!signal.RequiresFullRescan) await feed.AcknowledgeAsync(signal.Changes.Select(change => change.OperationId), timeout.Token);
             } while (!signal.RequiresFullRescan);
             await using var catalog = await MirrorPulseProductCatalog.OpenAsync(paths, timeout.Token);
-            async Task RetryRetainedConfirmationAsync(Func<Task> operation)
+            async Task RetryRetainedConfirmationAsync(Func<Task> operation, MirrorPulseProductCatalog? currentCatalog = null)
             {
                 for (int attempt = 1; ; attempt++)
                 {
                     try { await operation(); return; }
                     catch (MirrorPulseMutationAmbiguousException) when (attempt < 4)
                     {
-                        MirrorPulseMutationRecord[] retained = (await catalog.ReadIncompleteMutationsAsync(timeout.Token))
+                        MirrorPulseProductCatalog currentOwner = currentCatalog ?? catalog;
+                        MirrorPulseMutationRecord[] retained = (await currentOwner.ReadIncompleteMutationsAsync(timeout.Token))
                             .Where(record => record.State == MirrorPulseMutationState.RemoteAccepted).ToArray();
                         if (retained.Length == 0) throw;
                         foreach (MirrorPulseMutationRecord record in retained)
                         {
-                            Assert.IsNotNull(await catalog.ReadContentAcceptanceProofAsync(record.Intent.OperationId, timeout.Token));
-                            MirrorPulseContentConfirmationReceipt? receipt = await catalog.ReadContentConfirmationReceiptAsync(record.Intent.OperationId, timeout.Token);
-                            if (receipt is null || receipt.Outcome is not (MirrorPulseContentConfirmationOutcome.Busy or
+                            Assert.IsNotNull(await currentOwner.ReadContentAcceptanceProofAsync(record.Intent.OperationId, timeout.Token));
+                            MirrorPulseContentConfirmationReceipt? receipt = await currentOwner.ReadContentConfirmationReceiptAsync(record.Intent.OperationId, timeout.Token);
+                            if (receipt is null) throw;
+                            ReportConfirmation(receipt, attempt);
+                            if (receipt.Outcome is not (MirrorPulseContentConfirmationOutcome.Busy or
                                 MirrorPulseContentConfirmationOutcome.ProtectionLost or MirrorPulseContentConfirmationOutcome.NativeAppliedProjectionPending)) throw;
                             Assert.IsFalse(receipt.MayAcknowledge);
-                            TestContext.WriteLine($"Rescan confirmation recovery: attempt={attempt}, outcome={receipt.Outcome}, nativeApplied={receipt.NativeApplied}, projected={receipt.DurableProjectionCommitted}.");
                         }
                         await Task.Delay(50, timeout.Token);
                     }
@@ -98,17 +106,31 @@ public sealed class MirrorPulseFullRescanPolicyTests
                     {
                         // Only disposable fixture paths and data exist in this native test.
                         TestContext.WriteLine($"Rescan acceptance failure: {exception}");
+                        MirrorPulseProductCatalog currentOwner = currentCatalog ?? catalog;
+                        foreach (var record in await currentOwner.ReadIncompleteMutationsAsync(timeout.Token))
+                        {
+                            if (record.State != MirrorPulseMutationState.RemoteAccepted) continue;
+                            if (await currentOwner.ReadContentConfirmationReceiptAsync(record.Intent.OperationId, timeout.Token) is { } receipt)
+                                ReportConfirmation(receipt, attempt);
+                        }
                         throw;
                     }
                 }
             }
+            void ReportConfirmation(MirrorPulseContentConfirmationReceipt receipt, int attempt) =>
+                TestContext.WriteLine($"Rescan confirmation recovery: attempt={attempt}, outcome={receipt.Outcome}, " +
+                    $"stage={receipt.Stage}, nativeStage={receipt.NativeStage}, prepared={receipt.NativeIdentityPrepared}, " +
+                    $"nativeApplied={receipt.NativeApplied}, verified={receipt.NativeConfirmationVerified}, projected={receipt.DurableProjectionCommitted}, " +
+                    $"prepareHResult={receipt.PreparationHResult:X8}, markHResult={receipt.NativeMarkHResult:X8}, " +
+                    $"nativeError={receipt.NativeErrorHResult:X8}, projectionError={receipt.ProjectionErrorHResult:X8}, " +
+                    $"bytesVerified={receipt.BytesVerified}, segmentsRead={receipt.SegmentsRead}, observedInSync={receipt.ObservedInSync}.");
             var router = new MirrorPulseRootRouter(paths.SyncRootPath, [first, second]);
             var policy = new MirrorPulseFullRescanPolicy(fileSystem, feed, state, router, catalog, transport, transport,
                 instance => instance == active, transport, transport, transport);
             try { await RetryRetainedConfirmationAsync(() => new MirrorPulseCfSharpFullRescanAdapter(feed, policy.ReconcileAsync).HandleAsync(signal, timeout.Token).AsTask()); }
             catch (CloudFilesException exception)
             {
-                Assert.Fail($"CfSharp 0.1.0-preview.3: {exception.Operation}, HRESULT 0x{exception.HResult:X8}, Win32 {exception.Win32ErrorCode}; {exception}");
+                Assert.Fail($"CfSharp {LoadedCfSharpVersion}: {exception.Operation}, HRESULT 0x{exception.HResult:X8}, Win32 {exception.Win32ErrorCode}; {exception}");
             }
             CollectionAssert.AreEqual(new[] { second.RootId }, (await catalog.ReadDeferredRescanRootsAsync(timeout.Token)).ToArray());
             Assert.AreEqual(1, transport.Uploads.GetValueOrDefault(active));
@@ -128,7 +150,7 @@ public sealed class MirrorPulseFullRescanPolicyTests
             try
             {
                 var interrupted = new MirrorPulseFullRescanRecovery(catalog, policy.ReconcileAsync,
-                    feed.AcknowledgeFullRescanAsync, _ => ValueTask.CompletedTask);
+                    feed.AcknowledgeFullRescanAsync, (_, _) => ValueTask.CompletedTask);
                 bool permissionFailed = false;
                 try { await interrupted.RunAsync(new(true), timeout.Token); }
                 catch (UnauthorizedAccessException) { permissionFailed = true; }
@@ -143,7 +165,7 @@ public sealed class MirrorPulseFullRescanPolicyTests
             policy = new(fileSystem, feed, state, new(paths.SyncRootPath, [first, enabledSecond]), catalog, transport, transport,
                 _ => true, transport, transport, transport);
             var ackGap = new MirrorPulseFullRescanRecovery(catalog, policy.ReconcileAsync, feed.AcknowledgeFullRescanAsync,
-                _ => throw new IOException("Projection failed after native rescan acknowledgement."));
+                (_, _) => throw new IOException("Projection failed after native rescan acknowledgement."));
             await Assert.ThrowsExactlyAsync<IOException>(() => RetryRetainedConfirmationAsync(() => ackGap.RunAsync(new(false), timeout.Token).AsTask()));
             Assert.AreEqual(MirrorPulseFullRescanPhase.Acknowledging, (await catalog.ReadFullRescanAsync(timeout.Token))!.Phase);
             Assert.AreEqual(1, transport.Uploads[active]);
@@ -163,7 +185,12 @@ public sealed class MirrorPulseFullRescanPolicyTests
             policy = new(restarted, restartedFeed, restartedState, new(paths.SyncRootPath, [first, enabledSecond]), reopenedCatalog,
                 transport, transport, _ => true, transport, transport, transport);
             var recovered = new MirrorPulseFullRescanRecovery(reopenedCatalog, policy.ReconcileAsync, restartedFeed.AcknowledgeFullRescanAsync,
-                async token => await reopenedCatalog.CompleteRootRescanAsync(second.RootId, token));
+                async (generation, token) =>
+                {
+                    MirrorPulseRootRescanRequest request = (await reopenedCatalog.ReadCapturedRootRescanRequestsAsync(generation, token)).Single();
+                    Assert.AreEqual(second.RootId, request.RootId);
+                    Assert.IsTrue(await reopenedCatalog.CompleteRootRescanAsync(request.RootId, request.Generation, token));
+                });
             Assert.IsTrue((await recovered.RunAsync(new(false), timeout.Token)).WasRequired);
             Assert.IsNull(await reopenedCatalog.ReadFullRescanAsync(timeout.Token));
             Assert.IsEmpty(await reopenedCatalog.ReadDeferredRescanRootsAsync(timeout.Token));
@@ -172,12 +199,138 @@ public sealed class MirrorPulseFullRescanPolicyTests
             Assert.AreEqual(1, transport.Deletes);
             await File.WriteAllTextAsync(Path.Combine(paths.SyncRootPath, "Docs", "after.txt"), "after rescan", timeout.Token);
             Assert.IsFalse((await restartedFeed.ReadBatchAsync(timeout.Token)).RequiresFullRescan);
+            await using var admission = new MirrorPulseNamespaceWorkAdmission([first.RootId, second.RootId]);
+            // This content-policy fixture has no strict namespace membership. Inspect its
+            // real root bindings before opening test work admission; no Host readiness is claimed.
+            await using (var initialAdmission = await admission.BeginRecoveryAsync([first.RootId, second.RootId], timeout.Token))
+            {
+                foreach (string rootPath in new[] { "Docs", "Offline" })
+                {
+                    var actual = await restarted.GetDirectory(rootPath).InspectAsync(timeout.Token);
+                    Assert.IsTrue(actual.Exists); Assert.AreEqual(CloudItemKind.Directory, actual.Kind); Assert.IsNotNull(actual.LocalBinding);
+                }
+                initialAdmission.CompleteAfterFreshAudit();
+            }
+            await using var heldRoot = await admission.BeginRecoveryAsync([first.RootId], timeout.Token);
+            await File.WriteAllTextAsync(Path.Combine(paths.SyncRootPath, "Docs", "gated.txt"), "closed root bytes", timeout.Token);
+            await File.WriteAllTextAsync(Path.Combine(paths.SyncRootPath, "Offline", "continued.txt"), "admitted root bytes", timeout.Token);
+            var admittedPolicy = new MirrorPulseFullRescanPolicy(restarted, restartedFeed, restartedState,
+                new(paths.SyncRootPath, [first, enabledSecond]), reopenedCatalog, transport, transport,
+                _ => true, transport, transport, transport, namespaceWork: admission);
+            await RetryRetainedConfirmationAsync(() => admittedPolicy.ReconcileAsync(timeout.Token).AsTask(), reopenedCatalog);
+            Assert.AreEqual(1, transport.Uploads[active]); Assert.AreEqual(2, transport.Uploads[offline]);
+            Assert.IsFalse(File.Exists(transport.PathFor(active, "gated.txt")));
+            Assert.AreEqual("admitted root bytes", await File.ReadAllTextAsync(transport.PathFor(offline, "continued.txt"), timeout.Token));
+            Assert.AreEqual("closed root bytes", await File.ReadAllTextAsync(Path.Combine(paths.SyncRootPath, "Docs", "gated.txt"), timeout.Token));
+            CollectionAssert.AreEqual(new[] { first.RootId }, (await reopenedCatalog.ReadDeferredRescanRootsAsync(timeout.Token)).ToArray());
+            Assert.IsFalse(admission.IsAdmitted(first.RootId));
+            TestContext.WriteLine("RescanWorkAdmission: currentNativeBindings=True; closedRootDeferred=True; closedRootBytesPreserved=True; otherRootActuallyUploaded=True; stableRootIds=True; completeOriginalAclAndRestartAssertionsRetained=True; strictHostReady=False.");
+            await VerifyRetiredPathSuccessorAsync(restarted, restartedFeed, restartedState, reopenedCatalog, paths, transport,
+                RetryRetainedConfirmationAsync, timeout.Token);
+            TestContext.WriteLine("RescanRetiredGenerations: actualSourceDelete=True; actualOriginalSdkAck=True; " +
+                "duplicateDeletePrevented=True; laterBackendBytesPreserved=True; originalSdkTombstoneUnchanged=True; " +
+                "newPhysicalObjectAcceptedWithoutHistoricalBaseline=True; originalGenuineDeleteAndDeadlineRetained=True.");
         }
         finally
         {
             registry.Unregister(paths.SyncRootPath);
             Directory.Delete(root, true);
         }
+    }
+
+    private static async Task VerifyRetiredPathSuccessorAsync(CloudFileSystem fileSystem, CloudLocalChangeFeed feed,
+        MirrorPulseCfSharpStateSession state, MirrorPulseProductCatalog catalog, MirrorPulseStoragePaths paths,
+        DiskWorker transport, Func<Func<Task>, MirrorPulseProductCatalog?, Task> retry, CancellationToken token)
+    {
+        InstanceId instance = InstanceId.New();
+        RootRegistration root = AdapterRootRegistrationMapper.Map(AdapterId.Parse("example.rescan"), instance,
+            new AdapterRootDefinition("Generations", "Generations", "Generations", false), RootRegistrationState.Active);
+        Directory.CreateDirectory(Path.Combine(paths.SyncRootPath, "Generations"));
+        var router = new MirrorPulseRootRouter(paths.SyncRootPath, [root]);
+        var completion = new MirrorPulseJournalUploadCompletion(feed, state, new(TimeSpan.FromSeconds(1), TimeSpan.FromMinutes(1)));
+        string oldRemote = transport.PathFor(instance, "retired.txt");
+        Directory.CreateDirectory(Path.GetDirectoryName(oldRemote)!);
+        await File.WriteAllBytesAsync(oldRemote, [], token);
+        string revision = Convert.ToHexString(SHA256.HashData(Array.Empty<byte>()));
+        var acknowledged = new CloudPlaceholderIdentity(Guid.NewGuid(), "acknowledged-generation", revision);
+        await fileSystem.GetDirectory("Generations").CreatePlaceholdersAsync([
+            CloudFilePlaceholderSpec.CreateBuilder("retired.txt", acknowledged, 0).WithInSyncState(true).Build()], cancellationToken: token);
+        File.Delete(Path.Combine(paths.SyncRootPath, "Generations", "retired.txt"));
+        MirrorPulseWorkerChangeCommand? deletion = null;
+        int attempts = 0;
+        while (deletion is null)
+        {
+            var scan = await feed.BeginScanAsync(token);
+            long after = 0;
+            var observed = new List<string>();
+            while (true)
+            {
+                var page = await feed.ReadPageAsync(scan, after, 256, token);
+                foreach (var change in page.Changes.Where(change => change.RelativePath.Replace('\\', '/') == "Generations/retired.txt"))
+                {
+                    observed.Add($"{change.Kind}/{change.ItemId}");
+                    if (change.Kind == CloudLocalChangeKind.Delete)
+                        deletion = new(change.OperationId, change.Sequence, instance, root.UniquenessKey, MirrorPulseWorkerChangeKind.Delete,
+                            "retired.txt", null, null, false, change.ItemId, change.ObservedAt);
+                }
+                if (!page.HasMore) break;
+                after = page.LastScannedSequence;
+            }
+            if (++attempts > 200)
+                Assert.Fail($"The public feed has no real original Delete: fullRescan={scan.RequiresFullRescan}, observed={string.Join(',', observed)}.");
+            if (deletion is null) await Task.Delay(20, token);
+        }
+        Assert.AreEqual(acknowledged.ItemId, deletion.ItemId, "The real original Delete must identify the exact retired object.");
+        var deletionIntent = new MirrorPulseMutationIntent(deletion.OperationId, instance, root.UniquenessKey,
+            deletion.Kind, deletion.RelativePath, null, false, revision, null, null, MirrorPulseMutationOrigin.Journal)
+        { JournalItemId = deletion.ItemId };
+        await new MirrorPulseMutationExecutor(catalog).ExecuteAsync(deletionIntent,
+            stop => transport.DeleteAsync(new(instance, deletion.RelativePath, revision, false, deletion.OperationId, root.UniquenessKey), stop),
+            (_, stop) => completion.AcknowledgeSuccessfulUploadAsync(deletion.OperationId, null, stop), token);
+        CloudItemState tombstone;
+        await using (var transaction = await state.OpenStore.BeginTransactionAsync(token))
+        {
+            tombstone = (await transaction.Items.GetByItemIdAsync(acknowledged.ItemId, token))!;
+            Assert.IsTrue(tombstone.IsTombstone);
+            Assert.IsNull(await transaction.Operations.GetAsync(deletion.OperationId, token), "The original public ACK must really commit.");
+            await transaction.RollbackAsync(token);
+        }
+        int completedDeletes = transport.Deletes;
+        var policy = new MirrorPulseFullRescanPolicy(fileSystem, feed, state, router, catalog,
+            transport, transport, _ => true, transport, transport, transport);
+        await retry(() => policy.ReconcileAsync(token).AsTask(), catalog);
+        Assert.AreEqual(completedDeletes, transport.Deletes, "An exact source-accepted and SDK-acknowledged deletion must not run twice.");
+        await File.WriteAllTextAsync(oldRemote, "later independent bytes", token);
+        await retry(() => policy.ReconcileAsync(token).AsTask(), catalog);
+        Assert.AreEqual("later independent bytes", await File.ReadAllTextAsync(oldRemote, token));
+        Assert.AreEqual(completedDeletes, transport.Deletes);
+        await using (var transaction = await state.OpenStore.BeginTransactionAsync(token))
+        {
+            Assert.AreEqual(JsonSerializer.Serialize(tombstone),
+                JsonSerializer.Serialize(await transaction.Items.GetByItemIdAsync(acknowledged.ItemId, token)));
+            await transaction.RollbackAsync(token);
+        }
+        var retired = new CloudPlaceholderIdentity(Guid.NewGuid(), "old-generation", "old-v1");
+        await fileSystem.GetDirectory("Generations").CreatePlaceholdersAsync([
+            CloudFilePlaceholderSpec.CreateBuilder("same.txt", retired, 0).WithInSyncState(true).Build()], cancellationToken: token);
+        CloudFile file = fileSystem.GetFile("Generations/same.txt");
+        var original = await file.InspectAsync(token);
+        await file.DeleteAsync(token);
+        await File.WriteAllTextAsync(file.FullPath, "new generation bytes", token);
+        file = fileSystem.GetFile("Generations/same.txt");
+        var successor = await file.InspectAsync(token);
+        Assert.IsTrue(successor.Exists); Assert.IsFalse(successor.IsPlaceholder);
+        Assert.AreNotEqual(original.LocalBinding, successor.LocalBinding);
+        int originalDeletes = transport.Deletes;
+        await retry(() => policy.ReconcileAsync(token).AsTask(), catalog);
+        Assert.AreEqual(1, transport.Uploads.GetValueOrDefault(instance), "A new generation cannot borrow a retired source revision.");
+        Assert.AreEqual(originalDeletes, transport.Deletes);
+        Assert.AreEqual("new generation bytes", await File.ReadAllTextAsync(transport.PathFor(instance, "same.txt"), token));
+        var accepted = await file.InspectAsync(token);
+        Assert.AreEqual(successor.LocalBinding, accepted.LocalBinding);
+        Assert.AreNotEqual(retired.ItemId, CloudPlaceholderIdentity.Decode(accepted.PlaceholderIdentity.Span).ItemId);
+        Assert.AreEqual(CloudSynchronizationState.InSync, accepted.SynchronizationState);
+        Assert.IsEmpty((await catalog.ReadIncompleteMutationsAsync(token)).Where(record => record.Intent.InstanceId == instance));
     }
 
     private async Task ReportCoordinationUsnsAsync(CloudFileSystem fileSystem, string syncRoot, CancellationToken token)
@@ -195,7 +348,7 @@ public sealed class MirrorPulseFullRescanPolicyTests
         CloudPlaceholderMutationResult patched = await file.UpdatePlaceholderAsync(CloudPlaceholderPatch.CreateBuilder()
             .WithMetadata(CloudPlaceholderMetadata.CreateFileBuilder().WithLastWriteTime(DateTimeOffset.UtcNow.AddMinutes(-1)).Build())
             .WithInSyncState(false).Build(), token);
-        TestContext.WriteLine($"CfSharp 0.1.0-preview.3 coordination USNs: convert={converted.OperationUsn}, clear={cleared.OperationUsn}, mark={marked.OperationUsn}, changed={changed.OperationUsn}, metadata={patched.OperationUsn}; OS={Environment.OSVersion.Version}.");
+        TestContext.WriteLine($"CfSharp {LoadedCfSharpVersion} coordination USNs: convert={converted.OperationUsn}, clear={cleared.OperationUsn}, mark={marked.OperationUsn}, changed={changed.OperationUsn}, metadata={patched.OperationUsn}; OS={Environment.OSVersion.Version}.");
         string path = Path.Combine(syncRoot, name);
         var native = SetNativeOutOfSync(path);
         TestContext.WriteLine($"CfSharp.Native direct coordination: HRESULT=0x{native.HResult:X8}, USN={native.Usn}.");

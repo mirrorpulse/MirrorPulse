@@ -8,10 +8,15 @@ param(
     [string]$AdapterDirectory,
     [string]$AdapterReleaseLockPath,
     [string]$IntegrationPath,
+    [string]$TransferIntegrationPath,
+    [string]$CrossPackageTransferIntegrationPath,
     [string]$InstalledPath,
     [string]$RejectedPath,
+    [string]$NamespaceNonAdminPath,
     [switch]$RequireNative,
-    [switch]$RequireInstalled
+    [switch]$RequireNamespace,
+    [switch]$RequireInstalled,
+    [switch]$RequireInstalledShell
 )
 
 $ErrorActionPreference = "Stop"
@@ -25,9 +30,13 @@ if ($env:GITHUB_SHA) {
 $suites = @()
 foreach ($path in $TestManifests) {
     $test = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json
-    if ($test.schemaVersion -ne 1 -or $test.suite -notin @("managed", "native", "official", "signed", "packaged") -or
+    if ($test.schemaVersion -ne 1 -or $test.suite -notin @("managed", "native", "official", "signed", "packaged", "namespace") -or
         $test.executed -le 0 -or $test.skipped -lt 0 -or $test.selected -ne ($test.executed + $test.skipped)) {
         throw "A test evidence manifest has invalid execution counts."
+    }
+    if ($test.suite -ceq 'namespace') {
+        . (Join-Path $PSScriptRoot 'namespace-evidence-policy.ps1')
+        Assert-NamespaceTestExecution $test (Get-Content -LiteralPath (Join-Path $PSScriptRoot 'test-suites.json') -Raw | ConvertFrom-Json)
     }
     $categories = @($test.categories | ForEach-Object {
         if ($_.category -notin @("managed", "native", "official", "signed", "packaged") -or
@@ -38,19 +47,22 @@ foreach ($path in $TestManifests) {
     })
     if (($categories | Measure-Object selected -Sum).Sum -ne $test.selected -or
         ($categories | Measure-Object executed -Sum).Sum -ne $test.executed) { throw "Test category totals do not match." }
-    $suites += [pscustomobject][ordered]@{suite=$test.suite;selected=[int]$test.selected;executed=[int]$test.executed;skipped=[int]$test.skipped;categories=$categories}
+    $suite = [ordered]@{suite=$test.suite;selected=[int]$test.selected;executed=[int]$test.executed;skipped=[int]$test.skipped;categories=$categories}
+    if ($test.suite -cin @('native', 'namespace')) { $suite.results = @($test.results) }
+    $suites += [pscustomobject]$suite
 }
 if (@($suites.suite | Select-Object -Unique).Count -ne $suites.Count) { throw "Duplicate test suites cannot be counted twice." }
 $requiredSuite = switch ($Job) { "build-and-test" { "managed" }; "official-package-arm64" { "signed" }; "official-adapters" { "official" } }
 if ($suites.suite -notcontains $requiredSuite) { throw "The job's required test suite is missing." }
+if ($RequireNamespace -and ($Job -cne 'official-package-arm64' -or $suites.suite -notcontains 'namespace')) {
+    throw 'Dedicated ARM64 namespace verification is missing.'
+}
 if ($RequireNative) {
+    . (Join-Path $PSScriptRoot 'test-execution-policy.ps1')
     $suiteCatalog = Get-Content -LiteralPath (Join-Path $PSScriptRoot "test-suites.json") -Raw | ConvertFrom-Json
-    $requiredNativeCount = @($suiteCatalog.required.native).Count
     $native = @($suites | Where-Object suite -eq "native")
-    if ($requiredNativeCount -le 0 -or $native.Count -ne 1 -or $native[0].skipped -ne 0 -or
-        @($native[0].categories | Where-Object { $_.category -eq "native" -and $_.executed -eq $requiredNativeCount }).Count -ne 1) {
-        throw "The dedicated native suite did not execute all required native tests."
-    }
+    if ($native.Count -ne 1) { throw 'The dedicated native suite is missing or repeated.' }
+    Assert-NativeTestExecution -Evidence $native[0] -Catalog $suiteCatalog
 }
 $artifacts = @()
 function Add-Artifact([string]$Root, [string]$RelativePath, [string]$Prefix, [string]$ExpectedHash, [long]$ExpectedLength) {
@@ -89,15 +101,44 @@ if ($AdapterReleaseLockPath) {
 }
 if ($artifacts.Count -eq 0) { throw "No artifact hashes were verified." }
 $checks = @()
+if ($NamespaceNonAdminPath) {
+    if ($Job -cne 'official-package-arm64') { throw 'The ordinary-user namespace gate belongs to the ARM64 job.' }
+    $ordinary = Get-Content -LiteralPath $NamespaceNonAdminPath -Raw | ConvertFrom-Json
+    . (Join-Path $PSScriptRoot 'namespace-nonadmin-evidence-policy.ps1')
+    Assert-OrdinaryUserNamespaceEvidence $ordinary (Get-Content -LiteralPath (Join-Path $PSScriptRoot 'test-suites.json') -Raw | ConvertFrom-Json) 'Arm64'
+    if ($ordinary.sourceSha -cne $sourceSha) { throw 'The ordinary-user evidence describes another source commit.' }
+    $ordinaryRoot = [IO.Path]::GetDirectoryName([IO.Path]::GetFullPath($NamespaceNonAdminPath))
+    foreach ($item in @(@{path='context.json';hash=$ordinary.contextSha256}, @{path='namespace.trx';hash=$ordinary.trxSha256})) {
+        $original = Get-Item -LiteralPath (Join-Path $ordinaryRoot $item.path)
+        $artifacts += Add-Artifact $ordinaryRoot $item.path 'namespace-nonadmin' $item.hash $original.Length
+    }
+    $checks += [ordered]@{name='namespace-nonadmin';executed=$true;observations=$ordinary}
+}
 if ($IntegrationPath) {
     $integration = Get-Content -LiteralPath $IntegrationPath -Raw | ConvertFrom-Json
-    if ($integration.schemaVersion -ne 1 -or $integration.runtime -ne $Runtime -or $integration.regression -ne $true -or
-        $integration.rangeRead -ne $true -or $integration.offlineQueueRetained -ne $true -or
-        $integration.uploadJournalDrained -ne $true -or $integration.conflictPersisted -ne $true -or $integration.cursorPersisted -ne $true) {
+    if ($integration.schemaVersion -ne 2 -or $integration.runtime -ne $Runtime -or $integration.regression -ne $true) {
         throw "The CLI regression verification is incomplete."
     }
-    $checks += [ordered]@{name="signed-local-cli-regression";executed=$true;rangeRead=$true;offlineQueueRetained=$true;uploadJournalDrained=$true;conflictPersisted=$true;cursorPersisted=$true}
+    . (Join-Path $PSScriptRoot 'cli-regression-evidence-policy.ps1')
+    Assert-CliRegressionObservations $integration
+    $checks += [ordered]@{name="signed-local-cli-regression";executed=$true;rangeRead=$true;offlineQueueRetained=$true;uploadJournalDrained=$true;conflictPersisted=$true;cursorPersisted=$true;hydration=$integration.hydration;namespace=$integration.namespace}
 } elseif ($Job -eq "official-package-arm64") { throw "The signed Local CLI regression evidence is missing." }
+if ($TransferIntegrationPath) {
+    $transfers = Get-Content -LiteralPath $TransferIntegrationPath -Raw | ConvertFrom-Json
+    if ($transfers.runtime -cne $Runtime -or $transfers.sourceSha -cne $sourceSha) { throw 'The signed CLI transfer evidence belongs to another source or runtime.' }
+    . (Join-Path $PSScriptRoot 'cli-transfer-evidence-policy.ps1')
+    Assert-CliTransferObservations $transfers -RequireSingleRoot -RequireDirectory -RequirePreparedRestart
+    $checks += [ordered]@{name='signed-local-cli-transfers';executed=$true;observations=$transfers}
+}
+if ($CrossPackageTransferIntegrationPath) {
+    $transfers = Get-Content -LiteralPath $CrossPackageTransferIntegrationPath -Raw | ConvertFrom-Json
+    if ($transfers.schemaVersion -ne 3 -or $transfers.runtime -cne $Runtime -or $transfers.sourceSha -cne $sourceSha) {
+        throw 'The signed cross-package transfer evidence belongs to another source or runtime.'
+    }
+    . (Join-Path $PSScriptRoot 'cli-transfer-evidence-policy.ps1')
+    Assert-CliTransferObservations $transfers -RequireSingleRoot -RequirePreparedRestart
+    $checks += [ordered]@{name='signed-cross-package-cli-transfers';executed=$true;observations=$transfers}
+}
 if ($InstalledPath) {
     $installed = Get-Content -LiteralPath $InstalledPath -Raw | ConvertFrom-Json
     if ($installed.schemaVersion -ne 1 -or $installed.runtime -ne $Runtime -or $installed.installedIdentity -ne $true -or
@@ -108,8 +149,14 @@ if ($InstalledPath) {
         [version]$installed.osVersion -lt [version]'10.0.26100.0' -or $installed.minimumVersion -ne '10.0.26100.0') {
         throw "The installed MSIX evidence is incomplete or is not from a supported desktop build."
     }
-    $checks += [ordered]@{name="installed-msix";executed=$true;packageSha256=$installed.packageSha256;installedIdentity=$true;cliAlias=$true;hostAutoStart=$true;uninstalled=$true;cloudFilesExtension=$true;adapterAssociation=$true;shellRegistration=($installed.shellRegistration -eq $true);osVersion=$installed.osVersion;osProductType=1;minimumVersion=$installed.minimumVersion}
-} elseif ($RequireInstalled) { throw "The installed MSIX evidence is missing." }
+    $shellRegistered = $installed.shellRegistration -is [bool] -and $installed.shellRegistration
+    $shellEntryPointVerified = $installed.shellEntryPointVerified -is [bool] -and $installed.shellEntryPointVerified
+    if ($RequireInstalledShell -and (-not $shellRegistered -or -not $shellEntryPointVerified -or
+        $installed.sourceSha -cne $sourceSha -or ($env:GITHUB_RUN_ID -and $installed.runId -cne $env:GITHUB_RUN_ID))) {
+        throw "The installed Shell registration and entry-point proof must come from this source and workflow run."
+    }
+    $checks += [ordered]@{name="installed-msix";executed=$true;packageSha256=$installed.packageSha256;installedIdentity=$true;cliAlias=$true;hostAutoStart=$true;uninstalled=$true;cloudFilesExtension=$true;adapterAssociation=$true;shellRegistration=$shellRegistered;shellEntryPointVerified=$shellEntryPointVerified;osVersion=$installed.osVersion;osProductType=1;minimumVersion=$installed.minimumVersion}
+} elseif ($RequireInstalled -or $RequireInstalledShell) { throw "The installed MSIX evidence is missing." }
 if ($RejectedPath) {
     $rejected = Get-Content -LiteralPath $RejectedPath -Raw | ConvertFrom-Json
     if ($rejected.schemaVersion -ne 1 -or $rejected.runtime -ne $Runtime -or $rejected.osProductType -notin @(2,3) -or
@@ -121,5 +168,5 @@ if ($RejectedPath) {
     schemaVersion=1;sourceSha=$sourceSha;job=$Job;runtime=$Runtime
     officialAdapterCandidateSha256=$candidateHash
     tests=$suites;checks=$checks;artifacts=$artifacts
-} | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $OutputPath -Encoding utf8
+} | ConvertTo-Json -Depth 16 -WarningAction Stop | Set-Content -LiteralPath $OutputPath -Encoding utf8
 Write-Output "Saved verified $Job evidence for $sourceSha ($Runtime)."

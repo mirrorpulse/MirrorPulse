@@ -51,7 +51,7 @@ public static class MirrorPulseCliHostPathResolver
     }
 }
 
-public sealed class MirrorPulseCliHostOperations : IMirrorPulseCliHostOperations,
+public sealed partial class MirrorPulseCliHostOperations : IMirrorPulseCliHostOperations,
     IMirrorPulseCliCommandOperations, IAsyncDisposable
 {
     private readonly MirrorPulseHostStartupCoordinator _startup;
@@ -66,8 +66,11 @@ public sealed class MirrorPulseCliHostOperations : IMirrorPulseCliHostOperations
         });
     }
 
-    public Task EnsureStartedAsync(CancellationToken cancellationToken) =>
-        _startup.EnsureStartedAsync(cancellationToken);
+    public async Task EnsureStartedAsync(CancellationToken cancellationToken)
+    {
+        await _startup.EnsureStartedAsync(cancellationToken).ConfigureAwait(false);
+        _ = await _client.WaitForHostReadyAsync(cancellationToken).ConfigureAwait(false);
+    }
 
     public async Task<int> RunHostCommandAsync(
         string action,
@@ -214,6 +217,389 @@ public sealed class MirrorPulseCliHostOperations : IMirrorPulseCliHostOperations
                         .ConfigureAwait(false);
                     human = FormatTopology((MirrorPulseControlTopology)result);
                     break;
+                case ("root", "list"):
+                    if (command.Arguments.Count != 0) throw new ArgumentException("root list does not accept command arguments.");
+                    IReadOnlyList<MirrorPulseControlRootStatus> roots = await _client.GetRootsAsync(cancellationToken).ConfigureAwait(false);
+                    result = roots;
+                    human = roots.Count == 0 ? "No managed roots are configured." : string.Join(Environment.NewLine,
+                        roots.Select(root => $"{root.Root.Label} · {root.SyncState} · {root.Root.RootId}" +
+                            (root.PendingRename is { } pending ? $" · {pending.SourceName} -> {pending.TargetName} ({pending.Phase}) · {pending.OperationId}" : string.Empty) +
+                            (root.NamespaceReady == false ? $" · {root.NamespaceRecoveryCode ?? "NamespaceRecoveryRequired"}" +
+                                (root.NamespaceRecoveryOperationId is { } recoveryOperation ? $" · {recoveryOperation:D}" : string.Empty) : string.Empty)));
+                    break;
+                case ("root", "prepare-rename"):
+                    if (command.Arguments.Count != 2 || !Guid.TryParse(command.Arguments[0], out Guid rootId) || rootId == Guid.Empty)
+                        throw new ArgumentException("root prepare-rename requires a root ID and one Label.");
+                    var rootRename = await _client.PrepareRootRenameAsync(rootId, command.Arguments[1], cancellationToken).ConfigureAwait(false);
+                    result = rootRename;
+                    human = $"Root Label rename prepared · {rootRename.OperationId} · {rootRename.SourceName} -> {rootRename.TargetName}";
+                    break;
+                case ("namespace", "member") when command.Path.Count > 2 &&
+                    command.Path[2].Equals("inspect", StringComparison.OrdinalIgnoreCase):
+                    if (command.Arguments.Count is < 1 or > 2 ||
+                        command.Arguments.Count == 2 && !command.Arguments[1].Equals("--directory", StringComparison.OrdinalIgnoreCase))
+                        throw new ArgumentException("namespace member inspect requires a relative path and optional --directory.");
+                    var inspection = await _client.InspectNamespaceMemberAsync(command.Arguments[0],
+                        command.Arguments.Count == 2, cancellationToken).ConfigureAwait(false);
+                    result = inspection;
+                    human = $"Member {inspection.MemberId:D} · {inspection.RelativePath} · parent {inspection.ActualParentMemberId:D}";
+                    break;
+                case ("namespace", "member") when command.Path.Count > 2 &&
+                    command.Path[2].Equals("tree", StringComparison.OrdinalIgnoreCase):
+                    if (command.Arguments.Count != 1 || !Guid.TryParse(command.Arguments[0], out Guid treeMember) || treeMember == Guid.Empty)
+                        throw new ArgumentException("namespace member tree requires one non-empty member ID.");
+                    var tree = await _client.GetNamespaceMemberTreeAsync(treeMember, cancellationToken).ConfigureAwait(false);
+                    result = tree;
+                    human = $"Member subtree {tree.Count} entr{(tree.Count == 1 ? "y" : "ies")}";
+                    break;
+                case ("namespace", "member") when command.Path.Count > 2 &&
+                    command.Path[2].Equals("prepare-move", StringComparison.OrdinalIgnoreCase):
+                    if (command.Arguments.Count is not (3 or 5) ||
+                        !Guid.TryParse(command.Arguments[0], out Guid sourceMember) || sourceMember == Guid.Empty ||
+                        !Guid.TryParse(command.Arguments[1], out Guid targetParent) || targetParent == Guid.Empty ||
+                        string.IsNullOrWhiteSpace(command.Arguments[2]) || command.Arguments[2].Contains('/') || command.Arguments[2].Contains('\\'))
+                        throw new ArgumentException("namespace member prepare-move requires member ID, parent ID and one child name, with optional --operation-id GUID.");
+                    Guid prepareOperation = Guid.NewGuid();
+                    if (command.Arguments.Count == 5 &&
+                        (!command.Arguments[3].Equals("--operation-id", StringComparison.OrdinalIgnoreCase) ||
+                        !Guid.TryParse(command.Arguments[4], out prepareOperation) || prepareOperation == Guid.Empty))
+                        throw new ArgumentException("--operation-id requires a non-empty GUID.");
+                    var preparation = await _client.PrepareNamespaceMemberMoveAsync(prepareOperation, sourceMember,
+                        targetParent, command.Arguments[2], cancellationToken).ConfigureAwait(false);
+                    result = preparation;
+                    human = $"Member move prepared · {preparation.OperationId:D} · {preparation.SourceRelativePath} -> {preparation.TargetRelativePath}";
+                    break;
+                case ("namespace", "member") when command.Path.Count > 2 &&
+                    command.Path[2].Equals("move", StringComparison.OrdinalIgnoreCase):
+                    if (command.Arguments.Count != 1 || !Guid.TryParse(command.Arguments[0], out Guid moveOperation) || moveOperation == Guid.Empty)
+                        throw new ArgumentException("namespace member move requires one non-empty operation ID.");
+                    MirrorPulseControlNamespaceMemberMoveResult move = await _client.ExecuteNamespaceMemberMoveAsync(
+                        moveOperation, cancellationToken).ConfigureAwait(false);
+                    result = move;
+                    human = $"Member move committed · {move.OperationId:D} · {move.RelativePath}" +
+                        (move.RequiresSubtreeReconciliation ? " · subtree reconciliation pending" : string.Empty);
+                    break;
+                case ("namespace", "transfer") when command.Path.Count > 2 &&
+                    (command.Path[2].Equals("prepare", StringComparison.OrdinalIgnoreCase) || command.Path[2].Equals("move", StringComparison.OrdinalIgnoreCase)):
+                    var (transferId, transferSource, transferParent, transferName) = MirrorPulseTransferCliArguments.ParsePlacement(command.Arguments);
+                    var placement = await (command.Path[2].Equals("prepare", StringComparison.OrdinalIgnoreCase)
+                        ? _client.PrepareNamespaceTransferAsync(transferId, transferSource, transferParent, transferName, cancellationToken)
+                        : _client.MoveNamespaceTransferAsync(transferId, transferSource, transferParent, transferName, cancellationToken)).ConfigureAwait(false);
+                    result = placement; human = MirrorPulseTransferCliArguments.Format(placement);
+                    break;
+                case ("namespace", "transfer") when command.Path.Count > 2 && command.Path[2].Equals("resume", StringComparison.OrdinalIgnoreCase):
+                    var resumedTransfer = await _client.ResumeNamespaceTransferAsync(MirrorPulseTransferCliArguments.ParseId(command.Arguments, "operation"),
+                        cancellationToken).ConfigureAwait(false);
+                    result = resumedTransfer; human = MirrorPulseTransferCliArguments.Format(resumedTransfer);
+                    break;
+                case ("namespace", "transfer") when command.Path.Count > 2 && command.Path[2].Equals("status", StringComparison.OrdinalIgnoreCase):
+                    Guid transferOperation = MirrorPulseTransferCliArguments.ParseId(command.Arguments, "operation");
+                    var transferStatus = await _client.GetNamespaceTransferStatusAsync(transferOperation, cancellationToken).ConfigureAwait(false);
+                    result = transferStatus; human = MirrorPulseTransferCliArguments.Format(transferStatus);
+                    break;
+                case ("namespace", "transfer") when command.Path.Count > 2 && command.Path[2].Equals("list", StringComparison.OrdinalIgnoreCase):
+                    Guid transferRoot = MirrorPulseTransferCliArguments.ParseId(command.Arguments, "root");
+                    var transfers = await _client.GetNamespaceTransfersAsync(transferRoot, cancellationToken).ConfigureAwait(false);
+                    result = transfers; human = transfers.Entries.Count == 0 ? "No pending transfers." :
+                        string.Join(Environment.NewLine, transfers.Entries.Select(MirrorPulseTransferCliArguments.Format));
+                    break;
+                case ("namespace", "remote") when command.Path.Count > 2 &&
+                    (command.Path[2].Equals("delete-status", StringComparison.OrdinalIgnoreCase) ||
+                    command.Path[2].Equals("recover-delete", StringComparison.OrdinalIgnoreCase)):
+                    Guid deleteCommand = MirrorPulseRemoteDeleteCliArguments.ParseCommand(command.Arguments);
+                    var deleteStatus = command.Path[2].Equals("recover-delete", StringComparison.OrdinalIgnoreCase)
+                        ? await _client.RecoverNamespaceRemoteDeleteAsync(deleteCommand, cancellationToken).ConfigureAwait(false)
+                        : await _client.GetNamespaceRemoteDeleteStatusAsync(deleteCommand, cancellationToken).ConfigureAwait(false);
+                    result = deleteStatus; human = MirrorPulseRemoteDeleteCliArguments.Format(deleteStatus);
+                    break;
+                case ("namespace", "remote") when command.Path.Count > 2 &&
+                    (command.Path[2].Equals("update-status", StringComparison.OrdinalIgnoreCase) ||
+                    command.Path[2].Equals("recover-update", StringComparison.OrdinalIgnoreCase)):
+                    Guid updateOperation = MirrorPulseRemoteUpdateCliArguments.ParseId(command.Arguments, "operation");
+                    var updateStatus = command.Path[2].Equals("recover-update", StringComparison.OrdinalIgnoreCase)
+                        ? await _client.RecoverNamespaceRemoteUpdateAsync(updateOperation, cancellationToken).ConfigureAwait(false)
+                        : await _client.GetNamespaceRemoteUpdateStatusAsync(updateOperation, cancellationToken).ConfigureAwait(false);
+                    result = updateStatus; human = MirrorPulseRemoteUpdateCliArguments.Format(updateStatus); break;
+                case ("namespace", "remote") when command.Path.Count > 2 && command.Path[2].Equals("updates", StringComparison.OrdinalIgnoreCase):
+                    Guid updateRoot = MirrorPulseRemoteUpdateCliArguments.ParseId(command.Arguments, "root");
+                    var updates = await _client.GetNamespaceRemoteUpdatesAsync(updateRoot, cancellationToken).ConfigureAwait(false);
+                    result = updates; human = updates.Entries.Count == 0 ? "No pending original remote updates." :
+                        string.Join(Environment.NewLine, updates.Entries.Select(MirrorPulseRemoteUpdateCliArguments.Format));
+                    break;
+                case ("namespace", "remote") when command.Path.Count > 2 &&
+                    command.Path[2].Equals("deletes", StringComparison.OrdinalIgnoreCase):
+                    var deletePageArguments = MirrorPulseRemoteDeleteCliArguments.ParsePage(command.Arguments);
+                    var deletePage = await _client.GetNamespaceRemoteDeletesAsync(deletePageArguments.RootId, deletePageArguments.AfterCommandId,
+                        deletePageArguments.Limit, cancellationToken).ConfigureAwait(false);
+                    result = deletePage; human = deletePage.Entries.Count == 0 ? "No pending explicit Delete commands." :
+                        string.Join(Environment.NewLine, deletePage.Entries.Select(MirrorPulseRemoteDeleteCliArguments.Format));
+                    if (deletePage.NextCommandId is { } nextDelete) human += Environment.NewLine + $"Next command: {nextDelete:D}";
+                    break;
+                case ("namespace", "remote") when command.Path.Count > 2 &&
+                    command.Path[2].Equals("retirement-status", StringComparison.OrdinalIgnoreCase):
+                    if (command.Arguments.Count != 1 || !Guid.TryParse(command.Arguments[0], out Guid remoteStatusOperation) || remoteStatusOperation == Guid.Empty)
+                        throw new ArgumentException("namespace remote retirement-status requires one non-empty operation ID.");
+                    var remoteStatus = await _client.GetNamespaceRemoteRetirementStatusAsync(remoteStatusOperation, cancellationToken).ConfigureAwait(false);
+                    result = remoteStatus; human = MirrorPulseRemoteRetirementCliArguments.FormatStatus(remoteStatus);
+                    break;
+                case ("namespace", "remote") when command.Path.Count > 2 &&
+                    command.Path[2].Equals("retirements", StringComparison.OrdinalIgnoreCase):
+                    var remotePageArguments = MirrorPulseRemoteRetirementCliArguments.ParsePage(command.Arguments);
+                    var remotePage = await _client.GetNamespaceRemoteRetirementsAsync(remotePageArguments.RootId,
+                        remotePageArguments.AfterOperationId, remotePageArguments.Limit, cancellationToken).ConfigureAwait(false);
+                    result = remotePage;
+                    human = remotePage.Entries.Count == 0 ? "No remote directory retirements." :
+                        string.Join(Environment.NewLine, remotePage.Entries.Select(MirrorPulseRemoteRetirementCliArguments.FormatStatus));
+                    if (remotePage.NextOperationId is { } continuation) human += Environment.NewLine + $"Next operation: {continuation:D}";
+                    break;
+                case ("namespace", "member") when command.Path.Count > 2 &&
+                    command.Path[2].Equals("move-status", StringComparison.OrdinalIgnoreCase):
+                    if (command.Arguments.Count != 1 || !Guid.TryParse(command.Arguments[0], out Guid moveStatusOperation) || moveStatusOperation == Guid.Empty)
+                        throw new ArgumentException("namespace member move-status requires one non-empty operation ID.");
+                    var moveStatus = await _client.GetNamespaceMemberMoveStatusAsync(moveStatusOperation, cancellationToken).ConfigureAwait(false);
+                    result = moveStatus;
+                    human = $"Member move {moveStatus.Phase} · {moveStatus.OperationId:D} · {moveStatus.SourceRelativePath} -> {moveStatus.TargetRelativePath}";
+                    break;
+                case ("namespace", "member") when command.Path.Count > 2 &&
+                    command.Path[2].Equals("create", StringComparison.OrdinalIgnoreCase):
+                    if (command.Arguments.Count < 2 || !Guid.TryParse(command.Arguments[0], out Guid createParent) ||
+                        createParent == Guid.Empty || string.IsNullOrWhiteSpace(command.Arguments[1]) ||
+                        command.Arguments[1] is "." or ".." || command.Arguments[1].Contains('/') || command.Arguments[1].Contains('\\'))
+                        throw new ArgumentException("namespace member create requires a parent ID and one child name.");
+                    Guid createOperation = Guid.NewGuid(); bool createDirectory = false; bool operationSpecified = false;
+                    for (int option = 2; option < command.Arguments.Count; option++)
+                    {
+                        string value = command.Arguments[option];
+                        if (value.Equals("--directory", StringComparison.OrdinalIgnoreCase) && !createDirectory) createDirectory = true;
+                        else if (value.Equals("--operation-id", StringComparison.OrdinalIgnoreCase) && !operationSpecified &&
+                            ++option < command.Arguments.Count && Guid.TryParse(command.Arguments[option], out createOperation) && createOperation != Guid.Empty)
+                            operationSpecified = true;
+                        else throw new ArgumentException("Creation accepts --directory and --operation-id GUID once each.");
+                    }
+                    var creation = await _client.CreateNamespaceMemberAsync(createOperation, createParent, command.Arguments[1],
+                        createDirectory, cancellationToken).ConfigureAwait(false);
+                    result = creation;
+                    human = $"Local member created · {creation.OperationId:D} · {creation.RelativePath}";
+                    break;
+                case ("namespace", "member") when command.Path.Count > 2 &&
+                    command.Path[2].Equals("prepare-retire", StringComparison.OrdinalIgnoreCase):
+                    var retireOptions = ParseRetirementOptions(command.Arguments, preparation: true);
+                    var retirementPreparation = await _client.PrepareNamespaceMemberRetirementAsync(retireOptions.OperationId,
+                        retireOptions.Id, retireOptions.Recursive, cancellationToken).ConfigureAwait(false);
+                    result = retirementPreparation;
+                    human = $"Member retirement prepared · {retirementPreparation.OperationId:D} · {retirementPreparation.RelativePath}";
+                    break;
+                case ("namespace", "member") when command.Path.Count > 2 &&
+                    command.Path[2].Equals("retire", StringComparison.OrdinalIgnoreCase):
+                    var retireExecution = ParseRetirementOptions(command.Arguments, preparation: false);
+                    var retirement = await _client.ExecuteNamespaceMemberRetirementAsync(retireExecution.Id,
+                        retireExecution.Recursive, cancellationToken).ConfigureAwait(false);
+                    result = retirement;
+                    human = $"Member retirement {retirement.Phase} · {retirement.OperationId:D} · {retirement.RelativePath}";
+                    break;
+                case ("namespace", "member") when command.Path.Count > 2 &&
+                    command.Path[2].Equals("retirement-status", StringComparison.OrdinalIgnoreCase):
+                    var retirementStatus = ParseRetirementOptions(command.Arguments, preparation: false);
+                    var retirementReceipt = await _client.GetNamespaceMemberRetirementAsync(retirementStatus.Id,
+                        retirementStatus.Recursive, cancellationToken).ConfigureAwait(false);
+                    result = retirementReceipt;
+                    human = $"Member retirement {retirementReceipt.Phase} · {retirementReceipt.OperationId:D} · {retirementReceipt.RelativePath}";
+                    break;
+                case ("namespace", "member") when command.Path.Count > 2 &&
+                    command.Path[2].Equals("prepare-import", StringComparison.OrdinalIgnoreCase):
+                    if (command.Arguments.Count is not (3 or 5) || !Guid.TryParse(command.Arguments[0], out Guid importParent) ||
+                        importParent == Guid.Empty || string.IsNullOrWhiteSpace(command.Arguments[1]) ||
+                        command.Arguments[1] is "." or ".." || command.Arguments[1].Contains('/') || command.Arguments[1].Contains('\\') ||
+                        string.IsNullOrWhiteSpace(command.Arguments[2]))
+                        throw new ArgumentException("namespace member prepare-import requires a parent ID, one child name and a source file path.");
+                    Guid importOperation = Guid.NewGuid();
+                    if (command.Arguments.Count == 5 && (!command.Arguments[3].Equals("--operation-id", StringComparison.OrdinalIgnoreCase) ||
+                        !Guid.TryParse(command.Arguments[4], out importOperation) || importOperation == Guid.Empty))
+                        throw new ArgumentException("Import preparation accepts --operation-id GUID once.");
+                    var import = await _client.PrepareNamespaceImportAsync(importOperation, importParent, command.Arguments[1],
+                        Path.GetFullPath(command.Arguments[2]), cancellationToken).ConfigureAwait(false);
+                    result = import;
+                    human = $"Local import prepared · {import.OperationId:D} · {import.Name} · {import.Length} bytes";
+                    break;
+                case ("namespace", "member") when command.Path.Count > 2 &&
+                    command.Path[2].Equals("prepare-replace", StringComparison.OrdinalIgnoreCase):
+                    if (command.Arguments.Count is not (2 or 4) || !Guid.TryParse(command.Arguments[0], out Guid replaceMember) ||
+                        replaceMember == Guid.Empty || string.IsNullOrWhiteSpace(command.Arguments[1]))
+                        throw new ArgumentException("namespace member prepare-replace requires a member ID and source file path.");
+                    Guid replaceOperation = Guid.NewGuid();
+                    if (command.Arguments.Count == 4 && (!command.Arguments[2].Equals("--operation-id", StringComparison.OrdinalIgnoreCase) ||
+                        !Guid.TryParse(command.Arguments[3], out replaceOperation) || replaceOperation == Guid.Empty))
+                        throw new ArgumentException("Replacement preparation accepts --operation-id GUID once.");
+                    var replacement = await _client.PrepareNamespaceReplacementAsync(replaceOperation, replaceMember,
+                        Path.GetFullPath(command.Arguments[1]), cancellationToken).ConfigureAwait(false);
+                    result = replacement;
+                    human = $"Local replacement prepared · {replacement.OperationId:D} · {replacement.RelativePath} · {replacement.Length} bytes";
+                    break;
+                case ("namespace", "protection") when command.Path.Count > 2 &&
+                    command.Path[2].Equals("captures", StringComparison.OrdinalIgnoreCase):
+                    if (command.Arguments.Count is not (1 or 3) || !Guid.TryParse(command.Arguments[0], out Guid captureRoot) || captureRoot == Guid.Empty)
+                        throw new ArgumentException("namespace protection captures requires a stable root ID and optional --after manifest ID.");
+                    Guid? afterCapture = null;
+                    if (command.Arguments.Count == 3)
+                    {
+                        if (!command.Arguments[1].Equals("--after", StringComparison.OrdinalIgnoreCase) ||
+                            !Guid.TryParse(command.Arguments[2], out Guid cursor) || cursor == Guid.Empty)
+                            throw new ArgumentException("Permission capture paging accepts --after MANIFEST_ID once.");
+                        afterCapture = cursor;
+                    }
+                    var captures = await _client.GetNamespacePermissionCapturesAsync(captureRoot, afterCapture, cancellationToken: cancellationToken).ConfigureAwait(false);
+                    result = captures;
+                    human = captures.Count == 0 ? "No retained permission captures in this page." : string.Join(Environment.NewLine,
+                        captures.Select(tree => $"{tree.ManifestId:D} · {tree.Phase} · {tree.CapturedMembers}/{tree.ExpectedMembers}"));
+                    break;
+                case ("namespace", "protection") when command.Path.Count > 2 &&
+                    command.Path[2].Equals("initializations", StringComparison.OrdinalIgnoreCase):
+                    Guid? afterInitialization = null;
+                    if (command.Arguments.Count != 0)
+                    {
+                        if (command.Arguments.Count != 2 || !command.Arguments[0].Equals("--after", StringComparison.OrdinalIgnoreCase) ||
+                            !Guid.TryParse(command.Arguments[1], out Guid initializationCursor) || initializationCursor == Guid.Empty)
+                            throw new ArgumentException("Initialization discovery accepts --after OPERATION_ID once.");
+                        afterInitialization = initializationCursor;
+                    }
+                    var initializations = await _client.GetNamespaceInitializationsAsync(afterInitialization, cancellationToken: cancellationToken).ConfigureAwait(false);
+                    result = initializations;
+                    human = initializations.Count == 0 ? "No retained initialization attempts in this page." : string.Join(Environment.NewLine,
+                        initializations.Select(attempt => $"{attempt.OperationId:D} · {attempt.Phase} · {attempt.RootIds.Count} roots"));
+                    break;
+                case ("namespace", "protection") when command.Path.Count > 2 &&
+                    (command.Path[2].Equals("initialize", StringComparison.OrdinalIgnoreCase) || command.Path[2].Equals("recover-current", StringComparison.OrdinalIgnoreCase) ||
+                     command.Path[2].Equals("recover-root", StringComparison.OrdinalIgnoreCase)):
+                    bool currentInventory = command.Path[2].Equals("recover-current", StringComparison.OrdinalIgnoreCase);
+                    bool scopedInventory = command.Path[2].Equals("recover-root", StringComparison.OrdinalIgnoreCase);
+                    Guid recoveryRoot = Guid.Empty;
+                    if (scopedInventory && (command.Arguments.Count == 0 ||
+                        !Guid.TryParse(command.Arguments[0], out recoveryRoot) || recoveryRoot == Guid.Empty))
+                        throw new ArgumentException("Selected-root recovery requires one nonempty root ID.");
+                    int optionStart = scopedInventory ? 1 : 0;
+                    Guid initializationId = Guid.NewGuid();
+                    if (command.Arguments.Count != optionStart && (command.Arguments.Count != optionStart + 2 ||
+                        !command.Arguments[optionStart].Equals("--operation-id", StringComparison.OrdinalIgnoreCase) ||
+                        !Guid.TryParse(command.Arguments[optionStart + 1], out initializationId) || initializationId == Guid.Empty))
+                        throw new ArgumentException("Namespace initialization accepts --operation-id GUID once.");
+                    MirrorPulseControlNamespaceInitialization initialized;
+                    try
+                    {
+                        initialized = scopedInventory ? await _client.RecoverNamespaceRootAsync(initializationId, recoveryRoot, cancellationToken).ConfigureAwait(false)
+                            : currentInventory ? await _client.RecoverNamespaceCurrentTreeAsync(initializationId, cancellationToken).ConfigureAwait(false)
+                            : await _client.InitializeNamespaceProtectionAsync(initializationId, cancellationToken).ConfigureAwait(false);
+                    }
+                    catch (MirrorPulseControlException exception)
+                    {
+                        var problem = exception.Error;
+                        throw new MirrorPulseControlException(new(problem.Code,
+                            $"{problem.Message} Initialization operation: {initializationId:D}.", problem.Category,
+                            problem.Retryable, problem.DiagnosticId), exception.RequestId);
+                    }
+                    result = initialized;
+                    human = $"{(scopedInventory ? $"Root {recoveryRoot:D} recovery" : currentInventory ? "Current namespace recovery" : "Original namespace initialization")} {initialized.Phase} · {initialized.OperationId:D} · " +
+                        (initialized.MemberCount is { } auditedCount ? $"{auditedCount} members" : "member count pending");
+                    exitCode = initialized.Phase == "Completed" ? MirrorPulseControlExitCodes.Success : MirrorPulseControlExitCodes.Pending;
+                    break;
+                case ("namespace", "protection") when command.Path.Count > 2 &&
+                    command.Path[2].Equals("initialization-status", StringComparison.OrdinalIgnoreCase):
+                    if (command.Arguments.Count != 1 || !Guid.TryParse(command.Arguments[0], out Guid initializationStatusId) || initializationStatusId == Guid.Empty)
+                        throw new ArgumentException("Namespace initialization status requires one operation ID.");
+                    var initializationStatus = await _client.GetNamespaceInitializationStatusAsync(initializationStatusId, cancellationToken).ConfigureAwait(false);
+                    result = initializationStatus;
+                    human = $"Namespace initialization {initializationStatus.Phase} · {initializationStatus.OperationId:D}";
+                    exitCode = initializationStatus.Phase == "Completed" ? MirrorPulseControlExitCodes.Success : MirrorPulseControlExitCodes.Pending;
+                    break;
+                case ("namespace", "protection") when command.Path.Count > 2 &&
+                    command.Path[2].Equals("recover-tree", StringComparison.OrdinalIgnoreCase):
+                    if (command.Arguments.Count != 1 || !Guid.TryParse(command.Arguments[0], out Guid manifestId) || manifestId == Guid.Empty)
+                        throw new ArgumentException("namespace protection recover-tree requires one sealed original manifest ID.");
+                    var restoredTree = await _client.RecoverNamespaceOriginalTreeAsync(manifestId, cancellationToken).ConfigureAwait(false);
+                    result = restoredTree;
+                    human = $"Original capture {restoredTree.Outcome} · {restoredTree.ManifestId:D} · {restoredTree.CompletedMembers} members";
+                    exitCode = restoredTree.Outcome == "Verified" ? MirrorPulseControlExitCodes.Success : MirrorPulseControlExitCodes.Pending;
+                    break;
+                case ("namespace", "member") when command.Path.Count > 2 &&
+                    (command.Path[2].Equals("replace", StringComparison.OrdinalIgnoreCase) || command.Path[2].Equals("replace-recover", StringComparison.OrdinalIgnoreCase) ||
+                     command.Path[2].Equals("replacement-status", StringComparison.OrdinalIgnoreCase)):
+                    if (command.Arguments.Count != 1 || !Guid.TryParse(command.Arguments[0], out Guid replaceId) || replaceId == Guid.Empty)
+                        throw new ArgumentException("Replacement execution, recovery and status require one non-empty operation ID.");
+                    if (command.Path[2].Equals("replacement-status", StringComparison.OrdinalIgnoreCase))
+                    {
+                        var status = await _client.GetNamespaceReplacementStatusAsync(replaceId, cancellationToken).ConfigureAwait(false);
+                        result = status;
+                        human = $"Local replacement {status.Phase} · {status.OperationId:D} · {status.RelativePath}";
+                        exitCode = status.RequiresRecovery ? MirrorPulseControlExitCodes.Pending : MirrorPulseControlExitCodes.Success;
+                    }
+                    else
+                    {
+                        var saved = await _client.ExecuteNamespaceReplacementAsync(replaceId, cancellationToken).ConfigureAwait(false);
+                        result = saved;
+                        human = $"Local replacement completed · {saved.OperationId:D} · {saved.RelativePath} · rescan requested";
+                    }
+                    break;
+                case ("namespace", "member") when command.Path.Count > 2 &&
+                    (command.Path[2].Equals("import", StringComparison.OrdinalIgnoreCase) || command.Path[2].Equals("import-status", StringComparison.OrdinalIgnoreCase)):
+                    if (command.Arguments.Count != 1 || !Guid.TryParse(command.Arguments[0], out Guid importId) || importId == Guid.Empty)
+                        throw new ArgumentException("Import execution and status require one non-empty operation ID.");
+                    if (command.Path[2].Equals("import-status", StringComparison.OrdinalIgnoreCase))
+                    {
+                        var status = await _client.GetNamespaceImportStatusAsync(importId, cancellationToken).ConfigureAwait(false);
+                        result = status;
+                        human = $"Local import {status.Phase} · {status.OperationId:D} · {status.RelativePath}";
+                        exitCode = status.RequiresRecovery ? MirrorPulseControlExitCodes.Pending : MirrorPulseControlExitCodes.Success;
+                    }
+                    else
+                    {
+                        var imported = await _client.ExecuteNamespaceImportAsync(importId, cancellationToken).ConfigureAwait(false);
+                        result = imported;
+                        human = $"Local file imported · {imported.OperationId:D} · {imported.RelativePath}";
+                    }
+                    break;
+                case ("namespace", "birth") when command.Path.Count > 2 &&
+                    command.Path[2].Equals("recover", StringComparison.OrdinalIgnoreCase):
+                    if (command.Arguments.Count != 1 || !Guid.TryParse(command.Arguments[0], out Guid birthRecoveryId) || birthRecoveryId == Guid.Empty)
+                        throw new ArgumentException("namespace birth recover requires one non-empty recovery action ID.");
+                    var birthRecovery = await _client.ExecuteNamespaceBirthRecoveryAsync(birthRecoveryId, cancellationToken).ConfigureAwait(false);
+                    result = birthRecovery;
+                    human = $"Staged birth recovery {birthRecovery.Outcome} · {birthRecovery.RecoveryId:D} · verification recorded: {birthRecovery.VerificationRecorded}";
+                    exitCode = birthRecovery.VerificationRecorded ? MirrorPulseControlExitCodes.Success : MirrorPulseControlExitCodes.Pending;
+                    break;
+                case ("root", "execute-rename"):
+                    if (command.Arguments.Count != 1 || !Guid.TryParse(command.Arguments[0], out Guid executeRootOperation) || executeRootOperation == Guid.Empty)
+                        throw new ArgumentException("root execute-rename requires one non-empty root rename operation ID.");
+                    var execution = await _client.ExecuteRootRenameAsync(executeRootOperation, cancellationToken).ConfigureAwait(false);
+                    result = execution;
+                    human = $"Root Label {execution.Phase} · {execution.OperationId:D} · {execution.CurrentDirectoryName}";
+                    exitCode = execution.Phase == "Completed" ? MirrorPulseControlExitCodes.Success : MirrorPulseControlExitCodes.Pending;
+                    break;
+                case ("root", "cancel-rename"):
+                    if (command.Arguments.Count != 1 || !Guid.TryParse(command.Arguments[0], out Guid cancelRootOperation) || cancelRootOperation == Guid.Empty)
+                        throw new ArgumentException("root cancel-rename requires one non-empty original root rename operation ID.");
+                    var cancellation = await _client.CancelRootRenameAsync(cancelRootOperation, cancellationToken).ConfigureAwait(false);
+                    result = cancellation;
+                    human = $"Root Label {cancellation.Phase} · {cancellation.OperationId:D} · {cancellation.CurrentDirectoryName}";
+                    exitCode = cancellation.Phase == "Cancelled" ? MirrorPulseControlExitCodes.Success : MirrorPulseControlExitCodes.Pending;
+                    break;
+                case ("root", "recover"):
+                    if (command.Arguments.Count != 1 || !Guid.TryParse(command.Arguments[0], out Guid renameOperation) || renameOperation == Guid.Empty)
+                    {
+                        await MirrorPulseCliOutputFormatter.WriteErrorAsync(MirrorPulseControlExitCodes.Validation,
+                            MirrorPulseControlErrorCodes.InvalidRequest, "root recover requires one non-empty root rename operation ID.",
+                            json, errorWriter, cancellationToken).ConfigureAwait(false);
+                        return MirrorPulseControlExitCodes.Validation;
+                    }
+                    MirrorPulseControlRootRecovery recovery = await _client.RecoverRootRenameAsync(renameOperation, cancellationToken).ConfigureAwait(false);
+                    result = recovery;
+                    human = $"Root rename {recovery.Phase} · {recovery.OperationId:D}" +
+                        (recovery.Outcome is { } renameOutcome ? $" · {renameOutcome} ({recovery.Stage})" : string.Empty);
+                    exitCode = recovery.Phase switch
+                    {
+                        "Completed" => MirrorPulseControlExitCodes.Success,
+                        "Cancelled" => MirrorPulseControlExitCodes.Cancelled,
+                        _ => MirrorPulseControlExitCodes.Pending,
+                    };
+                    break;
                 case ("instance", "create"):
                     result = await _client.CreateInstanceAsync(new InstanceCreateArguments(
                         GetRequiredOption(command.Arguments, "install-id"),
@@ -252,18 +638,14 @@ public sealed class MirrorPulseCliHostOperations : IMirrorPulseCliHostOperations
                     human = $"Adapter instance version selected: {installId}";
                     break;
                 case ("conflict", "list"):
-                    result = await _client.GetConflictsAsync(cancellationToken: cancellationToken)
-                        .ConfigureAwait(false);
+                    var conflictPage = ParseConflictListArguments(command.Arguments);
+                    result = await _client.GetConflictsAsync(conflictPage.Limit, conflictPage.Cursor, cancellationToken).ConfigureAwait(false);
                     human = $"Conflicts: {((MirrorPulseControlConflictList)result).Items.Count}";
+                    if (((MirrorPulseControlConflictList)result).NextCursor is { } nextConflictCursor) human += $"; next cursor: {nextConflictCursor}";
                     break;
                 case ("conflict", "show"):
                     string conflictId = GetRequiredOption(command.Arguments, "conflict-id");
-                    MirrorPulseControlConflictList allConflicts = await _client.GetConflictsAsync(
-                        cancellationToken: cancellationToken).ConfigureAwait(false);
-                    MirrorPulseControlConflict? selected = allConflicts.Items.SingleOrDefault(item =>
-                        item.ConflictId.Equals(conflictId, StringComparison.OrdinalIgnoreCase));
-                    if (selected is null)
-                        throw new FileNotFoundException("The conflict was not found.");
+                    MirrorPulseControlConflict selected = await FindConflictAsync(conflictId, cancellationToken).ConfigureAwait(false);
                     result = selected;
                     human = $"Conflict {selected.ConflictId}: {selected.RelativePath} ({selected.Source})";
                     break;
@@ -272,6 +654,15 @@ public sealed class MirrorPulseCliHostOperations : IMirrorPulseCliHostOperations
                     result = await _client.SnoozeConflictAsync(Guid.Parse(conflictId), cancellationToken)
                         .ConfigureAwait(false);
                     human = $"Conflict snoozed: {conflictId}";
+                    break;
+                case ("conflict", "refresh-version"):
+                    var refresh = ParseConflictRefreshArguments(command.Arguments);
+                    var refreshed = await _client.RefreshConflictVersionAsync(refresh.CommandId, refresh.ConflictId, cancellationToken).ConfigureAwait(false);
+                    ValidateConflictRefreshOutcome(refresh, refreshed);
+                    result = refreshed;
+                    human = refreshed.State == "resolved" ? $"Conflict version refreshed: {refreshed.ConflictId:D}" :
+                        $"Conflict version refresh pending: {refreshed.ConflictId:D}; operation {refreshed.CommandId:D}";
+                    exitCode = refreshed.State == "resolved" ? MirrorPulseControlExitCodes.Success : MirrorPulseControlExitCodes.Pending;
                     break;
                 case ("conflict", "resolve"):
                     conflictId = GetRequiredOption(command.Arguments, "conflict-id");
@@ -367,6 +758,12 @@ public sealed class MirrorPulseCliHostOperations : IMirrorPulseCliHostOperations
             await MirrorPulseCliOutputFormatter.WriteDataAsync(
                 result, human, json, output, cancellationToken).ConfigureAwait(false);
             return exitCode;
+        }
+        catch (ArgumentException exception)
+        {
+            await MirrorPulseCliOutputFormatter.WriteErrorAsync(MirrorPulseControlExitCodes.Validation,
+                MirrorPulseControlErrorCodes.InvalidRequest, exception.Message, json, errorWriter, cancellationToken).ConfigureAwait(false);
+            return MirrorPulseControlExitCodes.Validation;
         }
         catch (MirrorPulseControlException exception)
         {
@@ -488,6 +885,22 @@ public sealed class MirrorPulseCliHostOperations : IMirrorPulseCliHostOperations
         return map;
     }
 
+    private static (Guid Id, Guid OperationId, bool Recursive) ParseRetirementOptions(IReadOnlyList<string> arguments, bool preparation)
+    {
+        if (arguments.Count == 0 || !Guid.TryParse(arguments[0], out Guid id) || id == Guid.Empty)
+            throw new ArgumentException("Retirement requires one non-empty member or operation ID.");
+        Guid operationId = Guid.NewGuid();
+        bool recursive = false, operationSpecified = false;
+        for (int index = 1; index < arguments.Count; index++)
+        {
+            if (arguments[index].Equals("--recursive", StringComparison.OrdinalIgnoreCase) && !recursive) recursive = true;
+            else if (preparation && arguments[index].Equals("--operation-id", StringComparison.OrdinalIgnoreCase) && !operationSpecified &&
+                ++index < arguments.Count && Guid.TryParse(arguments[index], out operationId) && operationId != Guid.Empty) operationSpecified = true;
+            else throw new ArgumentException("Retirement accepts --recursive once and preparation also accepts --operation-id GUID once.");
+        }
+        return (id, operationId, recursive);
+    }
+
     private async Task<MirrorPulseHostStatus> StartAsync(CancellationToken cancellationToken)
     {
         await EnsureStartedAsync(cancellationToken).ConfigureAwait(false);
@@ -514,16 +927,17 @@ public sealed class MirrorPulseCliHostOperations : IMirrorPulseCliHostOperations
 
 public static class MirrorPulseCliExitCodeMapper
 {
-    public static int From(ControlError error) => error.Category switch
+    public static int From(ControlError error) => error switch
     {
-        MirrorPulse.Core.Contracts.ErrorCategory.Validation => MirrorPulseControlExitCodes.Validation,
-        MirrorPulse.Core.Contracts.ErrorCategory.Authentication => MirrorPulseControlExitCodes.Authentication,
-        MirrorPulse.Core.Contracts.ErrorCategory.Authorization => MirrorPulseControlExitCodes.Authorization,
-        MirrorPulse.Core.Contracts.ErrorCategory.Network => MirrorPulseControlExitCodes.Unavailable,
-        MirrorPulse.Core.Contracts.ErrorCategory.Conflict => MirrorPulseControlExitCodes.Conflict,
-        MirrorPulse.Core.Contracts.ErrorCategory.Unsupported => MirrorPulseControlExitCodes.Unsupported,
-        MirrorPulse.Core.Contracts.ErrorCategory.Storage => MirrorPulseControlExitCodes.Storage,
-        MirrorPulse.Core.Contracts.ErrorCategory.Cancelled => MirrorPulseControlExitCodes.Cancelled,
+        { Code: MirrorPulseControlErrorCodes.RootLabelPendingRemoteBatch } => MirrorPulseControlExitCodes.Pending,
+        { Category: MirrorPulse.Core.Contracts.ErrorCategory.Validation } => MirrorPulseControlExitCodes.Validation,
+        { Category: MirrorPulse.Core.Contracts.ErrorCategory.Authentication } => MirrorPulseControlExitCodes.Authentication,
+        { Category: MirrorPulse.Core.Contracts.ErrorCategory.Authorization } => MirrorPulseControlExitCodes.Authorization,
+        { Category: MirrorPulse.Core.Contracts.ErrorCategory.Network } => MirrorPulseControlExitCodes.Unavailable,
+        { Category: MirrorPulse.Core.Contracts.ErrorCategory.Conflict } => MirrorPulseControlExitCodes.Conflict,
+        { Category: MirrorPulse.Core.Contracts.ErrorCategory.Unsupported } => MirrorPulseControlExitCodes.Unsupported,
+        { Category: MirrorPulse.Core.Contracts.ErrorCategory.Storage } => MirrorPulseControlExitCodes.Storage,
+        { Category: MirrorPulse.Core.Contracts.ErrorCategory.Cancelled } => MirrorPulseControlExitCodes.Cancelled,
         _ when error.Code == MirrorPulseControlErrorCodes.RequestTimeout ||
                 error.Code == MirrorPulseControlErrorCodes.HostStartTimeout =>
             MirrorPulseControlExitCodes.Timeout,

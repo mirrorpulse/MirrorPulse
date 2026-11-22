@@ -1,0 +1,170 @@
+using CfSharp;
+using MirrorPulse.Core.Contracts;
+using MirrorPulse.Core.State;
+
+namespace MirrorPulse.CloudFiles.CfSharp;
+
+/// <summary>Selects a durable logical generation while leaving backend IDs and historical identities intact.</summary>
+/// <remarks>This selects an address only. Native publication, root admission and original journal settlement remain separate.</remarks>
+public sealed class MirrorPulseRemoteIdentityResolver(MirrorPulseProductCatalog catalog, TimeProvider? timeProvider = null)
+{
+    private readonly MirrorPulseProductCatalog _catalog = catalog ?? throw new ArgumentNullException(nameof(catalog));
+    private readonly TimeProvider _clock = timeProvider ?? TimeProvider.System;
+
+    /// <summary>Reads the selected address without treating a delete or historical retry as a new observation.</summary>
+    public async ValueTask<CloudPlaceholderIdentity> ReadCurrentAsync(RootRegistration root, string remoteId,
+        string? revision = null, CancellationToken token = default)
+    {
+        ArgumentNullException.ThrowIfNull(root); ArgumentException.ThrowIfNullOrWhiteSpace(remoteId);
+        var original = MirrorPulsePlaceholderIdentity.CreateForRoot(root, remoteId, revision).ToCfSharp();
+        var selected = await _catalog.ReadRemoteIdentityGenerationAsync(root.RootId, original.ItemId, token).ConfigureAwait(false);
+        return selected is null ? original : ValidateCurrent(root, remoteId, revision, original, selected);
+    }
+
+    /// <summary>Rejects callbacks for retired generations without allocating a successor from a stale callback.</summary>
+    public async ValueTask RequireCurrentAsync(RootRegistration root, CloudPlaceholderIdentity identity, CancellationToken token = default)
+    {
+        ArgumentNullException.ThrowIfNull(root); ArgumentNullException.ThrowIfNull(identity);
+        if (!MirrorPulsePlaceholderIdentity.BelongsToRoot(root, identity)) throw new InvalidDataException("The callback belongs to another root.");
+        string backend = MirrorPulseGenerationalPlaceholderIdentity.TryDecode(root.InstanceId, identity, out var decoded)
+            ? decoded!.RemoteId : root.IdentityScope == RootIdentityScope.LegacyInstance ? identity.RemoteId :
+                MirrorPulsePlaceholderIdentity.Decode(root.InstanceId, identity.Encode()).RemoteId;
+        var original = MirrorPulsePlaceholderIdentity.CreateForRoot(root, backend, identity.RemoteRevision).ToCfSharp();
+        var selected = await _catalog.ReadRemoteIdentityGenerationAsync(root.RootId, original.ItemId, token).ConfigureAwait(false);
+        var current = selected is null ? original : ValidateCurrent(root, backend, identity.RemoteRevision, original, selected);
+        if (current.ItemId != identity.ItemId || current.RemoteId != identity.RemoteId ||
+            await _catalog.HasDirectoryTransferRetiredItemAsync(current.ItemId, token).ConfigureAwait(false) ||
+            (await _catalog.ReadNamespaceTransferSourceGenerationsAsync(current.ItemId, token).ConfigureAwait(false)).Count != 0 ||
+            (await _catalog.ReadNamespaceRemoteRetirementGenerationsAsync(current.ItemId, token).ConfigureAwait(false)).Count != 0 ||
+            (await _catalog.ReadNamespaceControlledRetirementGenerationsAsync(current.ItemId, token).ConfigureAwait(false)).Count != 0)
+            throw new InvalidDataException("A retired callback cannot read a replacement backend generation.");
+    }
+
+    public async ValueTask<CloudPlaceholderIdentity> ResolveAsync(RootRegistration root, string remoteId,
+        string? revision = null, CancellationToken token = default)
+        => (await ResolveCoreAsync(root, remoteId, revision, deferCompletedLocalRetirement: false, token).ConfigureAwait(false))!;
+
+    internal ValueTask<CloudPlaceholderIdentity?> ResolveForPollAsync(RootRegistration root, string remoteId,
+        string? revision, CancellationToken token)
+        => ResolveCoreAsync(root, remoteId, revision, deferCompletedLocalRetirement: true, token);
+
+    private async ValueTask<CloudPlaceholderIdentity?> ResolveCoreAsync(RootRegistration root, string remoteId,
+        string? revision, bool deferCompletedLocalRetirement, CancellationToken token)
+    {
+        ArgumentNullException.ThrowIfNull(root); ArgumentException.ThrowIfNullOrWhiteSpace(remoteId);
+        var original = MirrorPulsePlaceholderIdentity.CreateForRoot(root, remoteId, revision).ToCfSharp();
+        for (int attempt = 0; attempt < 4; attempt++)
+        {
+            token.ThrowIfCancellationRequested();
+            var current = await _catalog.ReadRemoteIdentityGenerationAsync(root.RootId, original.ItemId, token).ConfigureAwait(false);
+            CloudPlaceholderIdentity predecessor = current is null ? original : ValidateCurrent(root, remoteId, revision, original, current);
+            var directory = await _catalog.ReadRetiredDirectoryTransferSourceAsync(predecessor.ItemId, token).ConfigureAwait(false);
+            var retired = await _catalog.ReadNamespaceTransferSourceGenerationsAsync(predecessor.ItemId, token).ConfigureAwait(false);
+            var remote = await _catalog.ReadNamespaceRemoteRetirementGenerationsAsync(predecessor.ItemId, token).ConfigureAwait(false);
+            var controlled = await _catalog.ReadNamespaceControlledRetirementGenerationsAsync(predecessor.ItemId, token).ConfigureAwait(false);
+            int ownerCount = retired.Count + remote.Count + controlled.Count + (directory is null ? 0 : 1);
+            if (ownerCount == 0) return predecessor;
+            if (ownerCount != 1) throw new InvalidDataException("An ambiguous retired public item requires explicit generation reconciliation.");
+            int version;
+            Guid transferId = Guid.Empty;
+            Guid retirementId;
+            long nameEpoch;
+            if (directory is not null)
+            {
+                var route = directory.Admission.SourceRoute;
+                var originalRetirement = directory.Retirement;
+                if (route.RootId != root.RootId || route.InstanceId != root.InstanceId || route.RootKey != root.UniquenessKey ||
+                    originalRetirement.Projection.RemoteId != predecessor.RemoteId)
+                    throw new InvalidOperationException("A foreign directory transfer cannot select a replacement generation.");
+                if (originalRetirement.RetiredAt is null || originalRetirement.NameEpoch is null || directory.AcknowledgedAt is null)
+                {
+                    if (deferCompletedLocalRetirement) return null;
+                    throw new InvalidOperationException("An unfinished directory transfer cannot select a replacement generation.");
+                }
+                version = 4;
+                transferId = originalRetirement.TransferId;
+                retirementId = originalRetirement.EffectId;
+                nameEpoch = originalRetirement.NameEpoch.Value;
+            }
+            else if (retired.Count == 1)
+            {
+                var retirement = retired[0].Retirement;
+                var copy = retired[0].Transfer;
+                if (retirement.Phase != MirrorPulseNamespaceRetirementPhase.Completed || retirement.TransferSourceNameEpoch is null ||
+                    retirement.TransferSourceProjection?.RemoteId != predecessor.RemoteId || copy.Acknowledgement?.AcknowledgedAt is null ||
+                    copy.Plan.SourceRoute.RootId != root.RootId || copy.Plan.SourceRoute.InstanceId != root.InstanceId ||
+                    copy.Plan.SourceRoute.RootKey != root.UniquenessKey)
+                    throw new InvalidOperationException("An unfinished or foreign transfer cannot select a replacement generation.");
+                version = 1;
+                transferId = copy.Plan.OperationId;
+                retirementId = retirement.OperationId;
+                nameEpoch = retirement.TransferSourceNameEpoch.Value;
+            }
+            else if (remote.Count == 1)
+            {
+                var retirement = remote[0];
+                var owner = retirement.Intent.RemoteEntry!;
+                if (owner.Version != 2 || retirement.Phase != MirrorPulseNamespaceRetirementPhase.Completed ||
+                    retirement.RemoteSourceNameEpoch is null || owner.RemoteId != predecessor.RemoteId ||
+                    retirement.Intent.RootId != root.RootId || owner.InstanceId != root.InstanceId || owner.RootKey != root.UniquenessKey)
+                    throw new InvalidOperationException("An unfinished, legacy or foreign remote deletion cannot select a replacement generation.");
+                version = 2;
+                retirementId = retirement.OperationId;
+                nameEpoch = retirement.RemoteSourceNameEpoch.Value;
+            }
+            else
+            {
+                var retirement = controlled[0];
+                // A local command can finish native deletion while its original SDK journal
+                // still has to deliver the backend delete. Seeing that backend object during
+                // reenable cannot authorize a successor or reuse the retired public address.
+                // Defer this poll without changing its snapshot or immutable pending batch;
+                // ordinary identity resolution and historical/foreign retirement refusals stay strict.
+                if (deferCompletedLocalRetirement && retirement.Intent.BatchOperationId is null &&
+                    retirement.Intent.RootId == root.RootId && retirement.Phase == MirrorPulseNamespaceRetirementPhase.Completed &&
+                    retirement.StartedItemId == predecessor.ItemId && retirement.NativeDeletedAt is not null && retirement.CompletedAt is not null)
+                    return null;
+                var decision = retirement.Intent.BatchOperationId is { } commandId
+                    ? await _catalog.ReadRemoteDeleteResolutionAsync(commandId, token).ConfigureAwait(false) : null;
+                var entry = decision?.Plan.Entries.SingleOrDefault(entry => entry.Original.Context.Member.MemberId == retirement.Intent.MemberId);
+                if (decision?.Plan is not { Version: 2 } plan || decision.CompletedAt is null ||
+                    retirement.Phase != MirrorPulseNamespaceRetirementPhase.Completed || retirement.ExplicitSourceNameEpoch is null ||
+                    retirement.Intent.RootId != root.RootId || plan.RootKey != root.UniquenessKey ||
+                    plan.Decision.Conflict.InstanceId != root.InstanceId || entry is null || entry.Original.Identity.ItemId != predecessor.ItemId ||
+                    entry.Original.Identity.RemoteId != predecessor.RemoteId)
+                    throw new InvalidOperationException("An unfinished, legacy or uncontrolled deletion cannot select a replacement generation.");
+                version = 3;
+                retirementId = retirement.OperationId;
+                nameEpoch = retirement.ExplicitSourceNameEpoch.Value;
+            }
+            Guid generation = Guid.NewGuid();
+            var successor = MirrorPulseGenerationalPlaceholderIdentity.Create(root, remoteId, generation, revision);
+            var selection = new MirrorPulseRemoteIdentityGeneration(version, root.RootId, root.InstanceId, root.UniquenessKey,
+                original.ItemId, original.RemoteId, current?.Generation, generation, predecessor.ItemId, predecessor.RemoteId,
+                successor.ItemId, successor.RemoteId, transferId, retirementId, nameEpoch, _clock.GetUtcNow());
+            try
+            {
+                _ = await _catalog.SelectRemoteIdentityGenerationAsync(selection, token).ConfigureAwait(false);
+                return successor;
+            }
+            catch (InvalidOperationException)
+            {
+                // Another callback may have selected the same next generation after our indexed read.
+                // Retry only an observed pointer change; original ownership/proof rejections still escape.
+                var observed = await _catalog.ReadRemoteIdentityGenerationAsync(root.RootId, original.ItemId, token).ConfigureAwait(false);
+                if (observed?.Generation == current?.Generation) throw;
+            }
+        }
+        throw new InvalidOperationException("Concurrent identity generation selection must retry at its original boundary.");
+    }
+
+    private static CloudPlaceholderIdentity ValidateCurrent(RootRegistration root, string backendId, string? revision,
+        CloudPlaceholderIdentity original, MirrorPulseRemoteIdentityGeneration selected)
+    {
+        var expected = MirrorPulseGenerationalPlaceholderIdentity.Create(root, backendId, selected.Generation, revision);
+        if (selected.InstanceId != root.InstanceId || selected.RootKey != root.UniquenessKey || selected.BaseItemId != original.ItemId ||
+            selected.BaseRemoteId != original.RemoteId || selected.ItemId != expected.ItemId || selected.RemoteId != expected.RemoteId)
+            throw new InvalidDataException("The selected generation does not encode this original backend address and stable root.");
+        return expected;
+    }
+}

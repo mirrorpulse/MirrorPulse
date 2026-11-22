@@ -4,33 +4,33 @@
     "net10.0-windows10.0.26100": {
       "CfSharp": {
         "type": "Direct",
-        "requested": "[0.1.0-preview.3, )",
-        "resolved": "0.1.0-preview.3",
-        "contentHash": "ijo8GwpNR9Y+yFx+uTlpqyDECgpbieYo209oLXzq/9KIKo2VSH1QDqnjRV6CWV3MpTnJ/9aZcEgwzmlFC7/erg==",
+        "requested": "[0.1.0-preview.16, )",
+        "resolved": "0.1.0-preview.16",
+        "contentHash": "UiMkQC42DfVYxbto70o1Kln5N+oSdmTXQFFJ5ZIL0vlOMT36+LrzIfexSf5AswDRiwj3Rh45UrG/OjAZirXrtA==",
         "dependencies": {
-          "CfSharp.Native": "0.1.0-preview.3"
+          "CfSharp.Native": "0.1.0-preview.16"
         }
       },
       "CfSharp.Storage.Sqlite": {
         "type": "Direct",
-        "requested": "[0.1.0-preview.3, )",
-        "resolved": "0.1.0-preview.3",
-        "contentHash": "BTD5ItAETZfqNXHLrpI7EI0HtzMMyeXWx0yKNvuQho1PRJSUHqi012DpnhHo6uQjf1bZX4Jg6+uKi+3yc702BA==",
+        "requested": "[0.1.0-preview.16, )",
+        "resolved": "0.1.0-preview.16",
+        "contentHash": "s7uEVtL2hYor6lBQtVa3VB4b+5BTiqsd8hHa34htX2AXYbF44PdZMzLXy+Wg3FlxL5YmmX5iHdPxk2A/teZkXg==",
         "dependencies": {
-          "CfSharp": "0.1.0-preview.3",
+          "CfSharp": "0.1.0-preview.16",
           "Microsoft.Data.Sqlite": "8.0.31"
         }
       },
       "MirrorPulse.Adapter.Sdk": {
         "type": "Direct",
-        "requested": "[0.2.0, 0.2.0]",
-        "resolved": "0.2.0",
-        "contentHash": "xzz57ZRJg8nQzkGQFIyJp+blVNSLzs+l6XGNnyXj/mfJuur6hEVPkTzNcj27K+0IGWyd9aDz4qdH31eDwakSJg=="
+        "requested": "[0.3.1, 0.3.1]",
+        "resolved": "0.3.1",
+        "contentHash": "t4tRzfZ0cWnNxkaQHKIdpyLiyfaKNdoDmM385SM/RnnRxiMSRiGU0GEC5j4W/73jTgI/iFSGcf7RSaAUm3bwEQ=="
       },
       "CfSharp.Native": {
         "type": "Transitive",
-        "resolved": "0.1.0-preview.3",
-        "contentHash": "TFSKHLuvjcuMXjpu1boZSYCeeeOGAEdIYnSODIWLwtXyVQgO69HJcawJie5gOJTwmvdhCOQjvDy4wfBwtVJtDQ=="
+        "resolved": "0.1.0-preview.16",
+        "contentHash": "vURpN7m/h0+wElYizc3R4djUQPPvRB8jYXZl1ai5PaA5OSk4v7PV9xkTppZC1w3OvTfBqYjeHiQWVMpkFHvexw=="
       },
       "Microsoft.Data.Sqlite.Core": {
         "type": "Transitive",
@@ -70,7 +70,8 @@
       "mirrorpulse.core": {
         "type": "Project",
         "dependencies": {
-          "Microsoft.Data.Sqlite": "[8.0.31, )"
+          "Microsoft.Data.Sqlite": "[8.0.31, )",
+          "MirrorPulse.Adapter.Sdk": "[0.3.1, 0.3.1]"
         }
       },
       "Microsoft.Data.Sqlite": {

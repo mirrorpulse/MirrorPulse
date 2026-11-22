@@ -51,8 +51,9 @@ public sealed class SignedSftpHostProcessTests
             MirrorPulseAdapterTopology topology = await catalog.ReadAdapterTopologyAsync();
             RootRegistration registration = topology.Roots.Single(binding => binding.InstanceId == instance.InstanceId);
             string rootKey = registration.UniquenessKey;
+            string diagnostics = Path.Combine(root, "diagnostics");
             await using var supervisor = new AdapterInstanceProcessSupervisor(catalog,
-                new FixedCredentialStore("sftp-password", "correct-secret"));
+                new FixedCredentialStore("sftp-password", "correct-secret"), diagnosticsDirectory: diagnostics);
             await supervisor.StartAsync(topology);
             using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
             while (true)
@@ -66,7 +67,8 @@ public sealed class SignedSftpHostProcessTests
 
                 if (state?.Phase is "Worker failed" or "Worker error")
                 {
-                    Assert.Fail($"The signed SFTP Worker failed: {state.LastErrorCode}.");
+                    Assert.Fail($"The signed SFTP Worker failed: {state.LastErrorCode}. " +
+                        await WorkerFailureTestDiagnostics.ReadAsync(diagnostics));
                 }
 
                 await Task.Delay(50, timeout.Token);
