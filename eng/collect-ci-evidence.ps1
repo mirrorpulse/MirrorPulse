@@ -168,5 +168,5 @@ if ($RejectedPath) {
     schemaVersion=1;sourceSha=$sourceSha;job=$Job;runtime=$Runtime
     officialAdapterCandidateSha256=$candidateHash
     tests=$suites;checks=$checks;artifacts=$artifacts
-} | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $OutputPath -Encoding utf8
+} | ConvertTo-Json -Depth 16 -WarningAction Stop | Set-Content -LiteralPath $OutputPath -Encoding utf8
 Write-Output "Saved verified $Job evidence for $sourceSha ($Runtime)."

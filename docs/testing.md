@@ -246,6 +246,9 @@ For the S06 Windows acceptance run dispatched with `verify_shell=true`, also pas
 Shell check requires both the package entry-point probe and actual Shell
 registration. The CI collector binds that evidence to the workflow run and
 checkout.
+The ARM64 manifest preserves the original structured transfer observations on both
+roots before and after restart. The evidence verifier replays these observations
+from the downloaded manifest.
 
 Each atomic commit remains independently reviewable and passes its relevant
 local restore, Release build, tests, formatting, and ownership checks. Related

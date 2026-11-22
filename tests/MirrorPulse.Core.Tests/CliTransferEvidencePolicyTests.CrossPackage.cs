@@ -45,7 +45,7 @@ public sealed partial class CliTransferEvidencePolicyTests
         Assert.AreEqual(1, result.ExitCode, result.Output + result.Error);
     }
 
-    private static JsonObject CrossPackageEvidence()
+    internal static JsonObject CrossPackageEvidence()
     {
         var evidence = SingleRootEvidence(); evidence["schemaVersion"] = 3; evidence["audit"]!["schemaVersion"] = 3;
         evidence["roots"]![1]!["rootKey"] = "webdav";

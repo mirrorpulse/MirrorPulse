@@ -26,6 +26,7 @@ public sealed class CiHydrationEvidenceGateTests
     [DataRow("namespace-valid", true)]
     [DataRow("namespace-missing", false)]
     [DataRow("namespace-partial", false)]
+    [DataRow("cross-package-valid", true)]
     public async Task CollectorRequiresCompleteReadsAndRetainedIntentCounts(string scenario, bool succeeds)
     {
         string repository = SftpProtocolFixture.FindRepositoryRoot();
@@ -55,6 +56,28 @@ public sealed class CiHydrationEvidenceGateTests
                 "-Job", "official-package-arm64", "-Runtime", "win-arm64", "-OutputPath", evidence,
                 "-TestManifests", tests, "-PublishDirectory", root, "-IntegrationPath", integration })
                 start.ArgumentList.Add(argument);
+            if (scenario == "cross-package-valid")
+            {
+                var gitStart = new ProcessStartInfo("git")
+                {
+                    WorkingDirectory = repository,
+                    UseShellExecute = false,
+                    CreateNoWindow = true,
+                    RedirectStandardOutput = true,
+                };
+                gitStart.ArgumentList.Add("rev-parse");
+                gitStart.ArgumentList.Add("HEAD");
+                using var git = Process.Start(gitStart)!;
+                string source = (await git.StandardOutput.ReadToEndAsync()).Trim();
+                await git.WaitForExitAsync();
+                Assert.AreEqual(0, git.ExitCode);
+                var transfer = CliTransferEvidencePolicyTests.CrossPackageEvidence();
+                transfer["sourceSha"] = source;
+                string crossPackage = Path.Combine(root, "cross-package.json");
+                await File.WriteAllTextAsync(crossPackage, transfer.ToJsonString());
+                start.ArgumentList.Add("-CrossPackageTransferIntegrationPath");
+                start.ArgumentList.Add(crossPackage);
+            }
             if (scenario.StartsWith("namespace-", StringComparison.Ordinal))
             {
                 using JsonDocument catalog = JsonDocument.Parse(await File.ReadAllTextAsync(Path.Combine(repository, "eng", "test-suites.json")));
@@ -89,6 +112,19 @@ public sealed class CiHydrationEvidenceGateTests
                     Assert.AreEqual(4, hydration.GetProperty("reads").GetArrayLength());
                     Assert.AreEqual(2, hydration.GetProperty("audits").GetArrayLength());
                     Assert.AreEqual(1, hydration.GetProperty("audits")[1].GetProperty("acknowledgedQueuedFileMutations").GetInt32());
+                    if (scenario == "cross-package-valid")
+                    {
+                        var crossPackage = report.RootElement.GetProperty("checks").EnumerateArray().Single(
+                            check => check.GetProperty("name").GetString() == "signed-cross-package-cli-transfers");
+                        var restart = crossPackage.GetProperty("observations").GetProperty("cases")[0].GetProperty("preparedRestart");
+                        var command = restart.GetProperty("command");
+                        foreach (string cut in new[] { "beforeRestart", "afterRestart" })
+                        {
+                            var observation = restart.GetProperty(cut);
+                            Assert.IsTrue(JsonElement.DeepEquals(command, observation.GetProperty("sourcePending")[0]));
+                            Assert.IsTrue(JsonElement.DeepEquals(command, observation.GetProperty("targetPending")[0]));
+                        }
+                    }
                 }
             }
             finally { if (!process.HasExited) { process.Kill(entireProcessTree: true); await process.WaitForExitAsync(); } }
