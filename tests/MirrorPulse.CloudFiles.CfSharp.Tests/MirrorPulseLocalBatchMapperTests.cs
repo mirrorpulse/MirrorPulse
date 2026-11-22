@@ -185,7 +185,6 @@ public sealed class MirrorPulseLocalBatchMapperTests
             var source = new MirrorPulseJournalUploadSource(feed, router, catalog, _ => true);
             MirrorPulseJournalUploadBatch beforeProjection = await source.ReadPendingAsync();
             MirrorPulseWorkerChangeCommand original = beforeProjection.ReadyCommands.First(command => command.RelativePath == "report.txt");
-            await feed.SuppressProviderEchoAsync(CloudStateOperationKind.MetadataUpdate, "Documents/report.txt", DateTimeOffset.UtcNow.AddSeconds(10));
             await fileSystem.GetFile("Documents/report.txt").ConvertToPlaceholderAsync(new CloudPlaceholderIdentity(Guid.NewGuid(), "accepted-remote", "accepted-revision"));
             MirrorPulseJournalUploadBatch afterProjection = await source.ReadPendingAsync();
             MirrorPulseWorkerChangeCommand replay = afterProjection.ReadyCommands.Single(command => command.OperationId == original.OperationId);

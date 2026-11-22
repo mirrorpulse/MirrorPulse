@@ -53,7 +53,11 @@ public sealed class MirrorPulseJournalUploadCompletionTests
                     .WithContentProvider(MirrorPulseDemandProvider.CreateWithoutAdapters(paths.SyncRootPath))
                     .Build();
                 await fileSystem.StartAsync();
-                CloudLocalChangeFeed feed = fileSystem.CreateLocalChangeFeed();
+                if (run == 0)
+                {
+                    await fileSystem.Root.CreatePlaceholdersAsync(router.CreateRootPage().Children);
+                }
+                await using CloudLocalChangeFeed feed = fileSystem.CreateLocalChangeFeed();
                 await feed.StartAsync();
                 await using var catalog = await MirrorPulseProductCatalog.OpenAsync(paths);
                 var completion = new MirrorPulseJournalUploadCompletion(feed, state, policy);
@@ -61,18 +65,12 @@ public sealed class MirrorPulseJournalUploadCompletionTests
 
                 if (run == 0)
                 {
-                    await feed.SuppressProviderEchoAsync(
-                        CloudStateOperationKind.MetadataUpdate,
-                        "Documents",
-                        DateTimeOffset.UtcNow.AddMinutes(1));
-                    await fileSystem.Root.CreatePlaceholdersAsync(router.CreateRootPage().Children);
                     await File.WriteAllTextAsync(
                         Path.Combine(paths.SyncRootPath, "Documents", "report.txt"), "local change");
                     using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(15));
                     MirrorPulseJournalUploadBatch pending = await source.ReadPendingAsync(timeout.Token);
-                    Assert.IsNotEmpty(pending.ReadyCommands);
-                    operationId = pending.ReadyCommands[0].OperationId;
-                    originalCommand = pending.ReadyCommands[0];
+                    originalCommand = pending.ReadyCommands.First(command => command.RelativePath == "report.txt");
+                    operationId = originalCommand.OperationId;
                     RetryAfterDirective retry = await completion.DeferFailedUploadAsync(
                         operationId, DateTimeOffset.UtcNow);
                     Assert.AreEqual(1, retry.Attempt);
