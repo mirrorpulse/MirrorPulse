@@ -56,6 +56,8 @@ if (mode is "OriginalDirectory" or "WrongOriginalDirectory" or "OrdinaryDirector
     capabilities = [.. capabilities, AdapterDirectoryEffects.Capability];
 if (mode is "HealthAtStartup" or "HealthRecovers" or "HealthInvalidField")
     capabilities = [.. capabilities, AdapterDeploymentContract.StructuredHealthCapability];
+if (mode.StartsWith("Update", StringComparison.Ordinal) && mode != "UpdateUnsupported")
+    capabilities = [.. capabilities, AdapterDeploymentContract.UpdateDiscoveryCapability];
 await SendAsync(new(1, "Hello", helloId, instance, session, false, JsonSerializer.SerializeToElement(new
 {
     supportedVersions = new { minimum = mode == "RejectedHello" ? 2 : 1, maximum = 2 },
@@ -86,6 +88,33 @@ if (mode == "RejectConfiguration")
 string[] selectedCapabilities = ready.ProtocolVersion == 2
     ? ready.Payload.GetProperty("capabilities").EnumerateArray().Select(value => value.GetString()!).ToArray()
     : [];
+if (mode.StartsWith("Update", StringComparison.Ordinal))
+{
+    if (selectedCapabilities.Contains(AdapterDeploymentContract.UpdateDiscoveryCapability, StringComparer.Ordinal) !=
+        (mode != "UpdateUnsupported")) throw new InvalidDataException("Wrong update discovery negotiation.");
+    await SendAsync(new(2, "Connected", Guid.NewGuid(), instance, session, false, JsonSerializer.SerializeToElement(new { })));
+    while (true)
+    {
+        ControlFrameEnvelope check = await ReadAsync();
+        if (check.MessageType == "Stop") return;
+        if (check.MessageType != AdapterDeploymentContract.CheckUpdateMessage || check.Payload.TryGetProperty("rootKey", out _))
+            throw new InvalidDataException("Expected a deployment-wide update check.");
+        if (mode == "UpdateDelayed")
+        {
+            string marker = Path.Combine(cache!, ".mp-update-in-flight");
+            if (!File.Exists(marker)) await File.WriteAllTextAsync(marker, "received");
+            while (!File.Exists(Path.Combine(cache!, ".mp-update-reply"))) await Task.Delay(20);
+        }
+        var offer = mode == "UpdateCurrent" ? null : new
+        {
+            adapterId = mode == "UpdateOtherAdapter" ? "example.other" : "example.protocolfixture",
+            version = "1.0.1",
+            location = mode == "UpdateLocal" ? Path.Combine(cache!, "next.mpadapter") : "https://example.invalid/next.mpadapter?access=fixture",
+        };
+        await SendAsync(new(2, AdapterDeploymentContract.UpdateOfferMessage, check.RequestId, instance, session, true,
+            JsonSerializer.SerializeToElement(new { offer })));
+    }
+}
 if (mode is "HealthAtStartup" or "HealthRecovers" or "HealthInvalidField" or "HealthWithoutCapability")
 {
     bool expectedCapability = mode != "HealthWithoutCapability";

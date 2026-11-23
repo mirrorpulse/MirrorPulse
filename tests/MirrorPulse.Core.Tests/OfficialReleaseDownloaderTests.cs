@@ -43,6 +43,36 @@ public sealed class OfficialReleaseDownloaderTests
                 Path.Combine(Path.GetTempPath(), "package.mpadapter")));
     }
 
+    [TestMethod]
+    public async Task DownloaderRejectsAnInsecureRedirectBeforeOpeningItsTarget()
+    {
+        var root = Directory.CreateTempSubdirectory("mirrorpulse-release-");
+        try
+        {
+            var handler = new InsecureRedirectHandler();
+            using var client = new HttpClient(handler);
+            await Assert.ThrowsExactlyAsync<InvalidDataException>(() => new OfficialReleaseDownloader(client).DownloadAsync(
+                new Uri("https://example.test/package.mpadapter"), Path.Combine(root.FullName, "download.mpadapter")));
+            Assert.AreEqual(1, handler.Calls);
+            Assert.IsEmpty(root.EnumerateFileSystemInfos());
+        }
+        finally { root.Delete(recursive: true); }
+    }
+
+    private sealed class InsecureRedirectHandler : HttpMessageHandler
+    {
+        public int Calls { get; private set; }
+
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            Calls++;
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.Redirect)
+            {
+                Headers = { Location = new Uri("http://example.test/package.mpadapter") },
+            });
+        }
+    }
+
     private sealed class StaticResponseHandler : HttpMessageHandler
     {
         private readonly string _content;

@@ -140,7 +140,9 @@ public sealed class MirrorPulseControlClient
         }
 
         ArgumentNullException.ThrowIfNull(arguments);
-        using var timeout = new CancellationTokenSource(_options.RequestTimeout);
+        TimeSpan requestTimeout = command == MirrorPulseControlCommands.InstanceInstallUpdate &&
+            _options.RequestTimeout < TimeSpan.FromMinutes(2) ? TimeSpan.FromMinutes(2) : _options.RequestTimeout;
+        using var timeout = new CancellationTokenSource(requestTimeout);
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(
             cancellationToken, timeout.Token);
         try
@@ -549,6 +551,14 @@ public sealed class MirrorPulseControlClient
     public Task<AdapterAuthorizationStatus> CancelInstanceAuthorizationAsync(Guid authorizationId,
         CancellationToken cancellationToken = default) => SendAsync<InstanceAuthorizationArguments, AdapterAuthorizationStatus>(
             MirrorPulseControlCommands.InstanceAuthorizationCancel, new(authorizationId), cancellationToken);
+
+    public Task<AdapterUpdateCheck> CheckInstanceUpdateAsync(string instanceId,
+        CancellationToken cancellationToken = default) => SendAsync<InstanceIdArguments, AdapterUpdateCheck>(
+            MirrorPulseControlCommands.InstanceCheckUpdate, new(instanceId), cancellationToken);
+
+    public Task<AdapterUpdateInstallation> InstallInstanceUpdateAsync(Guid offerId,
+        CancellationToken cancellationToken = default) => SendAsync<InstanceInstallUpdateArguments, AdapterUpdateInstallation>(
+            MirrorPulseControlCommands.InstanceInstallUpdate, new(offerId), cancellationToken);
 
     public Task<MirrorPulseAppStatusResponse> SelectInstallationAsync(
         string instanceId,

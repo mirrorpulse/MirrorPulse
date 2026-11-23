@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using System.Text.Json;
 using Microsoft.Data.Sqlite;
+using MirrorPulse.Adapter.Sdk;
 using MirrorPulse.Core.Contracts;
 using MirrorPulse.Core.Packaging;
 using MirrorPulse.Core.Security;
@@ -58,25 +59,42 @@ public sealed partial class MirrorPulseProductCatalog
     }
 
     /// <summary>Verifies a signed package, then atomically records its installed payload in the Host catalog.</summary>
-    public async Task<InstalledAdapter> InstallSignedAdapterAsync(
+    public Task<InstalledAdapter> InstallSignedAdapterAsync(
         string packagePath,
         string signaturePath,
         string installationRoot,
         string runtimeIdentifier,
         RSA trustedKey,
         string trustedSigner,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default) => InstallSignedAdapterAsync(packagePath, signaturePath,
+            installationRoot, runtimeIdentifier, trustedKey, trustedSigner, update: null, cancellationToken);
+
+    internal sealed record AdapterUpdateBinding(InstanceId InstanceId, InstallId CurrentInstallId,
+        AdapterPackageIdentity Identity, AdapterInstallSource Source, string SourceReference);
+
+    internal async Task<InstalledAdapter> InstallSignedAdapterUpdateAsync(
+        string packagePath, string installationRoot, string runtimeIdentifier, AdapterUpdateBinding update,
+        CancellationToken cancellationToken)
+    {
+        using RSA trustedKey = MirrorPulseOfficialAdapterTrust.CreatePublicKey();
+        return await InstallSignedAdapterAsync(packagePath, packagePath + ".signature.json", installationRoot,
+            runtimeIdentifier, trustedKey, MirrorPulseOfficialAdapterTrust.Signer, update, cancellationToken).ConfigureAwait(false);
+    }
+
+    internal async Task<InstalledAdapter> InstallSignedAdapterAsync(
+        string packagePath, string signaturePath, string installationRoot, string runtimeIdentifier,
+        RSA trustedKey, string trustedSigner, AdapterUpdateBinding? update, CancellationToken cancellationToken)
     {
         SignedProcessAdapterInstallation installation = await SignedProcessAdapterInstaller.InstallAsync(
             packagePath, signaturePath, installationRoot, runtimeIdentifier, trustedKey,
-            trustedSigner, cancellationToken).ConfigureAwait(false);
+            trustedSigner, update?.Identity, cancellationToken).ConfigureAwait(false);
         try
         {
             var adapter = new InstalledAdapter(installation.Manifest, InstallId.New(),
                 installation.InstallationDirectory, installation.PackageSha256,
-                AdapterInstallSource.LocalFile, Path.GetFullPath(packagePath), true,
+                update?.Source ?? AdapterInstallSource.LocalFile, update?.SourceReference ?? Path.GetFullPath(packagePath), true,
                 DateTimeOffset.UtcNow, AdapterLifecycleState.Installed);
-            await AddInstallationAsync(adapter, cancellationToken).ConfigureAwait(false);
+            await AddInstallationAsync(adapter, update, cancellationToken).ConfigureAwait(false);
             return adapter;
         }
         catch
@@ -87,9 +105,12 @@ public sealed partial class MirrorPulseProductCatalog
     }
 
     /// <summary>Appends one installed package without replacing existing instances or first-level roots.</summary>
-    public async Task AddInstallationAsync(
+    public Task AddInstallationAsync(
         InstalledAdapter installation,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default) => AddInstallationAsync(installation, updateBinding: null, cancellationToken);
+
+    private async Task AddInstallationAsync(InstalledAdapter installation, AdapterUpdateBinding? updateBinding,
+        CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(installation);
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
@@ -102,6 +123,10 @@ public sealed partial class MirrorPulseProductCatalog
             MirrorPulseAdapterTopology current = payload is null ? new([], [], []) : DeserializeTopology(payload);
             InstalledAdapter[] existing = current.Installations
                 .Where(item => item.AdapterId == installation.AdapterId).ToArray();
+            if (updateBinding is not null && (!current.Instances.Any(instance => instance.InstanceId == updateBinding.InstanceId &&
+                    instance.InstallId == updateBinding.CurrentInstallId && instance.Enabled) ||
+                existing.Any(item => item.Version == installation.Version)))
+                throw new InvalidDataException("The deployment or installed versions changed. Check for Adapter updates again.");
             if (current.Installations.Any(item => item.InstallId == installation.InstallId ||
                 string.Equals(item.InstallationDirectory, installation.InstallationDirectory,
                     StringComparison.OrdinalIgnoreCase)) ||

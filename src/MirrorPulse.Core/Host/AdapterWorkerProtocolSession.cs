@@ -108,17 +108,17 @@ public sealed class AdapterWorkerProtocolSession
     }
 
     public static AdapterWorkerProtocolSession Negotiate(JsonElement hello, IEnumerable<RootRegistration> roots,
-        ProtocolVersionRange packageVersions) => Negotiate(hello, roots, packageVersions, configurationOnly: false, structuredHealth: false);
+        ProtocolVersionRange packageVersions) => Negotiate(hello, roots, packageVersions, configurationOnly: false, deploymentFeatures: false);
 
     internal static AdapterWorkerProtocolSession NegotiateDeployment(JsonElement hello, IEnumerable<RootRegistration> roots,
         InstalledAdapter installation) => Negotiate(hello, roots, installation.Manifest.Protocol,
-            configurationOnly: false, structuredHealth: installation.IsSigned && installation.Manifest.Presentation is not null);
+            configurationOnly: false, deploymentFeatures: installation.IsSigned && installation.Manifest.Presentation is not null);
 
     internal static AdapterWorkerProtocolSession NegotiateConfigurationOnly(JsonElement hello, ProtocolVersionRange packageVersions) =>
-        Negotiate(hello, [], packageVersions, configurationOnly: true, structuredHealth: false);
+        Negotiate(hello, [], packageVersions, configurationOnly: true, deploymentFeatures: false);
 
     private static AdapterWorkerProtocolSession Negotiate(JsonElement hello, IEnumerable<RootRegistration> roots,
-        ProtocolVersionRange packageVersions, bool configurationOnly, bool structuredHealth)
+        ProtocolVersionRange packageVersions, bool configurationOnly, bool deploymentFeatures)
     {
         ArgumentNullException.ThrowIfNull(roots);
         ArgumentNullException.ThrowIfNull(packageVersions);
@@ -179,8 +179,10 @@ public sealed class AdapterWorkerProtocolSession
                 if (offered.Contains(DurableDirectoryCopyPreparationCapability, StringComparer.Ordinal))
                     negotiated = [.. negotiated, DurableDirectoryCopyPreparationCapability];
             }
-            if (structuredHealth && offered.Contains(AdapterDeploymentContract.StructuredHealthCapability, StringComparer.Ordinal))
+            if (deploymentFeatures && offered.Contains(AdapterDeploymentContract.StructuredHealthCapability, StringComparer.Ordinal))
                 negotiated = [.. negotiated, AdapterDeploymentContract.StructuredHealthCapability];
+            if (deploymentFeatures && offered.Contains(AdapterDeploymentContract.UpdateDiscoveryCapability, StringComparer.Ordinal))
+                negotiated = [.. negotiated, AdapterDeploymentContract.UpdateDiscoveryCapability];
         }
         else if (configured.Length > 1) throw new InvalidDataException("MultipleRootsRequireProtocolV2");
         return new(selected, configured, negotiated);

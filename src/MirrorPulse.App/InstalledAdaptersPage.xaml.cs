@@ -2,6 +2,7 @@ using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using MirrorPulse.Control.Contracts;
 using MirrorPulse.Core.Contracts;
+using MirrorPulse.Core.Host;
 
 namespace MirrorPulse.App;
 
@@ -14,6 +15,7 @@ public sealed partial class InstalledAdaptersPage : Page
     private MirrorPulseControlInstance[] _instances = [];
     private MirrorPulseControlInstallation[] _versions = [];
     private bool _loading;
+    private bool _checkingUpdate;
 
     public InstalledAdaptersPage()
     {
@@ -83,6 +85,7 @@ public sealed partial class InstalledAdaptersPage : Page
     private void ApplyInstanceSelection()
     {
         int index = InstanceSelector.SelectedIndex;
+        CheckUpdateButton.IsEnabled = !_checkingUpdate && index >= 0 && index < _instances.Length;
         if (index < 0 || index >= _instances.Length)
         {
             _versions = [];
@@ -110,6 +113,68 @@ public sealed partial class InstalledAdaptersPage : Page
         AdapterEnableToggle.IsEnabled = true;
         AdapterEnableToggle.IsOn = instance.Enabled;
         UpdateVersionButton();
+    }
+
+    private async void CheckUpdateButton_Click(object sender, RoutedEventArgs e)
+    {
+        int index = InstanceSelector.SelectedIndex;
+        if (_checkingUpdate || index < 0 || index >= _instances.Length) return;
+
+        MirrorPulseControlInstance instance = _instances[index];
+        _checkingUpdate = true;
+        CheckUpdateButton.IsEnabled = false;
+        ActionStatusText.Text = "Checking for an Adapter update…";
+        try
+        {
+            AdapterUpdateCheck check = await AppControl.Client.CheckInstanceUpdateAsync(instance.InstanceId);
+            if (check.OfferId is not { } offerId)
+            {
+                ActionStatusText.Text = check.Availability switch
+                {
+                    AdapterUpdateAvailability.AlreadyInstalled => $"Version {check.AvailableVersion} is already installed. Select it to use it for this instance.",
+                    AdapterUpdateAvailability.Current => $"Version {check.CurrentVersion} is current.",
+                    AdapterUpdateAvailability.Offline => "Start the Adapter instance before checking for updates.",
+                    _ => "This Adapter does not offer update checks.",
+                };
+                return;
+            }
+
+            if (XamlRoot is not { } root || InstanceSelector.SelectedIndex != index ||
+                index >= _instances.Length || _instances[index].InstanceId != instance.InstanceId)
+            {
+                ActionStatusText.Text = "Select the instance and check for updates again.";
+                return;
+            }
+
+            var dialog = new ContentDialog
+            {
+                XamlRoot = root,
+                Title = $"Install Adapter version {check.AvailableVersion}?",
+                Content = new TextBlock
+                {
+                    Text = $"Source: {check.Source}{Environment.NewLine}After installation, select the version to use it for this instance.",
+                    TextWrapping = TextWrapping.Wrap,
+                },
+                PrimaryButtonText = "Install version",
+                CloseButtonText = "Cancel",
+                DefaultButton = ContentDialogButton.Close,
+            };
+            ActionStatusText.Text = string.Empty;
+            if (await dialog.ShowAsync() != ContentDialogResult.Primary) return;
+
+            AdapterUpdateInstallation installed = await AppControl.Client.InstallInstanceUpdateAsync(offerId);
+            await RefreshAsync(instance.InstanceId);
+            ActionStatusText.Text = $"Installed version {installed.Version}. Select it to use it for this instance.";
+        }
+        catch (Exception exception)
+        {
+            ActionStatusText.Text = exception.Message;
+        }
+        finally
+        {
+            _checkingUpdate = false;
+            CheckUpdateButton.IsEnabled = InstanceSelector.SelectedIndex >= 0;
+        }
     }
 
     private void VersionSelector_SelectionChanged(object sender, SelectionChangedEventArgs e) =>

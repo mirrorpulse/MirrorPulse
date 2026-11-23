@@ -41,7 +41,7 @@ public static class MirrorPulseCliCommandLine
             ["conflict"] = NewSet("list", "show", "snooze", "resolve", "refresh-version"),
             ["host"] = NewSet("status", "start", "stop", "restart"),
             ["instance"] = NewSet("list", "create", "configure", "enable", "disable", "select-version",
-                "auth-start", "auth-poll", "auth-cancel"),
+                "auth-start", "auth-poll", "auth-cancel", "check-update", "install-update"),
             ["operation"] = NewSet("get", "watch", "cancel"),
             ["root"] = NewSet("list", "prepare-rename", "execute-rename", "cancel-rename", "recover"),
             ["namespace"] = NewSet("member", "birth", "protection", "remote", "transfer"),
@@ -231,6 +231,8 @@ public static class MirrorPulseCliHelp
           instance auth-start --install-id ID --callback ID [--config KEY=VALUE]
                               [--instance-id ID --revision GUID | --draft-id ID]
           instance auth-poll|auth-cancel AUTHORIZATION_ID
+          instance check-update --instance-id ID
+          instance install-update OFFER_ID
                                          Follow the returned page, poll, and pass a ready authorization to save.
           root list                      Inspect managed roots and namespace recovery.
           root prepare-rename ROOT_ID LABEL

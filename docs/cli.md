@@ -99,6 +99,8 @@ The default output is concise human-readable text. Automation should use `--json
 | `mp instance configure --instance-id ID --name NAME [--config k=v] [--root k=v]` | Update instance configuration and roots. | adapter-defined keys |
 | `mp instance enable\|disable --instance-id ID` | Change whether an instance participates in synchronization. | `--json` |
 | `mp instance select-version --instance-id ID --install-id ID` | Select the installed Adapter version for an instance. | `--json` |
+| `mp instance check-update --instance-id ID` | Ask a running Adapter deployment whether it offers a newer package. | `--json` |
+| `mp instance install-update OFFER_ID` | Approve and install the offered signed version alongside existing versions. | `--json`; use `select-version` to switch a deployment |
 | `mp conflict list\|show\|snooze\|resolve` | Inspect, defer, or resolve conflicts. | `--conflict-id ID`, `--action KeepLocal\|KeepRemote\|KeepBoth\|Retry\|DeleteLocal\|DeleteRemote`, `--preserved-path PATH` |
 | `mp operation get\|watch\|cancel --operation-id ID` | Inspect or cancel a long-running operation. | `--timeout SEC` |
 | `mp config` | Read settings, or update them with `--locale`, `--developer-mode`, `--start-with-windows`, `--enable-installation ID`, and `--sync-root-display-name NAME`. | `--json` |

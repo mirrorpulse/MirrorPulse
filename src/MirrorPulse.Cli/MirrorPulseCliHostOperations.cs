@@ -652,6 +652,30 @@ public sealed partial class MirrorPulseCliHostOperations : IMirrorPulseCliHostOp
                         .ConfigureAwait(false);
                     human = $"Adapter instance {(enabled ? "enabled" : "disabled")}: {instanceId}";
                     break;
+                case ("instance", "check-update"):
+                    AdapterUpdateCheck update = await _client.CheckInstanceUpdateAsync(
+                        GetRequiredOption(command.Arguments, "instance-id"), cancellationToken).ConfigureAwait(false);
+                    result = update;
+                    human = update.Availability switch
+                    {
+                        AdapterUpdateAvailability.Available => $"Version {update.AvailableVersion} is available from {update.Source}. " +
+                            $"Install with instance install-update {update.OfferId:D}.",
+                        AdapterUpdateAvailability.AlreadyInstalled => $"Version {update.AvailableVersion} is already installed. " +
+                            "Use instance select-version to switch this deployment.",
+                        AdapterUpdateAvailability.Current => $"Version {update.CurrentVersion} is current.",
+                        AdapterUpdateAvailability.Offline => "Start the Adapter deployment before checking for updates.",
+                        _ => "This Adapter does not offer update checks.",
+                    };
+                    break;
+                case ("instance", "install-update"):
+                    if (command.Arguments.Count != 1 || !Guid.TryParseExact(command.Arguments[0], "D", out Guid offerId) || offerId == Guid.Empty)
+                        throw new ArgumentException("instance install-update requires the offer ID from instance check-update.");
+                    AdapterUpdateInstallation updateInstallation = await _client.InstallInstanceUpdateAsync(offerId,
+                        cancellationToken).ConfigureAwait(false);
+                    result = updateInstallation;
+                    human = $"Installed version {updateInstallation.Version} · {updateInstallation.InstallId}. " +
+                        "Use instance select-version to switch a deployment.";
+                    break;
                 case ("instance", "select-version"):
                     instanceId = GetRequiredOption(command.Arguments, "instance-id");
                     string installId = GetRequiredOption(command.Arguments, "install-id");

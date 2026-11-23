@@ -137,7 +137,42 @@ public sealed class SignedThirdPartyPackageTests
                 Assert.IsFalse(Directory.Exists(Path.Combine(root, "installed")));
                 return;
             }
-            InstalledAdapter installed = await catalog.InstallSignedAdapterAsync(packagePath,
+            InstalledAdapter? installed = null;
+            if (workerProtocol == 2 && packageVersion == "1.0.0")
+            {
+                string installationRoot = Path.Combine(root, "installed");
+                string sidecar = Path.Combine(root, "missing.signature.json");
+                var binding = new MirrorPulseProductCatalog.AdapterUpdateBinding(InstanceId.New(), InstallId.New(),
+                    new(adapterId, "1.0.1"), AdapterInstallSource.LocalFile, packagePath);
+                await Assert.ThrowsExactlyAsync<InvalidDataException>(() => catalog.InstallSignedAdapterAsync(packagePath,
+                    sidecar, installationRoot, "win-x64", publisherKey, "Example Publisher", binding, CancellationToken.None));
+                Assert.IsFalse(Directory.Exists(installationRoot));
+                await Assert.ThrowsExactlyAsync<InvalidDataException>(() => catalog.InstallSignedAdapterAsync(packagePath,
+                    sidecar, installationRoot, "win-x64", publisherKey, "Example Publisher",
+                    binding with { Identity = new(adapterId, packageVersion) }, CancellationToken.None));
+                Assert.IsEmpty(Directory.EnumerateFileSystemEntries(installationRoot));
+                Assert.IsEmpty((await catalog.ReadAdapterTopologyAsync()).Installations);
+
+                var previousManifest = new AdapterManifest(1, AdapterId.Parse(adapterId), "Example Publisher", "0.9.0", new(2, 2),
+                    new Dictionary<string, string> { ["win-x64"] = worker, ["win-arm64"] = "worker/win-arm64/Example.Worker.exe" },
+                    new(null), new(null, 1), new(true, false, true, true), ["en-US"], "1.0.0",
+                    [new("cloud", "Example cloud", "Example cloud", false)]);
+                var previous = new InstalledAdapter(previousManifest, binding.CurrentInstallId, source, new(new string('A', 64)),
+                    AdapterInstallSource.LocalFile, null, true, DateTimeOffset.UtcNow, AdapterLifecycleState.Installed);
+                var first = new AdapterInstance(previous.AdapterId, previous.InstallId, binding.InstanceId, "First",
+                    new Dictionary<string, string>(), [], root, root, true, AdapterLifecycleState.Installed, null, DateTimeOffset.UtcNow);
+                var second = new AdapterInstance(previous.AdapterId, previous.InstallId, InstanceId.New(), "Second",
+                    new Dictionary<string, string>(), [], root, root, true, AdapterLifecycleState.Installed, null, DateTimeOffset.UtcNow);
+                await catalog.SaveAdapterTopologyAsync(new([previous], [first, second], []));
+                var currentBinding = binding with { Identity = new(adapterId, packageVersion) };
+                installed = await catalog.InstallSignedAdapterAsync(packagePath, sidecar, installationRoot, "win-x64", publisherKey,
+                    "Example Publisher", currentBinding, CancellationToken.None);
+                var topology = await catalog.ReadAdapterTopologyAsync();
+                Assert.HasCount(2, topology.Installations);
+                Assert.HasCount(2, topology.Instances);
+                Assert.IsTrue(topology.Instances.All(instance => instance.InstallId == previous.InstallId));
+            }
+            installed ??= await catalog.InstallSignedAdapterAsync(packagePath,
                 Path.Combine(root, "missing.signature.json"), Path.Combine(root, "installed"),
                 "win-x64", publisherKey, "Example Publisher");
             Assert.AreEqual(adapterId, installed.AdapterId.ToString());

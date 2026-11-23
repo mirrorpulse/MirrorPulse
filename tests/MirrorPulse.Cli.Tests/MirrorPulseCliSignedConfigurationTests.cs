@@ -11,6 +11,53 @@ namespace MirrorPulse.Cli.Tests;
 public sealed class MirrorPulseCliSignedConfigurationTests
 {
     [TestMethod]
+    public async Task CheckingAndInstallingAnUpdateAreSeparateControlCommands()
+    {
+        Guid offerId = Guid.NewGuid();
+        string instanceId = Guid.NewGuid().ToString("D");
+        string pipe = "MirrorPulse-cli-update-" + Guid.NewGuid().ToString("N");
+        int installs = 0;
+        var dispatcher = new MirrorPulseControlDispatcher();
+        dispatcher.Register<InstanceIdArguments, AdapterUpdateCheck>(MirrorPulseControlCommands.InstanceCheckUpdate, (request, _) =>
+        {
+            Assert.AreEqual(instanceId, request.InstanceId);
+            return ValueTask.FromResult(new AdapterUpdateCheck(AdapterUpdateAvailability.Available, "1.0.0", "1.1.0", offerId,
+                "https://example.test/adapter.mpadapter"));
+        });
+        dispatcher.Register<InstanceInstallUpdateArguments, AdapterUpdateInstallation>(MirrorPulseControlCommands.InstanceInstallUpdate,
+            (request, _) =>
+            {
+                Assert.AreEqual(offerId, request.OfferId);
+                Interlocked.Increment(ref installs);
+                return ValueTask.FromResult(new AdapterUpdateInstallation(Guid.NewGuid().ToString("D"), "1.1.0"));
+            });
+        using var shutdown = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        var server = new MirrorPulseControlPipeServer(dispatcher.DispatchAsync, pipe);
+        Task serving = server.ServeAsync(shutdown.Token);
+        var client = new MirrorPulseControlClient(new() { PipeName = pipe, ExpectedHostProcessId = Environment.ProcessId });
+        await using var operations = new MirrorPulseCliHostOperations(new MirrorPulseHostStartupOptions(), client);
+        try
+        {
+            using var output = new StringWriter();
+            using var error = new StringWriter();
+            Assert.AreEqual(0, await MirrorPulseCliApplication.RunAsync(["--no-start", "--json", "instance", "check-update",
+                "--instance-id", instanceId], output, error, hostOperations: operations, isPlatformSupported: () => true));
+            StringAssert.Contains(output.ToString(), offerId.ToString("D"));
+            Assert.AreEqual(0, Volatile.Read(ref installs));
+            Assert.AreEqual(0, await MirrorPulseCliApplication.RunAsync(["--no-start", "instance", "install-update", offerId.ToString("D")],
+                output, error, hostOperations: operations, isPlatformSupported: () => true));
+            StringAssert.Contains(output.ToString(), "Installed version 1.1.0");
+            Assert.AreEqual(1, Volatile.Read(ref installs));
+            Assert.AreEqual(string.Empty, error.ToString());
+        }
+        finally
+        {
+            await shutdown.CancelAsync();
+            await serving;
+        }
+    }
+
+    [TestMethod]
     public async Task AuthorizationCommandsUseTheSharedChannelAndPassOnlyReceiptIdsToSave()
     {
         Guid authorizationId = Guid.NewGuid();

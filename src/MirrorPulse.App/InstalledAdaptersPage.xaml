@@ -20,6 +20,7 @@
             <Button x:Name="ConfigureInstanceButton" Content="Configure selected instance" IsEnabled="False" Click="ConfigureInstanceButton_Click" />
             <ComboBox x:Name="VersionSelector" Header="Installed version for this instance" MinWidth="320" HorizontalAlignment="Left" SelectionChanged="VersionSelector_SelectionChanged" />
             <Button x:Name="UseVersionButton" Content="Use selected version" IsEnabled="False" HorizontalAlignment="Left" Click="UseVersionButton_Click" />
+            <Button x:Name="CheckUpdateButton" Content="Check for Adapter updates" IsEnabled="False" Click="CheckUpdateButton_Click" />
             <ToggleSwitch x:Name="AdapterEnableToggle" Header="Start this instance with MirrorPulse" Toggled="AdapterEnableToggle_Toggled" />
             <TextBlock x:Name="ActionStatusText" TextWrapping="Wrap" />
             <TextBlock x:Name="EmptyStateText" Text="No Adapters are installed yet." Opacity="0.75" />

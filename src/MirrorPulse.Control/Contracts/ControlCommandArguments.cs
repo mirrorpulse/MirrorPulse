@@ -1,7 +1,7 @@
 using System.Text.Json.Serialization;
-using MirrorPulse.Core.Host;
 using MirrorPulse.Core.Conflicts;
 using MirrorPulse.Core.Contracts;
+using MirrorPulse.Core.Host;
 
 namespace MirrorPulse.Control.Contracts;
 
@@ -290,6 +290,8 @@ public sealed record InstanceAuthorizationStartArguments(string InstallId, strin
     Guid? ExpectedConfigurationRevision = null, string? DraftId = null) : IMirrorPulseControlArguments;
 
 public sealed record InstanceAuthorizationArguments(Guid AuthorizationId) : IMirrorPulseControlArguments;
+
+public sealed record InstanceInstallUpdateArguments(Guid OfferId) : IMirrorPulseControlArguments;
 
 public sealed record InstanceIdArguments(string InstanceId) : IMirrorPulseControlArguments;
 

@@ -553,6 +553,11 @@ public sealed partial class MirrorPulseHostApplication : IAsyncDisposable
             ExecuteNamespaceBirthRecoveryAsync)
             .Register(dispatcher);
         MirrorPulseAdapterAuthorizationCommands.Register(dispatcher, authorization);
+        var updates = new AdapterUpdateCoordinator(_catalog, _workers, _paths.DataRootPath, GetAdapterRuntimeIdentifier());
+        dispatcher.Register<InstanceIdArguments, AdapterUpdateCheck>(MirrorPulseControlCommands.InstanceCheckUpdate,
+            (arguments, token) => new(updates.CheckAsync(InstanceId.Parse(arguments.InstanceId), token)));
+        dispatcher.Register<InstanceInstallUpdateArguments, AdapterUpdateInstallation>(MirrorPulseControlCommands.InstanceInstallUpdate,
+            (arguments, token) => new(updates.InstallAsync(arguments.OfferId, token)));
         dispatcher.Register<ControlEmptyArguments, IReadOnlyList<MirrorPulseControlRootStatus>>(
             MirrorPulseControlCommands.RootList, async (_, token) => await ReadRootsAsync(token).ConfigureAwait(false));
         dispatcher.Register<ConflictRefreshVersionArguments, MirrorPulseControlConflictVersionRefresh>(
@@ -1111,21 +1116,22 @@ public sealed partial class MirrorPulseHostApplication : IAsyncDisposable
         }
 
         string signaturePath = source + ".signature.json";
-        string runtimeIdentifier = System.Runtime.InteropServices.RuntimeInformation.ProcessArchitecture switch
-        {
-            System.Runtime.InteropServices.Architecture.X64 => "win-x64",
-            System.Runtime.InteropServices.Architecture.Arm64 => "win-arm64",
-            _ => throw new PlatformNotSupportedException("The Adapter process architecture is unsupported."),
-        };
         string installationRoot = Path.Combine(_paths.DataRootPath, "adapters", "installed");
         InstalledAdapter installed = await _catalog.InstallSignedAdapterAsync(
-            source, signaturePath, installationRoot, runtimeIdentifier, cancellationToken)
+            source, signaturePath, installationRoot, GetAdapterRuntimeIdentifier(), cancellationToken)
             .ConfigureAwait(false);
         return (await ReadStatusAsync(cancellationToken).ConfigureAwait(false)) with
         {
             InstalledAdapterId = installed.InstallId.ToString(),
         };
     }
+
+    private static string GetAdapterRuntimeIdentifier() => System.Runtime.InteropServices.RuntimeInformation.ProcessArchitecture switch
+    {
+        System.Runtime.InteropServices.Architecture.X64 => "win-x64",
+        System.Runtime.InteropServices.Architecture.Arm64 => "win-arm64",
+        _ => throw new PlatformNotSupportedException("The Adapter process architecture is unsupported."),
+    };
 
     private async Task<MirrorPulseAppStatusResponse> RefreshAsync(
         SyncRefreshArguments arguments,

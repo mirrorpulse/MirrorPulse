@@ -29,6 +29,7 @@ public sealed class AdapterInstanceProcessSupervisor :
     private readonly ConcurrentDictionary<InstanceId, AdapterWorkerReadRangeClient> _ready = new();
     private readonly ConcurrentDictionary<InstanceId, AdapterWorkerUploadClient> _uploads = new();
     private readonly ConcurrentDictionary<InstanceId, AdapterWorkerStatClient> _stats = new();
+    private readonly ConcurrentDictionary<InstanceId, AdapterWorkerUpdateClient> _updateChecks = new();
     private readonly ConcurrentDictionary<InstanceId, AdapterWorkerDirectoryPageClient> _directories = new();
     private readonly ConcurrentDictionary<InstanceId, AdapterWorkerMutationClient> _mutations = new();
     private readonly ConcurrentDictionary<InstanceId, SemaphoreSlim> _instanceOperations = new();
@@ -82,6 +83,15 @@ public sealed class AdapterInstanceProcessSupervisor :
 
     /// <summary>Observes the live negotiated Worker after its Connected frame, independently of journal/progress status.</summary>
     public bool IsConnected(InstanceId instanceId) => !_shutdown.IsCancellationRequested && _ready.ContainsKey(instanceId);
+
+    internal async Task<JsonElement> CheckUpdateAsync(AdapterInstance instance, CancellationToken cancellationToken)
+    {
+        if (!IsConnected(instance.InstanceId) || !_updateChecks.TryGetValue(instance.InstanceId, out var update) ||
+            update.InstallId != instance.InstallId)
+            throw new AdapterWorkerOperationException("Offline");
+        if (!update.IsSupported) throw new NotSupportedException("This Adapter does not offer update checks.");
+        return await update.CheckAsync(cancellationToken).ConfigureAwait(false);
+    }
 
     /// <summary>Returns only issues reported for the deployment's current package and form revision.</summary>
     public IReadOnlyList<AdapterHealthIssue> ReadReportedHealth(AdapterInstance instance) =>
@@ -577,6 +587,7 @@ public sealed class AdapterInstanceProcessSupervisor :
         selectProtocol(protocol.ProtocolVersion);
         var upload = new AdapterWorkerUploadClient(channel, instance.InstanceId, sessionId);
         var stat = new AdapterWorkerStatClient(channel, instance.InstanceId, sessionId);
+        var update = new AdapterWorkerUpdateClient(channel, instance.InstanceId, sessionId, instance.InstallId);
         var directory = new AdapterWorkerDirectoryPageClient(channel, instance.InstanceId, sessionId);
         var mutations = new AdapterWorkerMutationClient(channel, instance.InstanceId, sessionId);
         var instanceOperations = new SemaphoreSlim(1, 1);
@@ -591,6 +602,7 @@ public sealed class AdapterInstanceProcessSupervisor :
 
         _uploads[instance.InstanceId] = upload;
         _stats[instance.InstanceId] = stat;
+        _updateChecks[instance.InstanceId] = update;
         _directories[instance.InstanceId] = directory;
         _mutations[instance.InstanceId] = mutations;
         _instanceOperations[instance.InstanceId] = instanceOperations;
@@ -630,7 +642,7 @@ public sealed class AdapterInstanceProcessSupervisor :
                     {
                         await mutations.HandleResponseAsync(frame).ConfigureAwait(false);
                     }
-                    else
+                    else if (!update.TryHandle(frame))
                     {
                         throw new AdapterWorkerOperationException("UncorrelatedResponse");
                     }
@@ -695,12 +707,14 @@ public sealed class AdapterInstanceProcessSupervisor :
             _connected.TryRemove(instance.InstanceId, out _);
             _uploads.TryRemove(instance.InstanceId, out _);
             _stats.TryRemove(instance.InstanceId, out _);
+            _updateChecks.TryRemove(instance.InstanceId, out _);
             _directories.TryRemove(instance.InstanceId, out _);
             _mutations.TryRemove(instance.InstanceId, out _);
             _instanceOperations.TryRemove(instance.InstanceId, out _);
             channel.Close();
             upload.Close();
             stat.Close();
+            update.Close();
             directory.Close();
             mutations.Close();
             // RPCs already holding or waiting on this managed-only gate can still unwind.

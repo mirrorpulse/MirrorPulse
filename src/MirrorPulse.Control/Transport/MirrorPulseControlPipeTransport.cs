@@ -263,7 +263,9 @@ public sealed class MirrorPulseControlPipeServer
         if (!capacity.Wait(0, cancellationToken)) return Busy(request.RequestId);
         try
         {
-            bool mutating = !priority && MirrorPulseControlCommands.Catalog.Any(command =>
+            // Package acquisition can run alongside ordinary controls. Its catalog commit revalidates the deployment
+            // inside the catalog gate after the download and signature verification.
+            bool mutating = !priority && request.Command != MirrorPulseControlCommands.InstanceInstallUpdate && MirrorPulseControlCommands.Catalog.Any(command =>
                 command.Name == request.Command && command.Mutating);
             if (!mutating) return await _handler(request, cancellationToken).ConfigureAwait(false);
             await mutation.WaitAsync(cancellationToken).ConfigureAwait(false);

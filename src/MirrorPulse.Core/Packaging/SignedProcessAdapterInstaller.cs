@@ -1,6 +1,7 @@
 using System.IO.Compression;
 using System.Security.Cryptography;
 using System.Text.Json;
+using MirrorPulse.Adapter.Sdk;
 using MirrorPulse.Core.Contracts;
 
 namespace MirrorPulse.Core.Packaging;
@@ -23,14 +24,20 @@ public static class SignedProcessAdapterInstaller
     private const long MaximumUncompressedBytes = 2L * 1024 * 1024 * 1024;
     public const string EmbeddedSignaturePath = "META-INF/mirrorpulse/signature.json";
 
-    public static async Task<SignedProcessAdapterInstallation> InstallAsync(
+    public static Task<SignedProcessAdapterInstallation> InstallAsync(
         string packagePath,
         string signaturePath,
         string installationRoot,
         string runtimeIdentifier,
         RSA trustedKey,
         string trustedSigner,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default) => InstallAsync(packagePath, signaturePath, installationRoot,
+            runtimeIdentifier, trustedKey, trustedSigner, expectedIdentity: null, cancellationToken);
+
+    internal static async Task<SignedProcessAdapterInstallation> InstallAsync(
+        string packagePath, string signaturePath, string installationRoot, string runtimeIdentifier,
+        RSA trustedKey, string trustedSigner, AdapterPackageIdentity? expectedIdentity,
+        CancellationToken cancellationToken)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(packagePath);
         ArgumentException.ThrowIfNullOrWhiteSpace(signaturePath);
@@ -141,6 +148,8 @@ public static class SignedProcessAdapterInstaller
         AdapterPackageCompatibility.Validate(manifest, runtimeIdentifier);
         string adapterId = manifest.AdapterId.ToString();
         string version = manifest.Version;
+        if (expectedIdentity is not null && (adapterId != expectedIdentity.AdapterId || version != expectedIdentity.Version))
+            throw new InvalidDataException("The signed package does not match the confirmed Adapter update.");
         string entrypoint = manifest.Entrypoints[runtimeIdentifier];
         if (!AdapterId.TryParse(adapterId, out _) ||
             !AdapterPackageVersion.TryParse(version, out _) ||
