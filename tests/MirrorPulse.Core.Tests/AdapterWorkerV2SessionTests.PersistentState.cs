@@ -11,6 +11,7 @@ namespace MirrorPulse.Core.Tests;
 public sealed partial class AdapterWorkerV2SessionTests
 {
     [TestMethod]
+    [DoNotParallelize] // Each catalog owner starts two real Worker processes.
     public async Task WorkerDurableStateIsInstanceScopedAndSurvivesCatalogReopenAndCacheRemoval()
     {
         string directory = Path.Combine(Path.GetTempPath(), "MirrorPulse-tests", Guid.NewGuid().ToString("N"));
@@ -31,13 +32,13 @@ public sealed partial class AdapterWorkerV2SessionTests
         var topology = new MirrorPulseAdapterTopology([.. first.Installations, .. second.Installations, .. disabled.Installations],
             [first.Instances.Single(), second.Instances.Single(), inactive],
             [OneRoot(first, "FirstRoot"), OneRoot(second, "SecondRoot"), OneRoot(disabled, "DisabledRoot", enabled: false)]);
-        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(25));
-        CancellationToken token = deadline.Token;
         var originals = new Dictionary<InstanceId, byte[]>();
         try
         {
             for (int owner = 0; owner < 2; owner++)
             {
+                using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(25));
+                CancellationToken token = deadline.Token;
                 foreach (var instance in topology.Instances.Where(value => value.Enabled))
                 {
                     Directory.CreateDirectory(instance.TransferCacheDirectory);
