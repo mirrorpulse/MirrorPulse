@@ -3,6 +3,7 @@ using System.Runtime.Versioning;
 using System.Text;
 using CfSharp;
 using MirrorPulse.Adapter.Sdk;
+using MirrorPulse.Core;
 using MirrorPulse.Core.Caching;
 using MirrorPulse.Core.CloudFiles;
 using MirrorPulse.Core.Configuration;
@@ -2649,8 +2650,7 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
 [SupportedOSPlatform("windows10.0.19041")]
 public sealed class MirrorPulseCloudHostSession : IAsyncDisposable
 {
-    private static readonly Guid ProviderId = new("d194eacd-c38c-49df-a238-49871f9c8d1b");
-    private static readonly byte[] RootIdentity = Encoding.UTF8.GetBytes("MirrorPulse/cloud-files/v1");
+    private static readonly byte[] RootIdentity = Encoding.UTF8.GetBytes($"{ProductInfo.Edition.IdentityPrefix}/cloud-files/v1");
 
     private readonly MirrorPulseStoragePaths _paths;
     private readonly MirrorPulseSyncRootRegistrationCoordinator _registration;
@@ -2681,7 +2681,7 @@ public sealed class MirrorPulseCloudHostSession : IAsyncDisposable
         _registration = registration;
         _runtimeFactory = runtimeFactory;
         _owner = owner;
-        _definition = new MirrorPulseSyncRootDefinition(paths.SyncRootPath, "0.1.0", ProviderId, RootIdentity);
+        _definition = new MirrorPulseSyncRootDefinition(paths.SyncRootPath, "0.1.0", ProductInfo.Edition.ProviderId, RootIdentity);
         _profile = MirrorPulseShellSyncRootRegistrar.CreateProfile(_definition, currentUserSid, displayName);
     }
 

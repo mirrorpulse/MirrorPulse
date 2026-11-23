@@ -138,7 +138,7 @@ public sealed partial class MirrorPulseHostApplication : IAsyncDisposable
             MirrorPulseConfiguration configuration = await configurationStore.LoadAsync(cancellationToken)
                 .ConfigureAwait(false) ?? new MirrorPulseConfiguration(
                     MirrorPulseConfiguration.CurrentSchemaVersion,
-                    "en-US", false, false, []);
+                    "en-US", false, false, [], ProductInfo.Name);
             catalog = await MirrorPulseProductCatalog.OpenAsync(paths, cancellationToken)
                 .ConfigureAwait(false);
             MirrorPulseAdapterTopology topology = await catalog.ReadAdapterTopologyAsync(cancellationToken)

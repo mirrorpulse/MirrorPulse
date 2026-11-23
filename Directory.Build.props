@@ -1,5 +1,10 @@
 <Project>
+  <Import Project="$(MirrorPulseEditionProfile)" Condition="'$(MirrorPulseEditionProfile)' != ''" />
+
   <PropertyGroup>
+    <MirrorPulseEditionId Condition="'$(MirrorPulseEditionProfile)' == '' and '$(MirrorPulseEditionId)' == ''">standard</MirrorPulseEditionId>
+    <MirrorPulseEditionName Condition="'$(MirrorPulseEditionId)' == 'standard' and '$(MirrorPulseEditionName)' == ''">MirrorPulse</MirrorPulseEditionName>
+    <MirrorPulseEditionProviderId Condition="'$(MirrorPulseEditionId)' == 'standard' and '$(MirrorPulseEditionProviderId)' == ''">d194eacd-c38c-49df-a238-49871f9c8d1b</MirrorPulseEditionProviderId>
     <LangVersion>latest</LangVersion>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>

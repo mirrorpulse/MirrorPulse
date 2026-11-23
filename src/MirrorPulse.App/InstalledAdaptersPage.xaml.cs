@@ -31,9 +31,9 @@ public sealed partial class InstalledAdaptersPage : Page
         try
         {
             string dataRoot = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), ProductInfo.Name);
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), ProductInfo.Edition.IdentityPrefix);
             string syncRoot = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ProductInfo.Name);
+                Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ProductInfo.Edition.IdentityPrefix);
             var paths = new MirrorPulseStoragePaths(syncRoot, dataRoot);
             MirrorPulseAdapterTopology topology = await MirrorPulseProductCatalog
                 .ReadAdapterTopologySnapshotAsync(paths);

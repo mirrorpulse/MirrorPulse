@@ -33,7 +33,7 @@ public sealed class CurrentUserOwnerLock : IDisposable, ICurrentUserOwnerLock
         using var identity = WindowsIdentity.GetCurrent();
         var sid = identity.User?.Value ?? throw new InvalidOperationException("The current Windows identity has no security identifier.");
         var safeScope = string.Concat(scope.Trim().Select(character => char.IsLetterOrDigit(character) || character is '-' or '_' ? character : '_'));
-        var root = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "MirrorPulse", "locks");
+        var root = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), ProductInfo.Edition.IdentityPrefix, "locks");
         Directory.CreateDirectory(root);
         var name = Path.Combine(root, $"owner-{sid}-{safeScope}.lock");
         return new CurrentUserOwnerLock(name);

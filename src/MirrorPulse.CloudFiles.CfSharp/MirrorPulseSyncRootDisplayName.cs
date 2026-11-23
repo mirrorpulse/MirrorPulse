@@ -1,3 +1,4 @@
+using MirrorPulse.Core;
 using MirrorPulse.Core.Contracts;
 
 namespace MirrorPulse.CloudFiles.CfSharp;
@@ -22,6 +23,6 @@ public static class MirrorPulseSyncRootDisplayName
             return current[0].DisplayName;
         }
 
-        return MirrorPulseSyncRootRegistrationService.ProviderName;
+        return ProductInfo.Name;
     }
 }

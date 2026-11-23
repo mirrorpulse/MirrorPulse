@@ -61,7 +61,7 @@ public sealed class WindowsCredentialManagerStore : ISecureCredentialStore
     public static string GetTargetName(CredentialReference reference)
     {
         ValidateReference(reference);
-        return $"MirrorPulse/{reference.ReferenceId}";
+        return $"{ProductInfo.Edition.IdentityPrefix}/{reference.ReferenceId}";
     }
 
     private static void ValidateReference(CredentialReference reference)

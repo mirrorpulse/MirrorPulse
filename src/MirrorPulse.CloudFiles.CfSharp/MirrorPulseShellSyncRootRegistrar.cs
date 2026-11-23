@@ -2,6 +2,7 @@ using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
 using System.Security.Principal;
 using CfSharp;
+using MirrorPulse.Core;
 using MirrorPulse.Core.CloudFiles;
 using Windows.Security.Cryptography;
 using Windows.Storage;
@@ -68,7 +69,7 @@ public static class MirrorPulseShellSyncRootRegistrar
     public static string CreateRegistrationId(string currentUserSid)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(currentUserSid);
-        return $"MirrorPulse!{currentUserSid.Trim()}!Default";
+        return $"{ProductInfo.Edition.IdentityPrefix}!{currentUserSid.Trim()}!Default";
     }
 
     public static async ValueTask<bool> RegisterAsync(

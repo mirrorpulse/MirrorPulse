@@ -10,6 +10,6 @@ public sealed class ProductInfoTests
     [TestMethod]
     public void ProductNameIsMirrorPulse()
     {
-        Assert.AreEqual(ProductInfo.Name, ExpectedProductName);
+        Assert.AreEqual(ExpectedProductName, ProductInfo.Name);
     }
 }

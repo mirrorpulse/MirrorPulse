@@ -7,9 +7,21 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <AssemblyMetadata Include="MirrorPulse.EditionId" Value="$(MirrorPulseEditionId)" />
+    <AssemblyMetadata Include="MirrorPulse.EditionName" Value="$(MirrorPulseEditionName)" />
+    <AssemblyMetadata Include="MirrorPulse.EditionProviderId" Value="$(MirrorPulseEditionProviderId)" />
     <PackageReference Include="Microsoft.Data.Sqlite" />
     <PackageReference Include="MirrorPulse.Adapter.Sdk" />
     <EmbeddedResource Include="State/CatalogSchema118.sql" LogicalName="MirrorPulse.Core.State.CatalogSchema118.sql" />
   </ItemGroup>
+
+  <Target Name="ValidateMirrorPulseEdition" BeforeTargets="GenerateAssemblyInfo">
+    <Error Condition="!$([System.Text.RegularExpressions.Regex]::IsMatch('$(MirrorPulseEditionId)', '^[a-z][a-z0-9]*(-[a-z0-9]+)*$')) or $(MirrorPulseEditionId.Length) > 48"
+           Text="MirrorPulseEditionId must be a stable lowercase identifier of up to 48 characters." />
+    <Error Condition="'$(MirrorPulseEditionName)' == '' or '$(MirrorPulseEditionProviderId)' == ''"
+           Text="The edition profile must supply MirrorPulseEditionName and MirrorPulseEditionProviderId." />
+    <Error Condition="!$([System.Text.RegularExpressions.Regex]::IsMatch('$(MirrorPulseEditionProviderId)', '^[0-9a-fA-F]{8}(-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}$'))"
+           Text="MirrorPulseEditionProviderId must be a Cloud Files provider GUID." />
+  </Target>
 
 </Project>

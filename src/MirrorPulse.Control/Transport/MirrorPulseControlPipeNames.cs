@@ -1,4 +1,5 @@
 using System.Security.Principal;
+using MirrorPulse.Core;
 
 namespace MirrorPulse.Control.Transport;
 
@@ -12,6 +13,6 @@ public static class MirrorPulseControlPipeNames
         using var identity = WindowsIdentity.GetCurrent();
         var sid = identity.User?.Value
             ?? throw new InvalidOperationException("The current user has no security identifier.");
-        return $"MirrorPulse-control-v1-{sid}";
+        return $"{ProductInfo.Edition.IdentityPrefix}-control-v1-{sid}";
     }
 }

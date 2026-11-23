@@ -29,9 +29,9 @@ public sealed partial class InstanceConfigurationPage : Page
         {
             InstallId installId = InstallId.Parse(e.Parameter as string ?? string.Empty);
             string dataRoot = Path.Combine(Environment.GetFolderPath(
-                Environment.SpecialFolder.LocalApplicationData), ProductInfo.Name);
+                Environment.SpecialFolder.LocalApplicationData), ProductInfo.Edition.IdentityPrefix);
             string syncRoot = Path.Combine(Environment.GetFolderPath(
-                Environment.SpecialFolder.UserProfile), ProductInfo.Name);
+                Environment.SpecialFolder.UserProfile), ProductInfo.Edition.IdentityPrefix);
             MirrorPulseAdapterTopology topology = await MirrorPulseProductCatalog
                 .ReadAdapterTopologySnapshotAsync(new MirrorPulseStoragePaths(syncRoot, dataRoot));
             _installation = topology.Installations.SingleOrDefault(item => item.InstallId == installId)
