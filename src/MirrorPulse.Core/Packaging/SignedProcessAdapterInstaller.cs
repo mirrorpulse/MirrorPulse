@@ -8,8 +8,12 @@ namespace MirrorPulse.Core.Packaging;
 public sealed record SignedProcessAdapterInstallation(
     string InstallationDirectory,
     string ExecutablePath,
-    string AdapterId,
-    string Version);
+    AdapterManifest Manifest,
+    Sha256Digest PackageSha256)
+{
+    public string AdapterId => Manifest.AdapterId.ToString();
+    public string Version => Manifest.Version;
+}
 
 /// <summary>
 /// Verifies every package byte before publishing an executable payload into the user install directory.
@@ -128,8 +132,11 @@ public static class SignedProcessAdapterInstaller
         ZipArchiveEntry manifestEntry = archive.GetEntry("manifest.json")
             ?? throw new InvalidDataException("The Adapter manifest is missing.");
         if (manifestEntry.Length > 1024 * 1024) throw new InvalidDataException("The Adapter manifest is too large.");
-        await using Stream manifestStream = manifestEntry.Open();
-        AdapterManifest manifest = await AdapterPackageManifestReader.ReadAsync(manifestStream, cancellationToken).ConfigureAwait(false);
+        AdapterManifest manifest;
+        await using (Stream manifestStream = manifestEntry.Open())
+        {
+            manifest = await AdapterPackageManifestReader.ReadAsync(manifestStream, cancellationToken).ConfigureAwait(false);
+        }
         AdapterPackageCompatibility.Validate(manifest, runtimeIdentifier);
         string adapterId = manifest.AdapterId.ToString();
         string version = manifest.Version;
@@ -141,6 +148,10 @@ public static class SignedProcessAdapterInstaller
             throw new InvalidDataException("The Adapter manifest identity or Worker entrypoint is invalid.");
         }
 
+        // Bind the recorded package hash to the same open file used for trust and extraction.
+        packageStream.Position = 0;
+        byte[] packageHash = await SHA256.HashDataAsync(packageStream, cancellationToken).ConfigureAwait(false);
+        var packageDigest = new Sha256Digest(Convert.ToHexString(packageHash));
         string rootDirectory = Path.GetFullPath(installationRoot);
         Directory.CreateDirectory(rootDirectory);
         string stagedDirectory = Path.Combine(rootDirectory, $".staging-{Guid.NewGuid():N}");
@@ -176,7 +187,7 @@ public static class SignedProcessAdapterInstaller
             Directory.Move(stagedDirectory, installedDirectory);
             return new SignedProcessAdapterInstallation(installedDirectory,
                 Path.Combine(installedDirectory, entrypoint.Replace('/', Path.DirectorySeparatorChar)),
-                adapterId, version);
+                manifest, packageDigest);
         }
         finally
         {

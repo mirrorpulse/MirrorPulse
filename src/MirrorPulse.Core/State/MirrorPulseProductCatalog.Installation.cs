@@ -72,19 +72,8 @@ public sealed partial class MirrorPulseProductCatalog
             trustedSigner, cancellationToken).ConfigureAwait(false);
         try
         {
-            AdapterManifest manifest = await AdapterPackageManifestReader.ReadAsync(
-                Path.Combine(installation.InstallationDirectory, "manifest.json"), cancellationToken)
-                .ConfigureAwait(false);
-            if (manifest.AdapterId.ToString() != installation.AdapterId ||
-                manifest.Version != installation.Version)
-            {
-                throw new InvalidDataException("The installed Adapter manifest does not match the signed package.");
-            }
-
-            await using var package = File.OpenRead(packagePath);
-            byte[] hash = await SHA256.HashDataAsync(package, cancellationToken).ConfigureAwait(false);
-            var adapter = new InstalledAdapter(manifest, InstallId.New(),
-                installation.InstallationDirectory, new Sha256Digest(Convert.ToHexString(hash)),
+            var adapter = new InstalledAdapter(installation.Manifest, InstallId.New(),
+                installation.InstallationDirectory, installation.PackageSha256,
                 AdapterInstallSource.LocalFile, Path.GetFullPath(packagePath), true,
                 DateTimeOffset.UtcNow, AdapterLifecycleState.Installed);
             await AddInstallationAsync(adapter, cancellationToken).ConfigureAwait(false);

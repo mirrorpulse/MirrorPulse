@@ -142,6 +142,8 @@ public sealed class SignedThirdPartyPackageTests
                 "win-x64", publisherKey, "Example Publisher");
             Assert.AreEqual(adapterId, installed.AdapterId.ToString());
             Assert.AreEqual(packageVersion, installed.Version);
+            byte[] verifiedBytes = await File.ReadAllBytesAsync(packagePath);
+            Assert.AreEqual(new Sha256Digest(Convert.ToHexString(SHA256.HashData(verifiedBytes))), installed.PackageSha256);
             Assert.IsTrue(installed.IsSigned);
             Assert.AreEqual("cloud", installed.Manifest.RootDefinitions.Single().Key);
             Assert.AreEqual("endpoint", installed.Manifest.ConfigurationFields[0].Key);
