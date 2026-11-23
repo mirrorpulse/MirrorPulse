@@ -64,7 +64,7 @@ public sealed partial class AdapterInstallPage : Page
         InstallButton.IsEnabled = false;
         try
         {
-            MirrorPulseAppStatusResponse result = await MirrorPulseAppStatusPipe.InstallAsync(
+            MirrorPulseAppStatusResponse result = await AppControl.Client.InstallAsync(
                 PackagePathTextBox.Text.Trim());
             if (string.IsNullOrWhiteSpace(result.InstalledAdapterId))
             {

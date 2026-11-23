@@ -194,6 +194,12 @@
           "MirrorPulse.Core": "[1.0.0, )"
         }
       },
+      "mirrorpulse.control": {
+        "type": "Project",
+        "dependencies": {
+          "MirrorPulse.Core": "[1.0.0, )"
+        }
+      },
       "mirrorpulse.core": {
         "type": "Project",
         "dependencies": {

@@ -43,7 +43,7 @@ public sealed partial class NotificationsPage : Page
 
         try
         {
-            MirrorPulseAppStatusResponse status = await MirrorPulseAppStatusPipe.SnoozeAsync(
+            MirrorPulseAppStatusResponse status = await AppControl.Client.SnoozeConflictAsync(
                 Guid.Parse(_notifications[index].ConflictId));
             Show(status);
         }
@@ -65,7 +65,7 @@ public sealed partial class NotificationsPage : Page
 
         try
         {
-            MirrorPulseAppStatusResponse status = await MirrorPulseAppStatusPipe.ResolveConflictAsync(
+            MirrorPulseAppStatusResponse status = await AppControl.Client.ResolveConflictAsync(
                 Guid.Parse(_notifications[index].ConflictId), action);
             Show(status);
         }
@@ -94,7 +94,7 @@ public sealed partial class NotificationsPage : Page
     {
         try
         {
-            Show(await MirrorPulseAppStatusPipe.RequestAsync());
+            Show(await AppControl.Client.GetStatusAsync());
         }
         catch (Exception exception)
         {

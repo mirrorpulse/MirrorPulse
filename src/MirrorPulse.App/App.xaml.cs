@@ -116,7 +116,7 @@ public partial class App : Application
         _checkingNotifications = true;
         try
         {
-            MirrorPulseAppStatusResponse status = await MirrorPulseAppStatusPipe.RequestAsync();
+            MirrorPulseAppStatusResponse status = await AppControl.Client.GetStatusAsync();
             MirrorPulseAppNotification? next = status.Notifications.FirstOrDefault(item =>
                 !item.Snoozed && !_shownNotifications.Contains(item.ConflictId));
             if (next is null)
@@ -127,7 +127,7 @@ public partial class App : Application
             bool snooze = await _window.ShowConflictNotificationAsync(next);
             if (snooze)
             {
-                await MirrorPulseAppStatusPipe.SnoozeAsync(Guid.Parse(next.ConflictId));
+                await AppControl.Client.SnoozeConflictAsync(Guid.Parse(next.ConflictId));
             }
 
             _shownNotifications.Add(next.ConflictId);

@@ -1,5 +1,6 @@
 using System.Text.Json.Serialization;
 using MirrorPulse.Core.Conflicts;
+using MirrorPulse.Core.Contracts;
 
 namespace MirrorPulse.Control.Contracts;
 
@@ -51,7 +52,18 @@ public sealed record MirrorPulseControlInstallation(
     bool IsSigned,
     DateTimeOffset InstalledAt,
     string LifecycleState,
-    string MinimumMirrorPulseVersion);
+    string MinimumMirrorPulseVersion)
+{
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public MirrorPulseControlAdapterForm? Form { get; init; }
+}
+
+/// <summary>Public, non-secret configuration metadata from the installed package.</summary>
+public sealed record MirrorPulseControlAdapterForm(string Title,
+    IReadOnlyList<MirrorPulseControlAdapterRootDefinition> RootDefinitions,
+    IReadOnlyList<AdapterConfigurationField> ConfigurationFields);
+
+public sealed record MirrorPulseControlAdapterRootDefinition(string Key, string Label, string DirectoryName);
 
 public sealed record MirrorPulseControlInstance(
     string AdapterId,

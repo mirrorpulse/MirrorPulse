@@ -24,7 +24,7 @@ public sealed partial class SyncStatusPage : Page
     {
         try
         {
-            MirrorPulseAppStatusResponse status = await MirrorPulseAppStatusPipe.RequestAsync();
+            MirrorPulseAppStatusResponse status = await AppControl.Client.GetStatusAsync();
             PendingUploadsText.Text = $"Pending uploads: {status.PendingUploads}";
             PendingConflictsText.Text =
                 $"Pending conflicts: {status.PendingRemoteConflicts} remote, " +

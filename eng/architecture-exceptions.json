@@ -9,7 +9,7 @@
     {
       "project": "MirrorPulse.App",
       "reference": "MirrorPulse.Core",
-      "reason": "Legacy UI dependencies pending Control.Client migration."
+      "reason": "Shared platform policy, edition identity, and pure status and configuration DTOs."
     },
     {
       "project": "MirrorPulse.App",
@@ -18,26 +18,6 @@
     }
   ],
   "sourceLines": [
-    {
-      "path": "src/MirrorPulse.App/InstalledAdaptersPage.xaml.cs",
-      "line": "using MirrorPulse.Core.State;",
-      "reason": "Legacy read-only WinUI catalog access; remove during Control.Client migration."
-    },
-    {
-      "path": "src/MirrorPulse.App/InstalledAdaptersPage.xaml.cs",
-      "line": "MirrorPulseAdapterTopology topology = await MirrorPulseProductCatalog",
-      "reason": "Legacy read-only WinUI catalog access; remove during Control.Client migration."
-    },
-    {
-      "path": "src/MirrorPulse.App/InstanceConfigurationPage.xaml.cs",
-      "line": "using MirrorPulse.Core.State;",
-      "reason": "Legacy read-only WinUI catalog access; remove during Control.Client migration."
-    },
-    {
-      "path": "src/MirrorPulse.App/InstanceConfigurationPage.xaml.cs",
-      "line": "MirrorPulseAdapterTopology topology = await MirrorPulseProductCatalog",
-      "reason": "Legacy read-only WinUI catalog access; remove during Control.Client migration."
-    },
     {
       "path": "src/MirrorPulse.App/MirrorPulsePackagedShellProbe.cs",
       "line": "using MirrorPulse.CloudFiles.CfSharp;",

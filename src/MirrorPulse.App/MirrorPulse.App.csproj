@@ -69,6 +69,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\MirrorPulse.Core\MirrorPulse.Core.csproj" />
+    <ProjectReference Include="..\MirrorPulse.Control\MirrorPulse.Control.csproj" />
     <ProjectReference Include="..\MirrorPulse.CloudFiles.CfSharp\MirrorPulse.CloudFiles.CfSharp.csproj" />
   </ItemGroup>
 

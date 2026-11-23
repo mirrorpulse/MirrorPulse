@@ -2,20 +2,19 @@ using System.Text.Json;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Navigation;
-using MirrorPulse.Core;
-using MirrorPulse.Core.Configuration;
+using MirrorPulse.Control.Contracts;
 using MirrorPulse.Core.Contracts;
 using MirrorPulse.Core.Host;
-using MirrorPulse.Core.State;
+using XamlControl = Microsoft.UI.Xaml.Controls.Control;
 
 namespace MirrorPulse.App;
 
 /// <summary>Collects non-secret Worker settings and stores secrets through the owner Host.</summary>
 public sealed partial class InstanceConfigurationPage : Page
 {
-    private InstalledAdapter? _installation;
+    private MirrorPulseControlInstallation? _installation;
     private readonly Dictionary<string, TextBox> _rootLabels = new(StringComparer.Ordinal);
-    private readonly List<(AdapterConfigurationField Field, Control Input)> _configurationInputs = [];
+    private readonly List<(AdapterConfigurationField Field, XamlControl Input)> _configurationInputs = [];
 
     public InstanceConfigurationPage()
     {
@@ -27,25 +26,21 @@ public sealed partial class InstanceConfigurationPage : Page
         base.OnNavigatedTo(e);
         try
         {
-            InstallId installId = InstallId.Parse(e.Parameter as string ?? string.Empty);
-            string dataRoot = Path.Combine(Environment.GetFolderPath(
-                Environment.SpecialFolder.LocalApplicationData), ProductInfo.Edition.IdentityPrefix);
-            string syncRoot = Path.Combine(Environment.GetFolderPath(
-                Environment.SpecialFolder.UserProfile), ProductInfo.Edition.IdentityPrefix);
-            MirrorPulseAdapterTopology topology = await MirrorPulseProductCatalog
-                .ReadAdapterTopologySnapshotAsync(new MirrorPulseStoragePaths(syncRoot, dataRoot));
+            string installId = InstallId.Parse(e.Parameter as string ?? string.Empty).ToString();
+            MirrorPulseControlTopology topology = await AppControl.Client.GetAdapterTopologyAsync();
             _installation = topology.Installations.SingleOrDefault(item => item.InstallId == installId)
                 ?? throw new FileNotFoundException("The selected Adapter installation was not found.");
+            MirrorPulseControlAdapterForm form = _installation.Form
+                ?? throw new InvalidDataException("The Host did not return the installed Adapter form.");
 
-            string adapterId = _installation.AdapterId.ToString();
+            string adapterId = _installation.AdapterId;
             bool isLocal = adapterId == "com.mirrorpulse.adapter.local";
             bool isSmb = adapterId == "com.mirrorpulse.adapter.smb";
             bool isWebDav = adapterId == "com.mirrorpulse.adapter.webdav";
             bool showCredentialInputs = !isLocal && !isSmb;
             bool hasOfficialSource = isLocal || isSmb || isWebDav;
             AdapterNameText.Text = adapterId + " · " + _installation.Version;
-            AdapterLabelTextBox.Text = _installation.Manifest.LocaleMetadata.TryGetValue("en-US",
-                out AdapterLocaleMetadata? locale) ? locale.DisplayName : adapterId;
+            AdapterLabelTextBox.Text = form.Title;
             SourcePathTextBox.Header = isLocal ? "Local source directory" : isSmb
                 ? "Network share path" : "Server endpoint";
             SourcePathTextBox.PlaceholderText = isLocal ? @"C:\Users\You\Documents" : isSmb
@@ -56,16 +51,16 @@ public sealed partial class InstanceConfigurationPage : Page
             SecretHintText.Visibility = showCredentialInputs ? Visibility.Visible : Visibility.Collapsed;
             SecretHintText.Text = "Optional password or token. MirrorPulse stores it in Windows Credential Manager.";
 
-            if (_installation.Manifest.ConfigurationFields.Count > 0)
+            if (form.ConfigurationFields.Count > 0)
             {
                 SourcePathTextBox.Visibility = Visibility.Collapsed;
                 UsernameTextBox.Visibility = Visibility.Collapsed;
                 SecretBox.Visibility = Visibility.Collapsed;
                 SecretHintText.Visibility = Visibility.Collapsed;
                 AdditionalConfigurationTextBox.Visibility = Visibility.Collapsed;
-                foreach (AdapterConfigurationField field in _installation.Manifest.ConfigurationFields)
+                foreach (AdapterConfigurationField field in form.ConfigurationFields)
                 {
-                    Control input = field.Kind switch
+                    XamlControl input = field.Kind switch
                     {
                         AdapterConfigurationFieldKind.Choice => new ComboBox
                         {
@@ -95,7 +90,7 @@ public sealed partial class InstanceConfigurationPage : Page
 
             HashSet<string> usedLabels = topology.Roots.Select(root => root.Label)
                 .ToHashSet(StringComparer.OrdinalIgnoreCase);
-            foreach (AdapterRootDefinition definition in _installation.Manifest.RootDefinitions)
+            foreach (MirrorPulseControlAdapterRootDefinition definition in form.RootDefinitions)
             {
                 string suggested = definition.DirectoryName;
                 for (int suffix = 2; usedLabels.Contains(suggested); suffix++)
@@ -126,7 +121,7 @@ public sealed partial class InstanceConfigurationPage : Page
         CreateButton.IsEnabled = false;
         try
         {
-            string adapterId = _installation.AdapterId.ToString();
+            string adapterId = _installation.AdapterId;
             bool usesManifestForm = _configurationInputs.Count > 0;
             string? sourceKey = usesManifestForm ? null : adapterId switch
             {
@@ -172,7 +167,7 @@ public sealed partial class InstanceConfigurationPage : Page
             }
 
             string? secret = SecretBox.Visibility == Visibility.Visible ? SecretBox.Password : null;
-            foreach ((AdapterConfigurationField field, Control input) in _configurationInputs)
+            foreach ((AdapterConfigurationField field, XamlControl input) in _configurationInputs)
             {
                 if (input is PasswordBox password)
                 {
@@ -194,22 +189,19 @@ public sealed partial class InstanceConfigurationPage : Page
                 }
             }
 
-            configuration = new Dictionary<string, string>(
-                AdapterConfigurationFieldValidator.ValidateAndApplyDefaults(
-                    _installation.Manifest, configuration, secret), StringComparer.Ordinal);
             var rootLabels = _rootLabels.ToDictionary(item => item.Key,
                 item => item.Value.Text.Trim(), StringComparer.Ordinal);
-            var request = new MirrorPulseCreateInstanceRequest(
-                _installation.InstallId.ToString(), AdapterLabelTextBox.Text.Trim(),
+            var request = new InstanceCreateArguments(
+                _installation.InstallId, AdapterLabelTextBox.Text.Trim(),
                 configuration, rootLabels, secret, StartWithMirrorPulseToggle.IsOn);
-            MirrorPulseAppStatusResponse result = await MirrorPulseAppStatusPipe.CreateInstanceAsync(request);
+            MirrorPulseAppStatusResponse result = await AppControl.Client.CreateInstanceAsync(request);
             if (string.IsNullOrWhiteSpace(result.CreatedInstanceId))
             {
                 throw new InvalidDataException("The Host did not return the new instance ID.");
             }
 
             SecretBox.Password = string.Empty;
-            foreach ((_, Control input) in _configurationInputs)
+            foreach ((_, XamlControl input) in _configurationInputs)
             {
                 if (input is PasswordBox password)
                 {

@@ -1,10 +1,6 @@
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
-using MirrorPulse.Core;
-using MirrorPulse.Core.Configuration;
-using MirrorPulse.Core.Contracts;
-using MirrorPulse.Core.Host;
-using MirrorPulse.Core.State;
+using MirrorPulse.Control.Contracts;
 
 namespace MirrorPulse.App;
 
@@ -13,9 +9,9 @@ namespace MirrorPulse.App;
 /// </summary>
 public sealed partial class InstalledAdaptersPage : Page
 {
-    private MirrorPulseAdapterTopology _topology = new([], [], []);
-    private AdapterInstance[] _instances = [];
-    private InstalledAdapter[] _versions = [];
+    private MirrorPulseControlTopology _topology = new([], [], [], []);
+    private MirrorPulseControlInstance[] _instances = [];
+    private MirrorPulseControlInstallation[] _versions = [];
     private bool _loading;
 
     public InstalledAdaptersPage()
@@ -26,17 +22,11 @@ public sealed partial class InstalledAdaptersPage : Page
 
     private async void InstalledAdaptersPage_Loaded(object sender, RoutedEventArgs e) => await RefreshAsync();
 
-    private async Task RefreshAsync(InstanceId? selectedInstanceId = null)
+    private async Task RefreshAsync(string? selectedInstanceId = null)
     {
         try
         {
-            string dataRoot = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), ProductInfo.Edition.IdentityPrefix);
-            string syncRoot = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ProductInfo.Edition.IdentityPrefix);
-            var paths = new MirrorPulseStoragePaths(syncRoot, dataRoot);
-            MirrorPulseAdapterTopology topology = await MirrorPulseProductCatalog
-                .ReadAdapterTopologySnapshotAsync(paths);
+            MirrorPulseControlTopology topology = await AppControl.Client.GetAdapterTopologyAsync();
             _loading = true;
             _topology = topology;
             _instances = topology.Instances.ToArray();
@@ -53,7 +43,7 @@ public sealed partial class InstalledAdaptersPage : Page
             InstanceSelector.ItemsSource = _instances.Select(instance =>
                 $"{instance.DisplayName}  ·  {instance.InstanceId}").ToArray();
             int index = selectedInstanceId is null ? 0 :
-                Array.FindIndex(_instances, instance => instance.InstanceId == selectedInstanceId.Value);
+                Array.FindIndex(_instances, instance => instance.InstanceId == selectedInstanceId);
             InstanceSelector.SelectedIndex = _instances.Length == 0 ? -1 : Math.Max(0, index);
             UpdateInstanceSelection();
             _loading = false;
@@ -100,7 +90,7 @@ public sealed partial class InstalledAdaptersPage : Page
             return;
         }
 
-        AdapterInstance instance = _instances[index];
+        MirrorPulseControlInstance instance = _instances[index];
         _versions = _topology.Installations.Where(installation => installation.AdapterId == instance.AdapterId)
             .OrderBy(installation => installation.Version, StringComparer.Ordinal)
             .ToArray();
@@ -135,10 +125,10 @@ public sealed partial class InstalledAdaptersPage : Page
             return;
         }
 
-        InstanceId instanceId = _instances[instanceIndex].InstanceId;
+        string instanceId = _instances[instanceIndex].InstanceId;
         try
         {
-            await MirrorPulseAppStatusPipe.SelectInstallationAsync(instanceId,
+            await AppControl.Client.SelectInstallationAsync(instanceId,
                 _versions[versionIndex].InstallId);
             ActionStatusText.Text = "The instance version selection was saved. Restart MirrorPulse to run this version.";
             await RefreshAsync(instanceId);
@@ -157,10 +147,10 @@ public sealed partial class InstalledAdaptersPage : Page
             return;
         }
 
-        InstanceId instanceId = _instances[index].InstanceId;
+        string instanceId = _instances[index].InstanceId;
         try
         {
-            await MirrorPulseAppStatusPipe.SetInstanceEnabledAsync(instanceId, AdapterEnableToggle.IsOn);
+            await AppControl.Client.SetInstanceEnabledAsync(instanceId, AdapterEnableToggle.IsOn);
             ActionStatusText.Text = "The startup selection was saved. Restart MirrorPulse to apply it.";
             await RefreshAsync(instanceId);
         }
@@ -188,6 +178,6 @@ public sealed partial class InstalledAdaptersPage : Page
             return;
         }
 
-        Frame.Navigate(typeof(InstanceConfigurationPage), _topology.Installations[index].InstallId.ToString());
+        Frame.Navigate(typeof(InstanceConfigurationPage), _topology.Installations[index].InstallId);
     }
 }

@@ -11,7 +11,7 @@ $sourcePattern = 'MirrorPulse\.Core\.State|MirrorPulseProductCatalog|Microsoft\.
 $allowedReferences = @{
     "MirrorPulse.Cli" = @("MirrorPulse.Control")
     "MirrorPulse.Control" = @("MirrorPulse.Core")
-    "MirrorPulse.App" = @("MirrorPulse.Core", "MirrorPulse.CloudFiles.CfSharp")
+    "MirrorPulse.App" = @("MirrorPulse.Control", "MirrorPulse.Core", "MirrorPulse.CloudFiles.CfSharp")
 }
 foreach ($client in @("MirrorPulse.Cli", "MirrorPulse.Control", "MirrorPulse.App")) {
     $directory = Join-Path $RepositoryRoot "src/$client"
@@ -26,7 +26,7 @@ foreach ($client in @("MirrorPulse.Cli", "MirrorPulse.Control", "MirrorPulse.App
         if (-not [string]::Equals($resolved, $expected, [StringComparison]::OrdinalIgnoreCase)) {
             throw "$client references a project outside its approved source location."
         }
-        if ($client -ne "MirrorPulse.Cli") {
+        if ($name -ne "MirrorPulse.Control") {
             $record = @($exceptions.projectExceptions | Where-Object { $_.project -ceq $client -and $_.reference -ceq $name })
             if ($record.Count -ne 1 -or [string]::IsNullOrWhiteSpace($record[0].reason)) {
                 throw "$client has an undocumented legacy reference: $name"
