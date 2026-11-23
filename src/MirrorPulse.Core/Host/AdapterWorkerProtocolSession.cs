@@ -21,13 +21,15 @@ public sealed class AdapterWorkerProtocolSession
         DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
     };
     private readonly RootRegistration[] _roots;
+    private readonly bool _configurationOnly;
     private IReadOnlySet<string>? _durableCopyRoots;
 
-    private AdapterWorkerProtocolSession(int version, RootRegistration[] roots, string[] capabilities)
+    private AdapterWorkerProtocolSession(int version, RootRegistration[] roots, string[] capabilities, bool configurationOnly = false)
     {
         ProtocolVersion = version;
         _roots = roots;
         Capabilities = Array.AsReadOnly(capabilities);
+        _configurationOnly = configurationOnly;
     }
 
     public int ProtocolVersion { get; }
@@ -106,7 +108,13 @@ public sealed class AdapterWorkerProtocolSession
     }
 
     public static AdapterWorkerProtocolSession Negotiate(JsonElement hello, IEnumerable<RootRegistration> roots,
-        ProtocolVersionRange packageVersions)
+        ProtocolVersionRange packageVersions) => Negotiate(hello, roots, packageVersions, configurationOnly: false);
+
+    internal static AdapterWorkerProtocolSession NegotiateConfigurationOnly(JsonElement hello, ProtocolVersionRange packageVersions) =>
+        Negotiate(hello, [], packageVersions, configurationOnly: true);
+
+    private static AdapterWorkerProtocolSession Negotiate(JsonElement hello, IEnumerable<RootRegistration> roots,
+        ProtocolVersionRange packageVersions, bool configurationOnly)
     {
         ArgumentNullException.ThrowIfNull(roots);
         ArgumentNullException.ThrowIfNull(packageVersions);
@@ -129,6 +137,8 @@ public sealed class AdapterWorkerProtocolSession
         int selected = Math.Min(2, Math.Min(maximum, packageVersions.Maximum));
         if (selected < Math.Max(minimum, packageVersions.Minimum))
             throw new InvalidDataException("ProtocolVersionUnsupported");
+        if (configurationOnly && selected != 2)
+            throw new NotSupportedException("The Worker does not support configuration-only sessions.");
         string[] negotiated = [];
         if (selected == 2)
         {
@@ -138,6 +148,12 @@ public sealed class AdapterWorkerProtocolSession
             if (capabilities.EnumerateArray().Any(c => c.ValueKind != JsonValueKind.String))
                 throw new InvalidDataException("RequiredCapabilityMissing");
             string?[] offered = capabilities.EnumerateArray().Select(c => c.GetString()).ToArray();
+            if (configurationOnly)
+            {
+                if (!offered.Contains(AdapterConfigurationCallbackContract.Capability, StringComparer.Ordinal))
+                    throw new NotSupportedException("The Worker does not support configuration callbacks.");
+                return new(selected, configured, [AdapterConfigurationCallbackContract.Capability], configurationOnly: true);
+            }
             if (RequiredCapabilities.Any(c => !offered.Contains(c, StringComparer.Ordinal)))
                 throw new InvalidDataException("RequiredCapabilityMissing");
             if (configured.Length == 0 || configured.Select(r => r.UniquenessKey).Distinct(StringComparer.Ordinal).Count() != configured.Length)
@@ -186,6 +202,7 @@ public sealed class AdapterWorkerProtocolSession
             }).ToArray(),
             configuration = instance.Configuration,
             credentialBindings = instance.CredentialBindings,
+            configurationOnly = _configurationOnly ? true : (bool?)null,
         }, ReadyPayloadOptions);
     }
 

@@ -23,7 +23,7 @@ internal static class WorkerPersistentStateDirectory
         return path;
     }
 
-    private static void RequireExistingAncestors(string path)
+    internal static void RequireExistingAncestors(string path)
     {
         for (string? current = Path.GetFullPath(path); current is not null; current = Path.GetDirectoryName(current))
         {

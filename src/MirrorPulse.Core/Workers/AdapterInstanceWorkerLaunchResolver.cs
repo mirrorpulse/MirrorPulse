@@ -29,6 +29,12 @@ public static class AdapterInstanceWorkerLaunchResolver
             throw new InvalidDataException("The selected installation belongs to a different Adapter.");
         }
 
+        return ResolveInstallation(installation, instanceId, sessionId, runtimeIdentifier, arguments);
+    }
+
+    internal static AdapterInstanceWorkerPayload ResolveInstallation(InstalledAdapter installation,
+        InstanceId instanceId, WorkerSessionId sessionId, string runtimeIdentifier, IEnumerable<string>? arguments)
+    {
         AdapterInstallationHealth health = AdapterInstallationHealthChecker.Check(installation, runtimeIdentifier);
         if (!health.IsHealthy)
         {

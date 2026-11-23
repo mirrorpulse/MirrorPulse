@@ -1,7 +1,5 @@
-using System.Buffers.Binary;
 using System.Collections.Concurrent;
 using System.IO.Pipes;
-using System.Text;
 using System.Text.Json;
 using MirrorPulse.Adapter.Sdk;
 using MirrorPulse.Core.CloudFiles;
@@ -465,7 +463,7 @@ public sealed class AdapterInstanceProcessSupervisor :
                         try
                         {
                             using var stopTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(2));
-                            await WriteAsync(pipe, new ControlFrameEnvelope(selectedVersion, "Stop", Guid.NewGuid(),
+                            await WorkerControlFrames.WriteAsync(pipe, new ControlFrameEnvelope(selectedVersion, "Stop", Guid.NewGuid(),
                                 instance.InstanceId, sessionId, false, JsonSerializer.SerializeToElement(new { })),
                                 stopTimeout.Token).ConfigureAwait(false);
                             await worker.WaitForExitAsync(stopTimeout.Token).ConfigureAwait(false);
@@ -542,7 +540,7 @@ public sealed class AdapterInstanceProcessSupervisor :
         ControlFrameEnvelope hello;
         try
         {
-            hello = await ReadAsync(pipe, helloDeadline.Token).ConfigureAwait(false);
+            hello = await WorkerControlFrames.ReadAsync(pipe, helloDeadline.Token).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (helloDeadline.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
         {
@@ -560,7 +558,7 @@ public sealed class AdapterInstanceProcessSupervisor :
         }
         catch (InvalidDataException exception)
         {
-            await WriteAsync(pipe, new ControlFrameEnvelope(1, "HandshakeRejected", hello.RequestId,
+            await WorkerControlFrames.WriteAsync(pipe, new ControlFrameEnvelope(1, "HandshakeRejected", hello.RequestId,
                 instance.InstanceId, sessionId, true, JsonSerializer.SerializeToElement(new { code = exception.Message })),
                 cancellationToken).ConfigureAwait(false);
             await LogSessionFailureAsync(instance.InstanceId, exception, captureObservation()).ConfigureAwait(false);
@@ -599,7 +597,7 @@ public sealed class AdapterInstanceProcessSupervisor :
             observation.Advance(WorkerSessionStage.ReceiveFrames);
             while (true)
             {
-                ControlFrameEnvelope frame = await ReadAsync(pipe, cancellationToken).ConfigureAwait(false);
+                ControlFrameEnvelope frame = await WorkerControlFrames.ReadAsync(pipe, cancellationToken).ConfigureAwait(false);
                 if (frame.ProtocolVersion != protocol.ProtocolVersion)
                     throw new InvalidDataException("The Worker changed its selected protocol version.");
                 if (frame.IsResponse)
@@ -635,7 +633,9 @@ public sealed class AdapterInstanceProcessSupervisor :
                 switch (frame.MessageType)
                 {
                     case "CredentialRequest":
-                        await AnswerCredentialAsync(channel, instance, sessionId, frame, cancellationToken)
+                        var response = await AdapterWorkerCredentialBroker.CreateResponseAsync(
+                            _credentials, instance, frame, 1, cancellationToken).ConfigureAwait(false);
+                        await channel.WriteControlAsync(response, cancellationToken)
                             .ConfigureAwait(false);
                         break;
                     case "HostKeyChallenge":
@@ -695,31 +695,6 @@ public sealed class AdapterInstanceProcessSupervisor :
         }
     }
 
-    private async Task AnswerCredentialAsync(
-        AdapterWorkerReadRangeClient channel,
-        AdapterInstance instance,
-        WorkerSessionId sessionId,
-        ControlFrameEnvelope request,
-        CancellationToken cancellationToken)
-    {
-        string referenceId = request.Payload.GetProperty("referenceId").GetString()
-            ?? throw new InvalidDataException("The Worker credential reference is missing.");
-        if (!instance.CredentialReferences.Contains(referenceId, StringComparer.Ordinal))
-        {
-            throw new UnauthorizedAccessException("The Worker requested a credential outside its instance.");
-        }
-
-        var reference = new CredentialReference(referenceId, CredentialKind.Password,
-            instance.AdapterId.ToString(), CredentialScope.CurrentUser, DateTimeOffset.UtcNow);
-        using SecureCredentialValue stored = await _credentials.TryGetAsync(reference, cancellationToken)
-            .ConfigureAwait(false) ?? throw new KeyNotFoundException("The Adapter credential was not found.");
-        string secret = Encoding.UTF8.GetString(stored.Value.Span);
-        await channel.WriteControlAsync(new ControlFrameEnvelope(1, "CredentialResponse", request.RequestId,
-            instance.InstanceId, sessionId, true,
-            JsonSerializer.SerializeToElement(new { referenceId, secret })), cancellationToken)
-            .ConfigureAwait(false);
-    }
-
     private Task SetPhaseAsync(
         InstanceId instanceId,
         string phase,
@@ -775,20 +750,6 @@ public sealed class AdapterInstanceProcessSupervisor :
         {
             throw new InvalidDataException("The Adapter control frame does not belong to this session.");
         }
-    }
-
-    private static async Task<ControlFrameEnvelope> ReadAsync(Stream pipe, CancellationToken cancellationToken) =>
-        ControlFrameJsonCodec.Decode(await LengthPrefixedFrameReader.ReadAsync(pipe, cancellationToken)
-            .ConfigureAwait(false));
-
-    private static async Task WriteAsync(Stream pipe, ControlFrameEnvelope frame, CancellationToken cancellationToken)
-    {
-        byte[] payload = ControlFrameJsonCodec.Encode(frame);
-        byte[] prefix = new byte[4];
-        BinaryPrimitives.WriteUInt32LittleEndian(prefix, checked((uint)payload.Length));
-        await pipe.WriteAsync(prefix, cancellationToken).ConfigureAwait(false);
-        await pipe.WriteAsync(payload, cancellationToken).ConfigureAwait(false);
-        await pipe.FlushAsync(cancellationToken).ConfigureAwait(false);
     }
 
     public async ValueTask DisposeAsync()

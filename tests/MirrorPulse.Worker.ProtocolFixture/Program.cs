@@ -9,6 +9,7 @@ using MirrorPulse.Core.Transport;
 
 InstanceId instance = InstanceId.Parse(args[1]);
 WorkerSessionId session = WorkerSessionId.Parse(args[3]);
+bool configurationOnly = args.Length == 7 && args[6] == "--configuration-only";
 string? cache = Environment.GetEnvironmentVariable("MP_TRANSFER_CACHE_DIR");
 string? workerState = Environment.GetEnvironmentVariable("MP_WORKER_STATE_DIR");
 string? modePath = cache is null ? null : Path.Combine(cache, ".mp-startup-fixture-mode");
@@ -50,6 +51,7 @@ if (mode == "UnexpectedHello")
 }
 Guid helloId = Guid.NewGuid();
 string[] capabilities = ["root-addresses", "stable-operations", "conditional-targets", "bounded-streams", "cancel-ack"];
+if (configurationOnly) capabilities = [AdapterConfigurationCallbackContract.Capability];
 if (mode is "OriginalDirectory" or "WrongOriginalDirectory" or "OrdinaryDirectoryReply" or "LostOriginalDirectoryReply")
     capabilities = [.. capabilities, AdapterDirectoryEffects.Capability];
 await SendAsync(new(1, "Hello", helloId, instance, session, false, JsonSerializer.SerializeToElement(new
@@ -60,6 +62,19 @@ await SendAsync(new(1, "Hello", helloId, instance, session, false, JsonSerialize
 ControlFrameEnvelope ready = await ReadAsync();
 if (mode == "RejectedHello") await Task.Delay(Timeout.InfiniteTimeSpan);
 if (ready.MessageType != "Ready" || !ready.IsResponse || ready.RequestId != helloId) return;
+if (configurationOnly)
+{
+    if (!ready.Payload.GetProperty("configurationOnly").GetBoolean() ||
+        ready.Payload.GetProperty("roots").GetArrayLength() != 0 ||
+        ready.Payload.GetProperty("selectedVersion").GetInt32() != 2)
+        throw new InvalidDataException("ConfigurationOnlyReadyRequired");
+
+    if (File.Exists(Path.Combine(workerState!, ".fixture-live-worker-state")))
+        throw new InvalidDataException("The authorization Worker received the live Worker state.");
+    await File.WriteAllTextAsync(Path.Combine(workerState!, ".fixture-authorization-worker-state"), "configuration");
+    await ServeAuthorizationAsync();
+    return;
+}
 if (mode == "RejectConfiguration")
 {
     await SendAsync(new(ready.ProtocolVersion, "Error", Guid.NewGuid(), instance, session, false,
@@ -211,6 +226,48 @@ while (true)
         }
         await SendAsync(new(2, request.MessageType == "Upload" ? "UploadComplete" : "MutationComplete", request.RequestId, instance, session, true,
             JsonSerializer.SerializeToElement(new { rootKey = requestRoot, operationId, revision })));
+    }
+}
+
+async Task ServeAuthorizationAsync()
+{
+    var json = new JsonSerializerOptions(JsonSerializerDefaults.Web);
+    await SendAsync(new(2, "Connected", Guid.NewGuid(), instance, session, false, JsonSerializer.SerializeToElement(new { })));
+    Guid? activeInvocation = null;
+    while (true)
+    {
+        ControlFrameEnvelope frame = await ReadAsync();
+        if (frame.MessageType == "Stop") return;
+        if (frame.WorkerSessionId != session || frame.InstanceId != instance || frame.ProtocolVersion != 2 || frame.IsResponse)
+            throw new InvalidDataException("ConfigurationCallbackWrongScope");
+        AdapterConfigurationCallbackRequest request = frame.Payload.Deserialize<AdapterConfigurationCallbackRequest>(json)!;
+        AdapterConfigurationCallbackResult result;
+        switch (frame.MessageType)
+        {
+            case AdapterConfigurationCallbackContract.StartMessage when activeInvocation is null:
+                activeInvocation = request.InvocationId;
+                if (request.CallbackId == "sync-message")
+                    await SendAsync(new(2, "RemoteBatch", Guid.NewGuid(), instance, session, false, JsonSerializer.SerializeToElement(new { })));
+                if (request.CallbackId == "foreign-credential")
+                    await SendAsync(new(2, "CredentialRequest", Guid.NewGuid(), instance, session, false,
+                        JsonSerializer.SerializeToElement(new { referenceId = Guid.NewGuid().ToString("D") })));
+                result = new(request.InvocationId, request.CallbackId, AdapterConfigurationCallbackState.Pending,
+                    InteractionUri: new(request.CallbackId == "insecure-page" ? "http://example.test/authorize" : "https://example.test/authorize"));
+                break;
+            case AdapterConfigurationCallbackContract.PollMessage when request.InvocationId == activeInvocation:
+                result = new(request.CallbackId == "other-invocation" ? Guid.NewGuid() : request.InvocationId, request.CallbackId,
+                    AdapterConfigurationCallbackState.Completed,
+                    [new(request.CallbackId == "other-field" ? "other" : "token", "fixture-authorization")]);
+                break;
+            case AdapterConfigurationCallbackContract.CancelMessage when request.InvocationId == activeInvocation:
+                result = new(request.InvocationId, request.CallbackId, AdapterConfigurationCallbackState.Cancelled);
+                break;
+            default:
+                throw new InvalidDataException("ConfigurationCallbackWrongInvocation");
+        }
+
+        await SendAsync(new(2, AdapterConfigurationCallbackContract.ResultMessage, frame.RequestId, instance,
+            request.CallbackId == "other-session" ? WorkerSessionId.New() : session, true, JsonSerializer.SerializeToElement(result, json)));
     }
 }
 

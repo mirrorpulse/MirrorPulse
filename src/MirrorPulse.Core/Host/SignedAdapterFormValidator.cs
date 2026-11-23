@@ -4,9 +4,15 @@ namespace MirrorPulse.Core.Host;
 
 internal static class SignedAdapterFormValidator
 {
+    private static readonly Dictionary<string, string?> NoSecretChanges = new(StringComparer.Ordinal);
+
+    public static Dictionary<string, string> Preview(AdapterPackagePresentation presentation, AdapterInstance? instance,
+        IReadOnlyDictionary<string, string> patch) => Apply(presentation, instance, patch, NoSecretChanges, requireComplete: false);
+
     public static Dictionary<string, string> Apply(
         AdapterPackagePresentation presentation, AdapterInstance? instance,
-        IReadOnlyDictionary<string, string> patch, IReadOnlyDictionary<string, string?> secretChanges)
+        IReadOnlyDictionary<string, string> patch, IReadOnlyDictionary<string, string?> secretChanges,
+        bool requireComplete = true)
     {
         Dictionary<string, AdapterPackageFormControl> fields = presentation.Resolve(null).Controls
             .Where(control => control.Key is not null && control.Kind != AdapterPackageFormKind.Callback)
@@ -28,7 +34,7 @@ internal static class SignedAdapterFormValidator
                 if (secret is { Length: > 16384 } || (secret is not null && string.IsNullOrWhiteSpace(secret)))
                     throw new AdapterConfigurationValidationException($"The Adapter password field '{key}' is invalid.");
                 bool present = changed ? secret is not null : instance?.CredentialBindings?.ContainsKey(key) is true;
-                if (field.Required && !present)
+                if (requireComplete && field.Required && !present)
                     throw new AdapterConfigurationValidationException($"The Adapter requires password field '{key}'.");
                 continue;
             }
@@ -37,7 +43,7 @@ internal static class SignedAdapterFormValidator
                 values.TryGetValue(key, out string? previous) ? previous : field.DefaultValue;
             if (string.IsNullOrWhiteSpace(value))
             {
-                if (field.Required)
+                if (requireComplete && field.Required)
                     throw new AdapterConfigurationValidationException($"The Adapter requires setting '{key}'.");
                 values.Remove(key);
                 continue;
@@ -50,6 +56,11 @@ internal static class SignedAdapterFormValidator
 
         return values;
     }
+
+    internal static bool AcceptsCallbackValue(AdapterPackageFormControl field, string? value) =>
+        value is { Length: <= 16384 } && (!field.Required || !string.IsNullOrWhiteSpace(value)) &&
+        (field.Kind == AdapterPackageFormKind.Password ? !string.IsNullOrWhiteSpace(value) :
+            (field.Kind == AdapterPackageFormKind.MultiChoice && value.Length == 0) || Accepts(field, value));
 
     private static bool Accepts(AdapterPackageFormControl field, string value) => field.Kind switch
     {
