@@ -6,12 +6,12 @@ on:
     branches: [develop]
     paths:
       - .github/workflows/edition-coexistence.yml
-      - eng/edition-shell-registration.ps1
       - eng/verify-edition-coexistence.ps1
       - Directory.Build.props
       - src/MirrorPulse.App/MirrorPulse.EditionPackaging.targets
       - src/MirrorPulse.App/Package.appxmanifest
       - src/MirrorPulse.Core/MirrorPulseEdition.cs
+      - tests/MirrorPulse.CfSharp.CrashProbe/EditionShellRegistrationProbe.cs
 
 permissions:
   contents: read

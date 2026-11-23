@@ -14,10 +14,12 @@ if ($LASTEXITCODE -ne 0 -or $sourceSha -cnotmatch '^[a-f0-9]{40}$' -or
     ($env:GITHUB_SHA -and $env:GITHUB_SHA -cne $sourceSha)) {
     throw 'Could not bind the packages to the selected source commit.'
 }
-$desktopPowerShell = Join-Path $env:windir 'System32/WindowsPowerShell/v1.0/powershell.exe'
 $temp = [IO.Path]::GetFullPath([IO.Path]::GetTempPath())
 $scratch = Join-Path $temp ('mp-editions-' + [guid]::NewGuid().ToString('N').Substring(0, 12))
 $appProject = Join-Path $workspace 'src/MirrorPulse.App/MirrorPulse.App.csproj'
+$probeProject = Join-Path $workspace 'tests/MirrorPulse.CfSharp.CrashProbe/MirrorPulse.CfSharp.CrashProbe.csproj'
+$probeDirectory = Join-Path $scratch 'probe'
+$probeAssembly = Join-Path $probeDirectory 'MirrorPulse.CfSharp.CrashProbe.dll'
 $solution = Join-Path $workspace 'MirrorPulse.sln'
 $local = [Environment]::GetFolderPath('LocalApplicationData')
 $user = [Environment]::GetFolderPath('UserProfile')
@@ -25,21 +27,18 @@ $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
 try { $sid = $identity.User.Value } finally { $identity.Dispose() }
 $standard = @{
     Prefix='MirrorPulse'; PackageName='0B72358D-6DC9-479D-8C28-F0232B42A0B3'; Alias='mp.exe'
-    ProviderId='d194eacd-c38c-49df-a238-49871f9c8d1b'; Name='MirrorPulse'; EnvironmentPrefix='MIRRORPULSE_'
+    Name='MirrorPulse'; EnvironmentPrefix='MIRRORPULSE_'; Fixture='standard'
 }
 $custom = @{
     Prefix='MirrorPulse.sample-drive'; PackageName='MirrorPulse.SampleDrive'; Alias='sample-drive.exe'
-    ProviderId='7e2494ee-f27a-44cd-a564-15dc2eee476e'; Name='Sample Drive'; EnvironmentPrefix='MIRRORPULSE_EDITION_SAMPLE_DRIVE_'
+    ProviderId='7e2494ee-f27a-44cd-a564-15dc2eee476e'; Name='Sample Drive'; EnvironmentPrefix='MIRRORPULSE_EDITION_SAMPLE_DRIVE_'; Fixture='custom'
 }
 $editions = @($standard, $custom)
 $evidence = [ordered]@{ schemaVersion=1; sourceSha=$sourceSha; runtime='win-arm64'; phase='Preflight'; verified=$false }
 
 function Invoke-ShellCheck($Edition, [switch]$Unregister) {
-    $arguments = @('-NoProfile', '-File', (Join-Path $PSScriptRoot 'edition-shell-registration.ps1'),
-        '-RegistrationId', "$($Edition.Prefix)!$sid!Default", '-ExpectedPath', (Join-Path $user $Edition.Prefix),
-        '-ExpectedProviderId', $Edition.ProviderId)
-    if ($Unregister) { $arguments += '-Unregister' }
-    $result = (& $desktopPowerShell @arguments | Out-String).Trim()
+    $action = if ($Unregister) { 'unregister' } else { 'read' }
+    $result = (& dotnet $probeAssembly --edition-shell-registration $Edition.Fixture $action | Out-String).Trim()
     if ($LASTEXITCODE -ne 0 -or $result -cnotin @('Present', 'Absent')) {
         throw 'Could not verify an edition Shell registration.'
     }
@@ -98,20 +97,25 @@ function Start-EditionWindow($Edition) {
     } finally { $process.Dispose() }
 }
 
-foreach ($edition in $editions) {
-    $edition.AliasPath = Join-Path $local "Microsoft/WindowsApps/$($edition.Alias)"
-    if ((Get-AppxPackage -Name $edition.PackageName) -or (Test-Path -LiteralPath $edition.AliasPath) -or
-        (Test-Path -LiteralPath (Join-Path $user $edition.Prefix)) -or
-        (Test-Path -LiteralPath (Join-Path $local $edition.Prefix)) -or (Invoke-ShellCheck $edition) -cne 'Absent' -or
-        [Environment]::GetEnvironmentVariable($edition.EnvironmentPrefix + 'SYNC_ROOT') -or
-        [Environment]::GetEnvironmentVariable($edition.EnvironmentPrefix + 'DATA_ROOT')) {
-        throw 'Use a clean test account with the default paths for both editions.'
-    }
-}
-
 $certificate = $null
 $cleanupFailed = $false
 try {
+    New-Item -ItemType Directory -Path $scratch | Out-Null
+    & dotnet restore $solution --locked-mode
+    if ($LASTEXITCODE -ne 0) { throw 'Locked restore failed for the standard edition and registration probe.' }
+    & dotnet build $probeProject --configuration Release --no-restore --output $probeDirectory
+    if ($LASTEXITCODE -ne 0) { throw 'The edition registration probe did not build.' }
+    foreach ($edition in $editions) {
+        $edition.AliasPath = Join-Path $local "Microsoft/WindowsApps/$($edition.Alias)"
+        if ((Get-AppxPackage -Name $edition.PackageName) -or (Test-Path -LiteralPath $edition.AliasPath) -or
+            (Test-Path -LiteralPath (Join-Path $user $edition.Prefix)) -or
+            (Test-Path -LiteralPath (Join-Path $local $edition.Prefix)) -or (Invoke-ShellCheck $edition) -cne 'Absent' -or
+            [Environment]::GetEnvironmentVariable($edition.EnvironmentPrefix + 'SYNC_ROOT') -or
+            [Environment]::GetEnvironmentVariable($edition.EnvironmentPrefix + 'DATA_ROOT')) {
+            throw 'Use a clean test account with the default paths for both editions.'
+        }
+    }
+
     Initialize-InstalledProcessImageReader
     Add-Type -TypeDefinition @'
 using System;
@@ -137,7 +141,6 @@ namespace MirrorPulse {
     }
 }
 '@
-    New-Item -ItemType Directory -Path $scratch | Out-Null
     $certificate = New-SelfSignedCertificate -Type CodeSigningCert -Subject 'CN=AppPublisher' `
         -CertStoreLocation 'Cert:\CurrentUser\My' -HashAlgorithm SHA256 -KeyLength 2048
     $cer = Join-Path $scratch 'signing.cer'
@@ -161,9 +164,11 @@ namespace MirrorPulse {
     foreach ($edition in $editions) {
         $evidence.phase = "Build $($edition.Name)"
         $overrides = @()
-        if ($edition -eq $custom) { $overrides = $customBuild }
-        & dotnet restore $solution --locked-mode @overrides
-        if ($LASTEXITCODE -ne 0) { throw 'Locked restore failed for an edition.' }
+        if ($edition -eq $custom) {
+            $overrides = $customBuild
+            & dotnet restore $solution --locked-mode @overrides
+            if ($LASTEXITCODE -ne 0) { throw 'Locked restore failed for the custom edition.' }
+        }
         $packageDirectory = Join-Path $scratch $edition.Prefix
         & dotnet build $appProject --configuration Release --runtime win-arm64 --no-restore `
             -p:GenerateAppxPackageOnBuild=true -p:AppxPackageSigningEnabled=true `

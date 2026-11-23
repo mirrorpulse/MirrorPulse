@@ -3,6 +3,17 @@ using MirrorPulse.CfSharp.CrashProbe;
 using MirrorPulse.CloudFiles.CfSharp;
 using MirrorPulse.Core.Configuration;
 
+if (args is ["--edition-shell-registration", var edition, var action])
+{
+    if (!OperatingSystem.IsWindowsVersionAtLeast(10, 0, 26100) || action is not ("read" or "unregister")) return 2;
+    try { return EditionShellRegistrationProbe.Run(edition, action == "unregister"); }
+    catch (Exception error)
+    {
+        Console.Error.WriteLine($"Edition Shell verification failed: {error.GetType().Name}, HRESULT {error.HResult:X8}.");
+        return 1;
+    }
+}
+
 if (args.Length == 2 && args[0] == "--inspect-placeholder-visibility")
 {
     try { return await PlaceholderVisibilityProbe.RunAsync(args[1]); }
