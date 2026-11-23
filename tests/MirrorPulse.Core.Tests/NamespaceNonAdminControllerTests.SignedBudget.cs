@@ -14,7 +14,7 @@ public sealed partial class NamespaceNonAdminControllerTests
     [DataRow("signedPreparedDirectoryCopy")]
     public async Task SignedControllerCoversEveryRequiredExecutionWithoutChangingIndividualDeadlines(string suite)
     {
-        string repository = SftpProtocolFixture.FindRepositoryRoot();
+        string repository = TestRepository.FindRepositoryRoot();
         using var catalog = JsonDocument.Parse(await File.ReadAllTextAsync(Path.Combine(repository, "eng", "test-suites.json")));
         int executions = 0;
         foreach (var method in catalog.RootElement.GetProperty("required").GetProperty(suite).EnumerateArray())

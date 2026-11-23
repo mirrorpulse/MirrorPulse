@@ -53,7 +53,7 @@ public sealed class CiEvidenceCandidateTests
     [DataRow("nonadmin-duplicate", false)]
     public async Task ThreeJobsMustBindTheSameOfficialCandidate(string scenario, bool succeeds)
     {
-        string repository = SftpProtocolFixture.FindRepositoryRoot();
+        string repository = TestRepository.FindRepositoryRoot();
         string directory = Path.Combine(Path.GetTempPath(), "MirrorPulse-candidate-evidence-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(directory);
         string source = new('a', 40);

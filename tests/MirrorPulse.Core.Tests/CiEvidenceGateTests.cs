@@ -7,7 +7,7 @@ namespace MirrorPulse.Core.Tests;
 [TestClass]
 public sealed class CiEvidenceGateTests
 {
-    private static readonly string[] OfficialProviders = ["local", "webdav", "smb", "ftp", "sftp"];
+    private static readonly string[] OfficialProviders = ["local", "webdav", "smb"];
 
     [TestMethod]
     [DataRow("valid", true)]
@@ -24,7 +24,7 @@ public sealed class CiEvidenceGateTests
     [DataRow("candidate-invalid-inventory", false)]
     public async Task EvidenceVerifiesArtifactBytesAndRejectsUnsafePaths(string scenario, bool succeeds)
     {
-        string repository = SftpProtocolFixture.FindRepositoryRoot();
+        string repository = TestRepository.FindRepositoryRoot();
         string root = Path.Combine(Path.GetTempPath(), $"MirrorPulse-evidence-{Guid.NewGuid():N}");
         Directory.CreateDirectory(Path.Combine(root, "host"));
         try

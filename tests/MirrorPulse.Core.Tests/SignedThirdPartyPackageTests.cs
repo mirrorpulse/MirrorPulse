@@ -7,6 +7,7 @@ using MirrorPulse.Core.Configuration;
 using MirrorPulse.Core.Contracts;
 using MirrorPulse.Core.Packaging;
 using MirrorPulse.Core.State;
+using MirrorPulse.Worker.ProtocolFixture;
 
 namespace MirrorPulse.Core.Tests;
 
@@ -39,7 +40,7 @@ public sealed class SignedThirdPartyPackageTests
                 string path = Path.Combine(source, "worker", runtime, "Example.Worker.exe");
                 Directory.CreateDirectory(Path.GetDirectoryName(path)!);
                 byte[] image = await File.ReadAllBytesAsync(Path.ChangeExtension(
-                    typeof(MirrorPulse.Adapter.Ftp.Worker.FtpWorkerEntryMarker).Assembly.Location, ".exe"));
+                    typeof(ProtocolFixtureMarker).Assembly.Location, ".exe"));
                 using (var reader = new PEReader(new MemoryStream(image)))
                 {
                     BinaryPrimitives.WriteUInt16LittleEndian(image.AsSpan(reader.PEHeaders.CoffHeaderStartOffset),

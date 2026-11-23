@@ -24,7 +24,7 @@ public sealed class RequiredDataRowGateTests
     [DataRow("reader-case")]
     public async Task RequiredOriginalDataRowsCannotBeReplacedByCountsOrOtherPassingCases(string scenario)
     {
-        string repository = SftpProtocolFixture.FindRepositoryRoot();
+        string repository = TestRepository.FindRepositoryRoot();
         using var catalog = JsonDocument.Parse(await File.ReadAllTextAsync(Path.Combine(repository, "eng", "test-suites.json")));
         var root = catalog.RootElement;
         var rows = new List<GateCase>();

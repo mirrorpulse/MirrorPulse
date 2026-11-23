@@ -111,7 +111,7 @@ function Read-OfficialAdapterReleaseCandidate {
     param([Parameter(Mandatory)][string]$Path, [Parameter(Mandatory)][string]$SourceSha, [switch]$AllowPreview)
     $candidate = Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json
     $catalog = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'official-adapters.json') -Raw | ConvertFrom-Json
-    if ($catalog.schemaVersion -ne 1 -or @($catalog.adapters).Count -ne 5 -or
+    if ($catalog.schemaVersion -ne 1 -or @($catalog.adapters).Count -eq 0 -or
         $candidate.schemaVersion -ne 1 -or $candidate.mirrorPulseSourceSha -cne $SourceSha -or
         @($candidate.adapters).Count -ne @($catalog.adapters).Count) {
         throw 'The shared official candidate differs from the product source or official catalog.'

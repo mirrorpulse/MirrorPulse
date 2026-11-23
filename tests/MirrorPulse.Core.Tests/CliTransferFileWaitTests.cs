@@ -89,7 +89,7 @@ public sealed class CliTransferFileWaitTests
                 }
                 """);
             var start = new ProcessStartInfo("pwsh") { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true };
-            foreach (string argument in new[] { "-NoProfile", "-File", script, SftpProtocolFixture.FindRepositoryRoot(), directory, scenario })
+            foreach (string argument in new[] { "-NoProfile", "-File", script, TestRepository.FindRepositoryRoot(), directory, scenario })
                 start.ArgumentList.Add(argument);
             using var process = Process.Start(start)!;
             Task<string> output = process.StandardOutput.ReadToEndAsync(), error = process.StandardError.ReadToEndAsync();

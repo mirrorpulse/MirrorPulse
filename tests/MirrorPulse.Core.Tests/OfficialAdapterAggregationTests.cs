@@ -10,8 +10,6 @@ public sealed class OfficialAdapterAggregationTests
         "com.mirrorpulse.adapter.local",
         "com.mirrorpulse.adapter.webdav",
         "com.mirrorpulse.adapter.smb",
-        "com.mirrorpulse.adapter.ftp",
-        "com.mirrorpulse.adapter.sftp",
     ];
 
     [TestMethod]

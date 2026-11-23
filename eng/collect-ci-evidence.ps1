@@ -85,7 +85,11 @@ if ($PublishDirectory) {
 }
 if ($AdapterDirectory) {
     $aggregate = @(Get-Content -LiteralPath (Join-Path $AdapterDirectory "official-adapters.manifest.json") -Raw | ConvertFrom-Json)
-    if ($aggregate.Count -ne 5) { throw "The official aggregate must contain five packages." }
+    $catalog = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'official-adapters.json') -Raw | ConvertFrom-Json
+    if ($aggregate.Count -ne @($catalog.adapters).Count -or
+        @(Compare-Object -ReferenceObject @($catalog.adapters.adapterId) -DifferenceObject @($aggregate.adapterId) -CaseSensitive).Count -ne 0) {
+        throw 'The official aggregate must contain exactly the packages in the official Adapter catalog.'
+    }
     foreach ($adapter in $aggregate) {
         $relative = "$($adapter.adapterId)/$($adapter.package)"
         $artifacts += Add-Artifact $AdapterDirectory $relative "official-adapters" $adapter.packageSha256 $adapter.packageLength

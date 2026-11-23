@@ -65,7 +65,7 @@ public sealed partial class CliTransferEvidencePolicyTests
                 """);
             var start = new ProcessStartInfo("pwsh")
             { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true };
-            foreach (string argument in new[] { "-NoProfile", "-File", script, SftpProtocolFixture.FindRepositoryRoot(), root, scenario }) start.ArgumentList.Add(argument);
+            foreach (string argument in new[] { "-NoProfile", "-File", script, TestRepository.FindRepositoryRoot(), root, scenario }) start.ArgumentList.Add(argument);
             using var process = Process.Start(start)!;
             var output = process.StandardOutput.ReadToEndAsync(); var error = process.StandardError.ReadToEndAsync();
             try { await process.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(30)); }
@@ -106,7 +106,7 @@ public sealed partial class CliTransferEvidencePolicyTests
         var start = new ProcessStartInfo("pwsh")
         { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true };
         if (unset) start.Environment.Remove("MIRRORPULSE_NATIVE_TEST"); else start.Environment["MIRRORPULSE_NATIVE_TEST"] = "0";
-        foreach (string argument in new[] { "-NoProfile", "-File", Path.Combine(SftpProtocolFixture.FindRepositoryRoot(), "eng", "verify-cli-cross-package.ps1"),
+        foreach (string argument in new[] { "-NoProfile", "-File", Path.Combine(TestRepository.FindRepositoryRoot(), "eng", "verify-cli-cross-package.ps1"),
             "-ReleaseLockPath", "not-read.json", "-LocalPackageDirectory", "not-read-local", "-WebDavPackageDirectory", "not-read-webdav", "-EvidencePath", "not-created.json" })
             start.ArgumentList.Add(argument);
         using var process = Process.Start(start)!;

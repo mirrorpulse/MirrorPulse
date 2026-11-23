@@ -1,11 +1,11 @@
 using System.Text.Json;
-using MirrorPulse.Adapter.Ftp.Worker;
 using MirrorPulse.Core.Configuration;
 using MirrorPulse.Core.Contracts;
 using MirrorPulse.Core.Diagnostics;
 using MirrorPulse.Core.Host;
 using MirrorPulse.Core.Security;
 using MirrorPulse.Core.State;
+using MirrorPulse.Worker.ProtocolFixture;
 
 namespace MirrorPulse.Core.Tests;
 
@@ -17,7 +17,7 @@ public sealed class AdapterInstanceProcessSupervisorTests
     {
         string root = Path.Combine(Path.GetTempPath(), "MirrorPulse-tests", Guid.NewGuid().ToString("N"));
         var paths = new MirrorPulseStoragePaths(Path.Combine(root, "sync"), Path.Combine(root, "data"));
-        string executable = Path.ChangeExtension(typeof(FtpWorkerEntryMarker).Assembly.Location, ".exe");
+        string executable = Path.ChangeExtension(typeof(ProtocolFixtureMarker).Assembly.Location, ".exe");
         AdapterId adapterId = AdapterId.Parse("example.drive");
         InstallId installId = InstallId.New();
         InstanceId enabledId = InstanceId.New();
@@ -32,22 +32,19 @@ public sealed class AdapterInstanceProcessSupervisorTests
         var installation = new InstalledAdapter(manifest, installId, Path.GetDirectoryName(executable)!,
             new Sha256Digest(new string('A', 64)), AdapterInstallSource.LocalFile, null,
             true, DateTimeOffset.UtcNow, AdapterLifecycleState.Installed);
-        var invalidConfiguration = new Dictionary<string, string>
-        {
-            ["endpoint"] = "https://user:secret@example.test/",
-            ["username"] = "user",
-            ["credentialReference"] = "ftp-password",
-            ["securityMode"] = "ExplicitTls",
-        };
         AdapterInstance MakeInstance(InstanceId id, bool enabled) => new(adapterId, installId, id,
-            enabled ? "Enabled" : "Disabled", invalidConfiguration, ["ftp-password"],
+            enabled ? "Enabled" : "Disabled", new Dictionary<string, string>(), [],
             Path.Combine(root, id.ToString(), "files"), Path.Combine(root, id.ToString(), "transfers"),
             enabled, enabled ? AdapterLifecycleState.Enabled : AdapterLifecycleState.Disabled,
             null, DateTimeOffset.UtcNow);
-        var topology = new MirrorPulseAdapterTopology([installation],
-            [MakeInstance(enabledId, true), MakeInstance(disabledId, false)], []);
+        AdapterInstance enabledInstance = MakeInstance(enabledId, true);
+        AdapterInstance disabledInstance = MakeInstance(disabledId, false);
+        var topology = new MirrorPulseAdapterTopology([installation], [enabledInstance, disabledInstance], []);
         try
         {
+            Directory.CreateDirectory(enabledInstance.TransferCacheDirectory);
+            await File.WriteAllTextAsync(Path.Combine(enabledInstance.TransferCacheDirectory, ".mp-startup-fixture-mode"),
+                "RejectConfiguration");
             await using var catalog = await MirrorPulseProductCatalog.OpenAsync(paths);
             await catalog.SaveAdapterTopologyAsync(topology);
             await using (var supervisor = new AdapterInstanceProcessSupervisor(catalog,

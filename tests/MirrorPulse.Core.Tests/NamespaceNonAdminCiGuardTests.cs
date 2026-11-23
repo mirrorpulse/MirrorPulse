@@ -11,7 +11,7 @@ public sealed class NamespaceNonAdminCiGuardTests
     [TestMethod]
     public async Task WorkspacePermissionsUseRealPowerShellAclBoundaryOnMarkedTemporaryDirectories()
     {
-        string repository = SftpProtocolFixture.FindRepositoryRoot();
+        string repository = TestRepository.FindRepositoryRoot();
         string identifier = Guid.NewGuid().ToString("N");
         string directory = Path.Combine(Path.GetTempPath(), "MirrorPulse-ordinary-ci-workspace", identifier);
         Directory.CreateDirectory(directory);
@@ -61,7 +61,7 @@ public sealed class NamespaceNonAdminCiGuardTests
     [DataRow("wrong-architecture", "wrong architecture")]
     public async Task IneligibleExecutionStopsBeforeNativeTestsOrAccountCreation(string scenario, string reason)
     {
-        string repository = SftpProtocolFixture.FindRepositoryRoot();
+        string repository = TestRepository.FindRepositoryRoot();
         string directory = Path.Combine(Path.GetTempPath(), "MirrorPulse-ordinary-ci-guard-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(directory);
         try

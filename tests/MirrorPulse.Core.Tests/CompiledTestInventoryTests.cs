@@ -40,7 +40,7 @@ public sealed class CompiledTestInventoryTests
     [DataRow("changedTotal", false)]
     public async Task ReconciliationRequiresEveryOriginalCompiledCaseAndPreservesNegativeOutcomes(string boundary, bool succeeds)
     {
-        string repository = SftpProtocolFixture.FindRepositoryRoot();
+        string repository = TestRepository.FindRepositoryRoot();
         string root = Path.Combine(Path.GetTempPath(), $"MirrorPulse-compiled-inventory-{Guid.NewGuid():N}");
         Directory.CreateDirectory(root);
         try

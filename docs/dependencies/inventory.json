@@ -3,20 +3,6 @@
   "scope": "restored production project graphs and SDK runtime downloads; reference packs are build inputs",
   "packages": [
     {
-      "id": "BouncyCastle.Cryptography",
-      "version": "2.7.0",
-      "kind": "restored",
-      "sha512": "Lys+dJthpD8quONaAkRV9ke8DgET0CwBW91NeJjMVHZGvRRNO8DkdReYFfCBOCcvMpzJeC3DuLrpRuntYnq9Iw==",
-      "nugetContentHash": "U+12df8UEWHgBi04YVf/Lgi2dy3SItlIYvHjjEVa/BngCQIzDCDRBk50DDByCfDvSbe5pRNFr3b7UrVK2kMcLw==",
-      "licenseType": "expression",
-      "license": "MIT",
-      "licenseTextSource": null,
-      "noticeFiles": [
-        "BouncyCastle.Cryptography.2.7.0.LICENSE.md"
-      ],
-      "source": "https://www.nuget.org/packages/BouncyCastle.Cryptography/2.7.0"
-    },
-    {
       "id": "CfSharp.Native",
       "version": "0.1.0-preview.9",
       "kind": "restored",
@@ -60,20 +46,6 @@
         "CfSharp.0.1.0-preview.9.NOTICE"
       ],
       "source": "https://www.nuget.org/packages/CfSharp/0.1.0-preview.9"
-    },
-    {
-      "id": "FluentFTP",
-      "version": "54.2.1",
-      "kind": "restored",
-      "sha512": "Sm6FN2IJXyH3OrKTWo6ku1ueWH2QqiFi4ExnzUZYP813k0LDybE7hZ4SMPB903DYdXaIYskYY4nCKWyFCTlkDA==",
-      "nugetContentHash": "Rv7MWPUR8orjoSHoDgH2Yp8JC7on6T4dh6+l76lvplu8p4nGmI+tl97hsiERy06HqigxCdhAccuZAv978d7aeQ==",
-      "licenseType": "expression",
-      "license": "MIT",
-      "licenseTextSource": null,
-      "noticeFiles": [
-        "FluentFTP.54.2.1.LICENSE.TXT"
-      ],
-      "source": "https://www.nuget.org/packages/FluentFTP/54.2.1"
     },
     {
       "id": "Microsoft.AspNetCore.App.Runtime.win-arm64",
@@ -132,36 +104,6 @@
         "Microsoft.Data.Sqlite.8.0.31.LICENSE.txt"
       ],
       "source": "https://www.nuget.org/packages/Microsoft.Data.Sqlite/8.0.31"
-    },
-    {
-      "id": "Microsoft.Extensions.DependencyInjection.Abstractions",
-      "version": "8.0.2",
-      "kind": "restored",
-      "sha512": "uhlg7xEKxzh6Kgbu/ALFnOV7D+WLPgzMt5scjyFQEFxdH0tl4O2V/1DXDygUKRfGpzW4P05UBrsdj53R+WNdfQ==",
-      "nugetContentHash": "3iE7UF7MQkCv1cxzCahz+Y/guQbTqieyxyaWKhrRO91itI9cOKO76OHeQDahqG4MmW5umr3CcCvGmK92lWNlbg==",
-      "licenseType": "expression",
-      "license": "MIT",
-      "licenseTextSource": null,
-      "noticeFiles": [
-        "Microsoft.Extensions.DependencyInjection.Abstractions.8.0.2.LICENSE.TXT",
-        "Microsoft.Extensions.DependencyInjection.Abstractions.8.0.2.THIRD-PARTY-NOTICES.TXT"
-      ],
-      "source": "https://www.nuget.org/packages/Microsoft.Extensions.DependencyInjection.Abstractions/8.0.2"
-    },
-    {
-      "id": "Microsoft.Extensions.Logging.Abstractions",
-      "version": "8.0.3",
-      "kind": "restored",
-      "sha512": "5onsHiy50vr6n9n2q4YaCJWqmhy8n7N+ndhWyNFwkATrFFXmRXC1EBO+iLYOmuDET4+FOTLZzeqzPdtC/OwZmw==",
-      "nugetContentHash": "dL0QGToTxggRLMYY4ZYX5AMwBb+byQBd/5dMiZE07Nv73o6I5Are3C7eQTh7K2+A4ct0PVISSr7TZANbiNb2yQ==",
-      "licenseType": "expression",
-      "license": "MIT",
-      "licenseTextSource": null,
-      "noticeFiles": [
-        "Microsoft.Extensions.Logging.Abstractions.8.0.3.LICENSE.TXT",
-        "Microsoft.Extensions.Logging.Abstractions.8.0.3.THIRD-PARTY-NOTICES.TXT"
-      ],
-      "source": "https://www.nuget.org/packages/Microsoft.Extensions.Logging.Abstractions/8.0.3"
     },
     {
       "id": "Microsoft.NETCore.App.Runtime.win-arm64",
@@ -530,20 +472,6 @@
         "SQLitePCLRaw.provider.e_sqlite3.2.1.12.LICENSE.txt"
       ],
       "source": "https://www.nuget.org/packages/SQLitePCLRaw.provider.e_sqlite3/2.1.12"
-    },
-    {
-      "id": "SSH.NET",
-      "version": "2026.0.0",
-      "kind": "restored",
-      "sha512": "xXfgKxQmdN3uBo8mP89cVEOvRmFkj5ovBMExrZFDRz5ZaclAcrgSx0Hx1U4Ov1mJPQRz5X2lGk0hwXickyhwAg==",
-      "nugetContentHash": "Yu9dirPq8l3oaat0+OQ7K0nUf5MmYltpia5UGqsApTG4zTPvBC1cxbNnC3NERij26dUST0A3Ef1QdHSn5ArbWQ==",
-      "licenseType": "expression",
-      "license": "MIT",
-      "licenseTextSource": "https://raw.githubusercontent.com/sshnet/SSH.NET/7b2fd3dbf2c86a80a7b06cea020aa5f821c9902e/LICENSE",
-      "noticeFiles": [
-        "SSH.NET.2026.0.0.LICENSE.txt"
-      ],
-      "source": "https://www.nuget.org/packages/SSH.NET/2026.0.0"
     },
     {
       "id": "System.Numerics.Tensors",

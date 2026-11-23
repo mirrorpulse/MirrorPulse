@@ -56,7 +56,7 @@ public sealed class CliRegressionEvidencePolicyTests
                 } catch { 'rejected';exit 1 }
                 """);
             var start = new ProcessStartInfo("pwsh") { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true };
-            string policy = Path.Combine(SftpProtocolFixture.FindRepositoryRoot(), "eng", "cli-regression-evidence-policy.ps1");
+            string policy = Path.Combine(TestRepository.FindRepositoryRoot(), "eng", "cli-regression-evidence-policy.ps1");
             foreach (string argument in new[] { "-NoProfile", "-File", driver, "-Policy", policy, "-Evidence", evidencePath }) start.ArgumentList.Add(argument);
             using var process = Process.Start(start)!;
             Task<string> output = process.StandardOutput.ReadToEndAsync(); Task<string> error = process.StandardError.ReadToEndAsync();

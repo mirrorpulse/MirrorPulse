@@ -986,7 +986,7 @@ public sealed partial class NamespaceNonAdminControllerTests
                 """);
             var start = new ProcessStartInfo("pwsh") { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true };
             foreach (string argument in new[] { "-NoProfile", "-File", script, "-Policy",
-                Path.Combine(SftpProtocolFixture.FindRepositoryRoot(), "eng", "namespace-nonadmin-controller.ps1"),
+                Path.Combine(TestRepository.FindRepositoryRoot(), "eng", "namespace-nonadmin-controller.ps1"),
                 "-Directory", directory, "-Scenario", scenario, "-Count", count.ToString(System.Globalization.CultureInfo.InvariantCulture) })
                 start.ArgumentList.Add(argument);
             using var process = Process.Start(start)!;
@@ -1001,7 +1001,7 @@ public sealed partial class NamespaceNonAdminControllerTests
     [TestMethod]
     public async Task ControllerAdmitsTheActualRequiredNamespaceCatalogWithinTheExistingChildBound()
     {
-        string catalog = await File.ReadAllTextAsync(Path.Combine(SftpProtocolFixture.FindRepositoryRoot(), "eng", "test-suites.json"));
+        string catalog = await File.ReadAllTextAsync(Path.Combine(TestRepository.FindRepositoryRoot(), "eng", "test-suites.json"));
         using var document = System.Text.Json.JsonDocument.Parse(catalog);
         int count = document.RootElement.GetProperty("required").GetProperty("namespace").GetArrayLength();
         Assert.IsGreaterThan(0, count);
@@ -1011,7 +1011,7 @@ public sealed partial class NamespaceNonAdminControllerTests
     [TestMethod]
     public async Task WorkflowUsesTheControllerEnvelopeBeforeLaunchingTheDisposableUser()
     {
-        string workflow = await File.ReadAllTextAsync(Path.Combine(SftpProtocolFixture.FindRepositoryRoot(), ".github", "workflows", "ci.yml"));
+        string workflow = await File.ReadAllTextAsync(Path.Combine(TestRepository.FindRepositoryRoot(), ".github", "workflows", "ci.yml"));
         StringAssert.Contains(workflow, "Get-OrdinaryUserNamespaceStepTimeoutMinutes -TestCount @($catalog.required.namespace).Count");
         StringAssert.Contains(workflow, "timeout-minutes: ${{ fromJSON(steps.namespace-nonadmin-budget.outputs.timeout_minutes) }}");
         Assert.IsLessThan(workflow.IndexOf("Verify strict Cloud Files ACLs as a fresh non-administrator user", StringComparison.Ordinal),

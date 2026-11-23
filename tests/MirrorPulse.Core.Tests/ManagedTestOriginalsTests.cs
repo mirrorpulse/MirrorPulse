@@ -27,7 +27,7 @@ public sealed class ManagedTestOriginalsTests
     [DataRow("differentPreparedStorage", false)]
     public async Task CollectorBindsActualAssembliesAndPreservesOriginalNegativeOutcomes(string boundary, bool succeeds)
     {
-        string repository = SftpProtocolFixture.FindRepositoryRoot();
+        string repository = TestRepository.FindRepositoryRoot();
         string root = Path.Combine(Path.GetTempPath(), $"MirrorPulse-managed-originals-{Guid.NewGuid():N}");
         string script = Path.Combine(root, "eng", "collect-managed-test-originals.ps1");
         Directory.CreateDirectory(Path.GetDirectoryName(script)!);

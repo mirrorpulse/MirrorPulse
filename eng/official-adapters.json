@@ -12,14 +12,6 @@
     {
       "adapterId": "com.mirrorpulse.adapter.smb",
       "repository": "MirrorPulse/adapter-smb"
-    },
-    {
-      "adapterId": "com.mirrorpulse.adapter.ftp",
-      "repository": "MirrorPulse/adapter-ftp"
-    },
-    {
-      "adapterId": "com.mirrorpulse.adapter.sftp",
-      "repository": "MirrorPulse/adapter-sftp"
     }
   ]
 }

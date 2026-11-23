@@ -5,23 +5,6 @@
   "components": [
     {
       "type": "library",
-      "name": "BouncyCastle.Cryptography",
-      "version": "2.7.0",
-      "purl": "pkg:nuget/BouncyCastle.Cryptography@2.7.0",
-      "licenses": [
-        {
-          "expression": "MIT"
-        }
-      ],
-      "hashes": [
-        {
-          "content": "2f2b3e749b61a43f2ab8e35a024455f647bc0e0113d02c015bdd4d7898cc547646bd144d3bc0e475179815f08138272f329cc9782dc3b8bae946e9ed627abd23",
-          "alg": "SHA-512"
-        }
-      ]
-    },
-    {
-      "type": "library",
       "name": "CfSharp.Native",
       "version": "0.1.0-preview.9",
       "purl": "pkg:nuget/CfSharp.Native@0.1.0-preview.9",
@@ -67,23 +50,6 @@
       "hashes": [
         {
           "content": "f319967df2a284ead6d6f6d9f3943369785091e9788a2fb9fc34331cb817305b9d58dd4d41d57d399c0994424c5b6baf33b3b7d7aac8f19c0d688df623eacdba",
-          "alg": "SHA-512"
-        }
-      ]
-    },
-    {
-      "type": "library",
-      "name": "FluentFTP",
-      "version": "54.2.1",
-      "purl": "pkg:nuget/FluentFTP@54.2.1",
-      "licenses": [
-        {
-          "expression": "MIT"
-        }
-      ],
-      "hashes": [
-        {
-          "content": "4a6e853762095f21f73ab2935a8ea4bb5b9e587d90aa2162e04c67cd46583fcd779342c3c9b13b859e1230f07dd370d875768862c9186389c2296c850939640c",
           "alg": "SHA-512"
         }
       ]
@@ -152,40 +118,6 @@
       "hashes": [
         {
           "content": "7b52d376341eb4f1478a45f465747c3b6228b2edd7c948b2e531a4e678fe6a71fa35d7ccb46d9811de152d352f3fefb22e8e49892101bfcd50272ad8ace6b05d",
-          "alg": "SHA-512"
-        }
-      ]
-    },
-    {
-      "type": "library",
-      "name": "Microsoft.Extensions.DependencyInjection.Abstractions",
-      "version": "8.0.2",
-      "purl": "pkg:nuget/Microsoft.Extensions.DependencyInjection.Abstractions@8.0.2",
-      "licenses": [
-        {
-          "expression": "MIT"
-        }
-      ],
-      "hashes": [
-        {
-          "content": "ba1960ef110ac7387a2a06eefc02c59ce57b0fe58b3e0cccb79b1c8f2150105c5d1f4b65e0ed95ff50d70f28142917c6a735b83f4e5406bb1d8f9dd1f9635d7d",
-          "alg": "SHA-512"
-        }
-      ]
-    },
-    {
-      "type": "library",
-      "name": "Microsoft.Extensions.Logging.Abstractions",
-      "version": "8.0.3",
-      "purl": "pkg:nuget/Microsoft.Extensions.Logging.Abstractions@8.0.3",
-      "licenses": [
-        {
-          "expression": "MIT"
-        }
-      ],
-      "hashes": [
-        {
-          "content": "e689ec1e2cb9d2fafa9fd9f6ab861a0895aa9a1cbc9fb37e9dd856c8d1709004eb1455e64570b51013be88b60e9ae0c44f8f853932d9cdeab33ddb42fcec199b",
           "alg": "SHA-512"
         }
       ]
@@ -676,23 +608,6 @@
       "hashes": [
         {
           "content": "9384426e53fe1dcd4901cefb72b57e7c564b8997893da63c563300f24be48b4d19d1da211bac715f0e2a92e5720940b6f870a16e1c16fb27619a39a551901751",
-          "alg": "SHA-512"
-        }
-      ]
-    },
-    {
-      "type": "library",
-      "name": "SSH.NET",
-      "version": "2026.0.0",
-      "purl": "pkg:nuget/SSH.NET@2026.0.0",
-      "licenses": [
-        {
-          "expression": "MIT"
-        }
-      ],
-      "hashes": [
-        {
-          "content": "c577e02b142674ddee068f263fcf5c5443af4661648f9a2f04c131ad9143473e5969c94072b812c741f1d54e0ebf59893d0473e57da51a4d21c1789c93287002",
           "alg": "SHA-512"
         }
       ]

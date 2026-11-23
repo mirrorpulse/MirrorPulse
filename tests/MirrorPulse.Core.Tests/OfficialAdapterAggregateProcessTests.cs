@@ -57,7 +57,7 @@ public sealed class OfficialAdapterAggregateProcessTests
                 count++;
             }
 
-            Assert.AreEqual(5, count);
+            Assert.AreEqual(3, count);
         }
         finally
         {

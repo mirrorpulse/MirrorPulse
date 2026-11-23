@@ -1,6 +1,17 @@
 {
   "schemaVersion": 1,
   "requiredCases": {
+    "MirrorPulse.Core.Tests.SignedThirdPartyPackageTests.ExplicitlyTrustedPublisherCanInstallOnlyCompatibleStandalonePackage": [
+      "ExplicitlyTrustedPublisherCanInstallOnlyCompatibleStandalonePackage (\"1.0.0\",1,True,\"1.0.0\")",
+      "ExplicitlyTrustedPublisherCanInstallOnlyCompatibleStandalonePackage (\"999.0.0\",1,False,\"1.0.0\")",
+      "ExplicitlyTrustedPublisherCanInstallOnlyCompatibleStandalonePackage (\"1.0.0\",2,True,\"1.0.0\")",
+      "ExplicitlyTrustedPublisherCanInstallOnlyCompatibleStandalonePackage (\"1.0.0\",3,False,\"1.0.0\")",
+      "ExplicitlyTrustedPublisherCanInstallOnlyCompatibleStandalonePackage (\"1.0.0\",2,True,\"1.0.0-preview.1\")",
+      "ExplicitlyTrustedPublisherCanInstallOnlyCompatibleStandalonePackage (\"1.0.0\",2,True,\"1.0.0.0\")",
+      "ExplicitlyTrustedPublisherCanInstallOnlyCompatibleStandalonePackage (\"1.0.0\",2,False,\"1.0.0-preview.0\")",
+      "ExplicitlyTrustedPublisherCanInstallOnlyCompatibleStandalonePackage (\"1.0.0\",2,False,\"1.0.0-rc.1\")",
+      "ExplicitlyTrustedPublisherCanInstallOnlyCompatibleStandalonePackage (\"1.0.0\",2,False,\"01.0.0\")"
+    ],
     "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeInterruptedControlledSubtreeRetirementUsesOriginalLeafAcrossHostRoles": [
       "NativeInterruptedControlledSubtreeRetirementUsesOriginalLeafAcrossHostRoles (\"BeforeNativeDeletion\")",
       "NativeInterruptedControlledSubtreeRetirementUsesOriginalLeafAcrossHostRoles (\"AfterNativeDeletion\")",
@@ -244,19 +255,15 @@
     "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseRemoteEchoIntegrationTests.NativeRemoteMetadataApplicationPreservesImmediateLocalAttributeWrite",
     "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseShellSyncRootRegistrarTests.PackagedRegistrationPublishesCustomThenUnifiedDisplayName",
     "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseSqliteCrashRecoveryTests.NativeOfficialStoreRecoversCommittedRepositoriesAndRollsBackInterruptedWrite",
-    "MirrorPulse.Core.Tests.FtpWorkerProcessTests.SignedFtpReleaseReadsAndConditionallyUploadsThroughHostAndCfSharp",
     "MirrorPulse.Core.Tests.OfficialAdapterAggregateProcessTests.LatestOfficialReleasesInstallWithoutDetachedSignatureFiles",
     "MirrorPulse.Core.Tests.OfficialAdapterAggregateProcessTests.SignedLocalReleaseListsHydratesAndUploadsThroughHostAndCfSharp",
     "MirrorPulse.Core.Tests.SignedLocalVersionSwitchProcessTests.PinnedInstanceRunsEachSignedVersionAndStaysOfflineWhenDisabled",
-    "MirrorPulse.Core.Tests.SignedSftpHostProcessTests.SignedSftpReleaseReadsAndConditionallyUploadsThroughHostAndCfSharp",
     "MirrorPulse.Core.Tests.SignedSmbHostProcessTests.SignedSmbReleaseListsReadsAndConditionallyUploadsThroughHostAndCfSharp",
     "MirrorPulse.Core.Tests.SignedWebDavWorkerProcessTests.SignedWorkerPreservesEtagAndRejectsStaleUploadWithoutOverwritingRemote",
     "MirrorPulse.Core.Tests.SignedTemplateWorkerProcessTests.SignedV2TemplateInstallsAndRunsThroughProductionSupervisor",
     "MirrorPulse.Core.Tests.SignedLocalV2WorkerProcessTests.SignedLocalV2UsesPrivateRuntimeAndIsolatedSourcesThroughProductionHost",
     "MirrorPulse.Core.Tests.SignedWebDavV2WorkerProcessTests.SignedWebDavV2KeepsCredentialsAndAcceptedContentBoundThroughProductionHost",
     "MirrorPulse.Core.Tests.SignedSmbV2WorkerProcessTests.SignedSmbV2KeepsWindowsCredentialsAndAcceptedContentBoundThroughProductionHost",
-    "MirrorPulse.Core.Tests.SignedNetworkV2WorkerProcessTests.SignedFtpV2BindsTlsReadsOptimisticWritesAndReadOnlyRootsThroughProductionHost",
-    "MirrorPulse.Core.Tests.SignedNetworkV2WorkerProcessTests.SignedSftpV2BindsPinnedKeysOptimisticWritesAndReadOnlyRootsThroughProductionHost",
     "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseDirectoryJournalTests.NativeOfflineEmptyAndNestedDirectoryJournalResumesAfterRuntimeRestart",
     "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseDirectoryJournalTests.NativeFullRescanAcceptsNestedDirectoriesBeforeSettlingTheirOriginalJournal",
     "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseJournalUploadSourceTests.NativeDisabledSiblingRootKeepsResidentDataAndJournalWithoutRemoteAccess",
@@ -913,11 +920,9 @@
       "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeLocalTombstoneDeleteRecoversActualSdkReceiptAcrossFreshRoles"
     ],
     "official": [
-      "MirrorPulse.Core.Tests.FtpWorkerProcessTests.SignedFtpReleaseReadsAndConditionallyUploadsThroughHostAndCfSharp",
       "MirrorPulse.Core.Tests.OfficialAdapterAggregateProcessTests.LatestOfficialReleasesInstallWithoutDetachedSignatureFiles",
       "MirrorPulse.Core.Tests.OfficialAdapterAggregateProcessTests.SignedLocalReleaseListsHydratesAndUploadsThroughHostAndCfSharp",
       "MirrorPulse.Core.Tests.SignedLocalVersionSwitchProcessTests.PinnedInstanceRunsEachSignedVersionAndStaysOfflineWhenDisabled",
-      "MirrorPulse.Core.Tests.SignedSftpHostProcessTests.SignedSftpReleaseReadsAndConditionallyUploadsThroughHostAndCfSharp",
       "MirrorPulse.Core.Tests.SignedSmbHostProcessTests.SignedSmbReleaseListsReadsAndConditionallyUploadsThroughHostAndCfSharp",
       "MirrorPulse.Core.Tests.SignedWebDavWorkerProcessTests.SignedWorkerPreservesEtagAndRejectsStaleUploadWithoutOverwritingRemote"
     ],
@@ -926,8 +931,8 @@
       "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseShellSyncRootRegistrarTests.PackagedRegistrationPublishesCustomThenUnifiedDisplayName"
     ],
     "signed": [
-      "MirrorPulse.Core.Tests.FtpSignedPackageProcessTests.PublishedArchitecturesInstallWithVerifiedSignatureAndNativeWorkerStarts",
-      "MirrorPulse.Core.Tests.SftpSignedPackageProcessTests.SignedDualArchitecturePackageInstallsAndRunsNativeSftpWorker"
+      "MirrorPulse.Core.Tests.SignedThirdPartyPackageTests.ExplicitlyTrustedPublisherCanInstallOnlyCompatibleStandalonePackage",
+      "MirrorPulse.Core.Tests.WindowsPackagePolicyTests.DeclaredRidMustMatchActualWindowsExecutable"
     ]
   }
 }

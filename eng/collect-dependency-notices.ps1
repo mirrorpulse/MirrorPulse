@@ -9,7 +9,7 @@ New-Item -ItemType Directory -Path $licenseDirectory -Force | Out-Null
 $components = @{}
 $sdkPin = Get-Content -LiteralPath (Join-Path $PSScriptRoot "adapter-sdk.lock.json") -Raw | ConvertFrom-Json
 $licenseSources = Get-Content -LiteralPath (Join-Path $PSScriptRoot "dependency-license-sources.json") -Raw | ConvertFrom-Json
-$projects = @(Get-ChildItem "$repositoryRoot/src", "$repositoryRoot/Adapters/official" -Filter "*.csproj" -File -Recurse |
+$projects = @(Get-ChildItem "$repositoryRoot/src" -Filter "*.csproj" -File -Recurse |
     Where-Object { $_.FullName -notmatch '[\\/](bin|obj)[\\/]' })
 foreach ($project in $projects) {
     $assetsPath = (& dotnet msbuild $project.FullName -nologo -getProperty:ProjectAssetsFile | Out-String).Trim()

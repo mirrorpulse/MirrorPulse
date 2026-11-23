@@ -10,7 +10,7 @@ public sealed class DeferredP079GateTests
     [TestMethod]
     public async Task S06BudgetExcludesOnlyTheNineDeferredTransferExecutionsAndRetainsLegacyAndOtherScopes()
     {
-        string repository = SftpProtocolFixture.FindRepositoryRoot();
+        string repository = TestRepository.FindRepositoryRoot();
         string script = """
             param([string]$Repository)
             $ErrorActionPreference='Stop'
@@ -230,7 +230,7 @@ public sealed class DeferredP079GateTests
     [DataRow("deferredP079", true)]
     public async Task DeferredAndRequiredNativeResultsCannotSubstituteForEachOther(string suite, bool addForeign)
     {
-        string repository = SftpProtocolFixture.FindRepositoryRoot();
+        string repository = TestRepository.FindRepositoryRoot();
         using var catalog = JsonDocument.Parse(await File.ReadAllTextAsync(Path.Combine(repository, "eng", "test-suites.json")));
         var required = catalog.RootElement.GetProperty("required");
         string[] names = required.GetProperty("deferredP079").EnumerateArray().Select(item => item.GetString()!).ToArray();

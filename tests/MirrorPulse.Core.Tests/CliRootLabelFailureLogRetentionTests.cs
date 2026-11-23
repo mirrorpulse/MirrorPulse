@@ -11,7 +11,7 @@ public sealed class CliRootLabelFailureLogRetentionTests
     [DataRow(600, 32)]
     public async Task FailureCollectionRetainsTheWholeBoundedCancellationRequestAndOriginalCoarseSequence(int earlierRecords, int coarseRecords)
     {
-        string repository = SftpProtocolFixture.FindRepositoryRoot();
+        string repository = TestRepository.FindRepositoryRoot();
         string directory = Path.Combine(Path.GetTempPath(), "MirrorPulse-root-label-log-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(directory);
         try

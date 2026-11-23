@@ -3,11 +3,14 @@ param([string]$OutputPath = (Join-Path $PSScriptRoot '../artifacts/official-adap
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'official-adapter-release-policy.ps1')
 $catalog = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'official-adapters.json') -Raw | ConvertFrom-Json
-if ($catalog.schemaVersion -ne 1 -or @($catalog.adapters).Count -ne 5) { throw 'The official catalog must contain five providers.' }
+$providerCount = @($catalog.adapters).Count
+if ($catalog.schemaVersion -ne 1 -or $providerCount -eq 0) { throw 'The official Adapter catalog is invalid.' }
 $previews = @{}
 if ($PreviewReleaseMapPath) {
     $map = Get-Content -LiteralPath $PreviewReleaseMapPath -Raw | ConvertFrom-Json
-    if ($map.schemaVersion -ne 1 -or @($map.adapters).Count -notin 1..5) { throw 'The explicit preview map must contain one to five official providers.' }
+    if ($map.schemaVersion -ne 1 -or @($map.adapters).Count -notin 1..$providerCount) {
+        throw 'The explicit preview map must contain at least one official provider.'
+    }
     foreach ($entry in $map.adapters) {
         if ($entry.adapterId -cnotin @($catalog.adapters.adapterId) -or $previews.ContainsKey($entry.adapterId)) {
             throw 'The explicit preview map has an unknown or duplicate provider.'

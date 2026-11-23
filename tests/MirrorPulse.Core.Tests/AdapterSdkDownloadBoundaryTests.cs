@@ -125,7 +125,7 @@ public sealed class AdapterSdkDownloadBoundaryTests
                 if((Test-Path -LiteralPath $feed) -and @(Get-ChildItem -LiteralPath $feed -Filter '*.download').Count){throw 'A temporary download remained after the boundary returned.'}
                 """);
             var start = new ProcessStartInfo("pwsh") { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true };
-            foreach (string argument in new[] { "-NoProfile", "-File", script, "-Repository", SftpProtocolFixture.FindRepositoryRoot(), "-Directory", root, "-Scenario", scenario })
+            foreach (string argument in new[] { "-NoProfile", "-File", script, "-Repository", TestRepository.FindRepositoryRoot(), "-Directory", root, "-Scenario", scenario })
                 start.ArgumentList.Add(argument);
             using var process = Process.Start(start)!;
             Task<string> output = process.StandardOutput.ReadToEndAsync(); Task<string> error = process.StandardError.ReadToEndAsync();

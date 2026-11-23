@@ -87,7 +87,7 @@ public sealed class WindowsPackagePolicyTests
     [TestMethod]
     public void DeclaredRidMustMatchActualWindowsExecutable()
     {
-        string executable = Path.ChangeExtension(typeof(MirrorPulse.Adapter.Ftp.Worker.FtpWorkerEntryMarker).Assembly.Location, ".exe");
+        string executable = Path.ChangeExtension(typeof(MirrorPulse.Worker.ProtocolFixture.ProtocolFixtureMarker).Assembly.Location, ".exe");
         bool arm64 = System.Runtime.InteropServices.RuntimeInformation.ProcessArchitecture == System.Runtime.InteropServices.Architecture.Arm64;
         AdapterPackageCompatibility.ValidateExecutable(executable, arm64 ? "win-arm64" : "win-x64");
         Assert.ThrowsExactly<InvalidDataException>(() => AdapterPackageCompatibility.ValidateExecutable(executable, arm64 ? "win-x64" : "win-arm64"));

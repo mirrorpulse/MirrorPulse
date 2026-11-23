@@ -12,7 +12,7 @@ public sealed class ClientOwnershipGateTests
     [DataRow("linked", false)]
     public async Task GateRejectsClientStorageReferencesAccessAndLinkedSource(string violation, bool succeeds)
     {
-        string repository = SftpProtocolFixture.FindRepositoryRoot();
+        string repository = TestRepository.FindRepositoryRoot();
         string root = Path.Combine(Path.GetTempPath(), $"MirrorPulse-ownership-{Guid.NewGuid():N}");
         Directory.CreateDirectory(Path.Combine(root, "eng"));
         try

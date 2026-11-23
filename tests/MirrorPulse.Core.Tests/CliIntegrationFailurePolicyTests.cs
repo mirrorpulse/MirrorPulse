@@ -13,7 +13,7 @@ public sealed class CliIntegrationFailurePolicyTests
     [DataRow(true)]
     public async Task CompletedExecutionObservationsSurviveCleanupFailureWithoutClaimingFinalSuccess(bool failCleanup)
     {
-        string repository = SftpProtocolFixture.FindRepositoryRoot();
+        string repository = TestRepository.FindRepositoryRoot();
         string directory = Path.Combine(Path.GetTempPath(), "MirrorPulse-completed-execution-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(directory);
         try
@@ -79,7 +79,7 @@ public sealed class CliIntegrationFailurePolicyTests
     [DataRow("lifecycle-observer-failure")]
     public async Task TeardownPreservesTheOriginalFailureAndRecordsItsIndependentCleanupFailure(string scenario)
     {
-        string repository = SftpProtocolFixture.FindRepositoryRoot();
+        string repository = TestRepository.FindRepositoryRoot();
         string directory = Path.Combine(Path.GetTempPath(), "MirrorPulse-failure-policy-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(directory);
         try

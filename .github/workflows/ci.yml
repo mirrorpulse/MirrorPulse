@@ -268,9 +268,6 @@ jobs:
           path: ${{ runner.temp }}/mirrorpulse-cli-host-win-x64
           if-no-files-found: error
 
-      - name: Install SFTP fixture dependencies
-        run: pwsh ./eng/setup-test-environment.ps1
-
       - name: Retain managed test assemblies before execution
         run: pwsh ./eng/collect-managed-test-originals.ps1 -Phase Prepare
 
@@ -394,9 +391,6 @@ jobs:
           pwsh ./eng/restore-adapter-sdk.ps1 -RequireCachedPackage
           if ($LASTEXITCODE -ne 0) { throw 'Pinned Adapter SDK acquisition failed.' }
           dotnet restore MirrorPulse.sln --locked-mode
-
-      - name: Install SFTP fixture dependencies
-        run: pwsh ./eng/setup-test-environment.ps1
 
       - name: Verify ARM64 CLI entry point
         run: pwsh ./eng/verify-cli-publish.ps1 -Runtime win-arm64
@@ -704,11 +698,11 @@ jobs:
           path: artifacts/evidence/cli-disabled-source-successor/**
           if-no-files-found: ignore
 
-      - name: Verify signed official packages and native ARM64 Workers
+      - name: Verify signed package admission on ARM64
         if: (success() || failure()) && github.event_name == 'workflow_dispatch'
         run: |
-          dotnet test tests/MirrorPulse.Core.Tests/MirrorPulse.Core.Tests.csproj --configuration Release --no-restore --filter FullyQualifiedName~SignedPackageProcessTests --logger trx --results-directory artifacts/test-results/signed
-          if ($LASTEXITCODE -ne 0) { throw 'Signed ARM64 Worker tests failed.' }
+          dotnet test tests/MirrorPulse.Core.Tests/MirrorPulse.Core.Tests.csproj --configuration Release --no-restore --filter "FullyQualifiedName~SignedThirdPartyPackageTests|FullyQualifiedName~DeclaredRidMustMatchActualWindowsExecutable" --logger trx --results-directory artifacts/test-results/signed
+          if ($LASTEXITCODE -ne 0) { throw 'Signed package admission tests failed.' }
           pwsh ./eng/verify-test-results.ps1 -Suite signed -ResultsDirectory artifacts/test-results/signed
 
       - name: Verify signed ARM64 CLI transfers across roots and instances
@@ -1025,9 +1019,6 @@ jobs:
           gh release download v0.1.3 --repo MirrorPulse/adapter-local --dir $directory --pattern 'com.mirrorpulse.adapter.local-0.1.3.mpadapter*'
           if ($LASTEXITCODE -ne 0) { throw 'The previous signed Local Adapter release could not be downloaded.' }
 
-      - name: Install SFTP fixture dependencies
-        run: pwsh ./eng/setup-test-environment.ps1
-
       - name: Create local SMB test share
         shell: pwsh
         run: |
@@ -1042,7 +1033,7 @@ jobs:
           MIRRORPULSE_OFFICIAL_AGGREGATE: ${{ github.workspace }}/artifacts/official-adapters
           MIRRORPULSE_LOCAL_PREVIOUS_RELEASE: ${{ github.workspace }}/artifacts/local-previous
         run: |
-          dotnet test tests/MirrorPulse.Core.Tests/MirrorPulse.Core.Tests.csproj --configuration Release --no-restore --filter "FullyQualifiedName~OfficialAdapterAggregateProcessTests|FullyQualifiedName~SignedWebDavWorkerProcessTests|FullyQualifiedName~SignedLocalVersionSwitchProcessTests|FullyQualifiedName~SignedFtpReleaseReadsAndConditionallyUploadsThroughHostAndCfSharp|FullyQualifiedName~SignedSftpHostProcessTests|FullyQualifiedName~SignedSmbHostProcessTests" --logger trx --results-directory artifacts/test-results/official
+          dotnet test tests/MirrorPulse.Core.Tests/MirrorPulse.Core.Tests.csproj --configuration Release --no-restore --filter "FullyQualifiedName~OfficialAdapterAggregateProcessTests|FullyQualifiedName~SignedWebDavWorkerProcessTests|FullyQualifiedName~SignedLocalVersionSwitchProcessTests|FullyQualifiedName~SignedSmbHostProcessTests" --logger trx --results-directory artifacts/test-results/official
           if ($LASTEXITCODE -ne 0) { throw 'Official Adapter tests failed.' }
           pwsh ./eng/verify-test-results.ps1 -Suite official -ResultsDirectory artifacts/test-results/official
 

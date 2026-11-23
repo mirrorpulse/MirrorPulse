@@ -42,7 +42,7 @@ public sealed class TestResultGateTests
     [DataRow("fileTransferRecovery", "Passed", false, true, false)]
     public async Task DedicatedGateRejectsSkippedOrMissingRequiredResults(string suite, string outcome, bool omitLast, bool repeatFirst, bool succeeds)
     {
-        string repository = SftpProtocolFixture.FindRepositoryRoot();
+        string repository = TestRepository.FindRepositoryRoot();
         using JsonDocument catalog = JsonDocument.Parse(
             await File.ReadAllTextAsync(Path.Combine(repository, "eng", "test-suites.json")));
         string[] names = catalog.RootElement.GetProperty("required").GetProperty(suite)

@@ -37,7 +37,7 @@ public sealed class NativeTestOriginalsTests
     [DataRow("bundleMissingTrx", false, true, true)]
     public async Task CollectorBindsNativeRuntimeInputsAndRetainsOriginalNegativeOutcomes(string boundary, bool succeeds, bool prepared, bool collected)
     {
-        string repository = SftpProtocolFixture.FindRepositoryRoot();
+        string repository = TestRepository.FindRepositoryRoot();
         string parent = Path.Combine(Path.GetTempPath(), "MirrorPulse-native-originals-" + Guid.NewGuid().ToString("N"));
         string root = Path.Combine(parent, Guid.NewGuid().ToString("N"));
         bool bundle = boundary.StartsWith("bundle", StringComparison.Ordinal);

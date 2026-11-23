@@ -40,12 +40,9 @@ public sealed partial class InstanceConfigurationPage : Page
             string adapterId = _installation.AdapterId.ToString();
             bool isLocal = adapterId == "com.mirrorpulse.adapter.local";
             bool isSmb = adapterId == "com.mirrorpulse.adapter.smb";
-            bool isOfficialNetwork = adapterId is "com.mirrorpulse.adapter.webdav" or
-                "com.mirrorpulse.adapter.ftp" or "com.mirrorpulse.adapter.sftp";
-            bool needsPassword = adapterId is "com.mirrorpulse.adapter.ftp" or
-                "com.mirrorpulse.adapter.sftp";
+            bool isWebDav = adapterId == "com.mirrorpulse.adapter.webdav";
             bool showCredentialInputs = !isLocal && !isSmb;
-            bool hasOfficialSource = isLocal || isSmb || isOfficialNetwork;
+            bool hasOfficialSource = isLocal || isSmb || isWebDav;
             AdapterNameText.Text = adapterId + " · " + _installation.Version;
             AdapterLabelTextBox.Text = _installation.Manifest.LocaleMetadata.TryGetValue("en-US",
                 out AdapterLocaleMetadata? locale) ? locale.DisplayName : adapterId;
@@ -57,9 +54,7 @@ public sealed partial class InstanceConfigurationPage : Page
             UsernameTextBox.Visibility = showCredentialInputs ? Visibility.Visible : Visibility.Collapsed;
             SecretBox.Visibility = showCredentialInputs ? Visibility.Visible : Visibility.Collapsed;
             SecretHintText.Visibility = showCredentialInputs ? Visibility.Visible : Visibility.Collapsed;
-            SecretHintText.Text = needsPassword
-                ? "A password is required. MirrorPulse stores it in Windows Credential Manager."
-                : "Optional password or token. MirrorPulse stores it in Windows Credential Manager.";
+            SecretHintText.Text = "Optional password or token. MirrorPulse stores it in Windows Credential Manager.";
 
             if (_installation.Manifest.ConfigurationFields.Count > 0)
             {
@@ -137,8 +132,7 @@ public sealed partial class InstanceConfigurationPage : Page
             {
                 "com.mirrorpulse.adapter.local" => "sourceDirectory",
                 "com.mirrorpulse.adapter.smb" => "networkPath",
-                "com.mirrorpulse.adapter.webdav" or "com.mirrorpulse.adapter.ftp" or
-                    "com.mirrorpulse.adapter.sftp" => "endpoint",
+                "com.mirrorpulse.adapter.webdav" => "endpoint",
                 _ => null,
             };
             string source = SourcePathTextBox.Text.Trim();
@@ -177,12 +171,6 @@ public sealed partial class InstanceConfigurationPage : Page
                 }
             }
 
-            if (!usesManifestForm && adapterId == "com.mirrorpulse.adapter.ftp" &&
-                !configuration.ContainsKey("securityMode"))
-            {
-                configuration["securityMode"] = "ExplicitTls";
-            }
-
             string? secret = SecretBox.Visibility == Visibility.Visible ? SecretBox.Password : null;
             foreach ((AdapterConfigurationField field, Control input) in _configurationInputs)
             {
@@ -209,20 +197,6 @@ public sealed partial class InstanceConfigurationPage : Page
             configuration = new Dictionary<string, string>(
                 AdapterConfigurationFieldValidator.ValidateAndApplyDefaults(
                     _installation.Manifest, configuration, secret), StringComparer.Ordinal);
-            if (!usesManifestForm &&
-                adapterId is ("com.mirrorpulse.adapter.ftp" or "com.mirrorpulse.adapter.sftp") &&
-                (!configuration.TryGetValue("username", out string? usernameValue) ||
-                 string.IsNullOrWhiteSpace(usernameValue)))
-            {
-                throw new InvalidDataException("This Adapter requires a username.");
-            }
-            if (!usesManifestForm &&
-                adapterId is ("com.mirrorpulse.adapter.ftp" or "com.mirrorpulse.adapter.sftp") &&
-                string.IsNullOrEmpty(secret))
-            {
-                throw new InvalidDataException("This Adapter requires a password.");
-            }
-
             var rootLabels = _rootLabels.ToDictionary(item => item.Key,
                 item => item.Value.Text.Trim(), StringComparer.Ordinal);
             var request = new MirrorPulseCreateInstanceRequest(

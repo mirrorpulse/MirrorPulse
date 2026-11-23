@@ -123,7 +123,7 @@ public sealed partial class CliTransferEvidencePolicyTests
         {
             var start = new ProcessStartInfo("pwsh") { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true };
             if (unset) start.Environment.Remove("MIRRORPULSE_NATIVE_TEST"); else start.Environment["MIRRORPULSE_NATIVE_TEST"] = "0";
-            foreach (string argument in new[] { "-NoProfile", "-File", Path.Combine(SftpProtocolFixture.FindRepositoryRoot(), "eng", "verify-cli-transfers.ps1"),
+            foreach (string argument in new[] { "-NoProfile", "-File", Path.Combine(TestRepository.FindRepositoryRoot(), "eng", "verify-cli-transfers.ps1"),
                 "-PackagePath", Path.Combine(root, "not-installed.mpadapter"), "-EvidencePath", Path.Combine(root, "evidence.json") }) start.ArgumentList.Add(argument);
             using var process = Process.Start(start)!;
             Task<string> output = process.StandardOutput.ReadToEndAsync(), error = process.StandardError.ReadToEndAsync();
@@ -262,7 +262,7 @@ public sealed partial class CliTransferEvidencePolicyTests
                 } catch { @{accepted=$false;message=$_.Exception.Message}|ConvertTo-Json -Compress; exit 1 }
                 """);
             var start = new ProcessStartInfo("pwsh") { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true };
-            foreach (string argument in new[] { "-NoProfile", "-File", script, SftpProtocolFixture.FindRepositoryRoot(), input, beforeCleanup.ToString(), requireSingleRoot.ToString(), liveDictionaries.ToString(), liveReceiptDictionaries.ToString(), requirePreparedRestart.ToString() }) start.ArgumentList.Add(argument);
+            foreach (string argument in new[] { "-NoProfile", "-File", script, TestRepository.FindRepositoryRoot(), input, beforeCleanup.ToString(), requireSingleRoot.ToString(), liveDictionaries.ToString(), liveReceiptDictionaries.ToString(), requirePreparedRestart.ToString() }) start.ArgumentList.Add(argument);
             using var process = Process.Start(start)!;
             Task<string> output = process.StandardOutput.ReadToEndAsync(), error = process.StandardError.ReadToEndAsync();
             try { await process.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(30)); }

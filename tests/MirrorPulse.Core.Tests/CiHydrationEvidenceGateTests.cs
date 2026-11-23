@@ -29,7 +29,7 @@ public sealed class CiHydrationEvidenceGateTests
     [DataRow("cross-package-valid", true)]
     public async Task CollectorRequiresCompleteReadsAndRetainedIntentCounts(string scenario, bool succeeds)
     {
-        string repository = SftpProtocolFixture.FindRepositoryRoot();
+        string repository = TestRepository.FindRepositoryRoot();
         string root = Path.Combine(Path.GetTempPath(), "MirrorPulse-hydration-evidence-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(Path.Combine(root, "host"));
         try

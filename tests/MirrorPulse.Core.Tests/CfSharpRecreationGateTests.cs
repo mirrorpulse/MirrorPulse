@@ -13,7 +13,7 @@ public sealed class CfSharpRecreationGateTests
         var start = new ProcessStartInfo("pwsh")
         { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true };
         if (unset) start.Environment.Remove("MIRRORPULSE_NATIVE_TEST"); else start.Environment["MIRRORPULSE_NATIVE_TEST"] = "0";
-        foreach (string argument in new[] { "-NoProfile", "-File", Path.Combine(SftpProtocolFixture.FindRepositoryRoot(), "eng", "verify-cfsharp-recreation.ps1"),
+        foreach (string argument in new[] { "-NoProfile", "-File", Path.Combine(TestRepository.FindRepositoryRoot(), "eng", "verify-cfsharp-recreation.ps1"),
             "-ExpectedArchitecture", "Arm64" }) start.ArgumentList.Add(argument);
         using var process = Process.Start(start)!;
         var output = process.StandardOutput.ReadToEndAsync(); var error = process.StandardError.ReadToEndAsync();

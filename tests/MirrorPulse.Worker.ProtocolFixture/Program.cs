@@ -60,6 +60,12 @@ await SendAsync(new(1, "Hello", helloId, instance, session, false, JsonSerialize
 ControlFrameEnvelope ready = await ReadAsync();
 if (mode == "RejectedHello") await Task.Delay(Timeout.InfiniteTimeSpan);
 if (ready.MessageType != "Ready" || !ready.IsResponse || ready.RequestId != helloId) return;
+if (mode == "RejectConfiguration")
+{
+    await SendAsync(new(ready.ProtocolVersion, "Error", Guid.NewGuid(), instance, session, false,
+        JsonSerializer.SerializeToElement(new { code = "InvalidConfiguration", detail = "fixture-secret" })));
+    return;
+}
 string[] selectedCapabilities = ready.ProtocolVersion == 2
     ? ready.Payload.GetProperty("capabilities").EnumerateArray().Select(value => value.GetString()!).ToArray()
     : [];

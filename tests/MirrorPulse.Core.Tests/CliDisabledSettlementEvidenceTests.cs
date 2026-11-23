@@ -107,7 +107,7 @@ public sealed class CliDisabledSettlementEvidenceTests
                 RedirectStandardError = true
             };
             foreach (string value in new[] { "-NoProfile", "-File", script, "-Policy",
-                Path.Combine(SftpProtocolFixture.FindRepositoryRoot(), "eng", "cli-disabled-settlement-evidence.ps1"), "-Scenario", scenario }) start.ArgumentList.Add(value);
+                Path.Combine(TestRepository.FindRepositoryRoot(), "eng", "cli-disabled-settlement-evidence.ps1"), "-Scenario", scenario }) start.ArgumentList.Add(value);
             using var process = Process.Start(start) ?? throw new InvalidOperationException("The evidence policy process did not start.");
             try
             {

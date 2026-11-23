@@ -63,7 +63,7 @@ public sealed class CliCoalescingEditWitnessTests
         Directory.CreateDirectory(root);
         try
         {
-            string repository = SftpProtocolFixture.FindRepositoryRoot();
+            string repository = TestRepository.FindRepositoryRoot();
             string helper = Path.Combine(root, "witness.ps1"), runner = Path.Combine(root, "run.ps1"), local = Path.Combine(root, "local.bin");
             File.Copy(Path.Combine(repository, "eng", "cli-coalescing-edit-witness.ps1"), helper);
             byte[] expected = boundary == "emptyEdit" ? [] : Encoding.UTF8.GetBytes("PRIVATE_FIXTURE_EXPECTED_CONTENT");

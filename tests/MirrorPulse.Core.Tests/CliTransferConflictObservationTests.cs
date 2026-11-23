@@ -76,7 +76,7 @@ public sealed class CliTransferConflictObservationTests
                 }
                 """);
             var start = new ProcessStartInfo("pwsh") { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true };
-            foreach (string value in new[] { "-NoProfile", "-File", script, "-Policy", Path.Combine(SftpProtocolFixture.FindRepositoryRoot(), "eng", "cli-transfer-conflict-observations.ps1"), "-Directory", directory, "-Scenario", scenario })
+            foreach (string value in new[] { "-NoProfile", "-File", script, "-Policy", Path.Combine(TestRepository.FindRepositoryRoot(), "eng", "cli-transfer-conflict-observations.ps1"), "-Directory", directory, "-Scenario", scenario })
                 start.ArgumentList.Add(value);
             using var process = Process.Start(start) ?? throw new IOException("The synthetic observation probe did not start.");
             Task<string> output = process.StandardOutput.ReadToEndAsync(), error = process.StandardError.ReadToEndAsync();
