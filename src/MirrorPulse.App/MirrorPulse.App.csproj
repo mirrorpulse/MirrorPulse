@@ -5,7 +5,6 @@
     <TargetPlatformMinVersion>10.0.26100.0</TargetPlatformMinVersion>
     <RootNamespace>MirrorPulse.App</RootNamespace>
     <ApplicationManifest>app.manifest</ApplicationManifest>
-    <ApplicationIcon Condition="Exists('Assets\AppIcon.ico')">Assets\AppIcon.ico</ApplicationIcon>
     <Platforms>x64;ARM64</Platforms>
     <RuntimeIdentifiers>win-x64;win-arm64</RuntimeIdentifiers>
     <!-- CLI runtime files share the package root; the RID App must use them too. -->
@@ -19,6 +18,12 @@
     <DefineConstants Condition="'$(MirrorPulseShellProbe)'=='true'">$(DefineConstants);MIRRORPULSE_SHELL_PROBE;DISABLE_XAML_GENERATED_MAIN</DefineConstants>
   </PropertyGroup>
 
+  <PropertyGroup>
+    <_EditionAssetRoot>$(MSBuildProjectDirectory)\Assets</_EditionAssetRoot>
+    <_EditionAssetRoot Condition="'$(MirrorPulseEditionId)' != 'standard' and '$(MirrorPulseEditionAssetsDirectory)' != '' and '$(MirrorPulseEditionProfilePath)' != ''">$([System.IO.Path]::GetFullPath('$(MirrorPulseEditionAssetsDirectory)', $([System.IO.Path]::GetDirectoryName('$(MirrorPulseEditionProfilePath)'))))</_EditionAssetRoot>
+    <ApplicationIcon>$(_EditionAssetRoot)\AppIcon.ico</ApplicationIcon>
+  </PropertyGroup>
+
   <!-- The disposable CI probe must report SDK deployment errors without a dialog.
        Keep the SDK initializer and its original failing exit status enabled. -->
   <PropertyGroup Condition="'$(MirrorPulseShellProbe)'=='true'">
@@ -27,16 +32,14 @@
     <WindowsAppSDKDeploymentManagerAutoInitializeOptions_None>true</WindowsAppSDKDeploymentManagerAutoInitializeOptions_None>
   </PropertyGroup>
   <ItemGroup>
-    <Content Include="Assets\SplashScreen.scale-200.png" />
-    <Content Include="Assets\LockScreenLogo.scale-200.png" />
-    <Content Include="Assets\Square150x150Logo.scale-200.png" />
-    <Content Include="Assets\Square44x44Logo.scale-200.png" />
-    <Content Include="Assets\Square44x44Logo.targetsize-24_altform-unplated.png" />
-    <Content Include="Assets\Square44x44Logo.targetsize-48_altform-lightunplated.png" />
-    <Content Include="Assets\StoreLogo.png" />
-    <Content Include="Assets\AppIcon.ico" />
-    <Content Include="Assets\Wide310x150Logo.scale-200.png" />
+    <_EditionAsset Include="SplashScreen.scale-200.png;LockScreenLogo.scale-200.png;Square150x150Logo.scale-200.png;Square44x44Logo.scale-200.png;Square44x44Logo.targetsize-24_altform-unplated.png;Square44x44Logo.targetsize-48_altform-lightunplated.png;StoreLogo.png;AppIcon.ico;Wide310x150Logo.scale-200.png" />
+    <Content Include="@(_EditionAsset->'$(_EditionAssetRoot)\%(Identity)')" Link="Assets\%(Filename)%(Extension)" />
   </ItemGroup>
+
+  <Target Name="ValidateEditionAssets" BeforeTargets="PrepareForBuild" Condition="'$(DesignTimeBuild)' != 'true'">
+    <Error Condition="!Exists('$(_EditionAssetRoot)\%(_EditionAsset.Identity)')"
+           Text="The edition assets directory is missing %(_EditionAsset.Identity)." />
+  </Target>
 
   <ItemGroup>
     <Manifest Include="$(ApplicationManifest)" />

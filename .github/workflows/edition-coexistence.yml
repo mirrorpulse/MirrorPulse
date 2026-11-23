@@ -8,6 +8,7 @@ on:
       - .github/workflows/edition-coexistence.yml
       - eng/verify-edition-coexistence.ps1
       - Directory.Build.props
+      - src/MirrorPulse.App/MirrorPulse.App.csproj
       - src/MirrorPulse.App/MirrorPulse.EditionPackaging.targets
       - src/MirrorPulse.App/Package.appxmanifest
       - src/MirrorPulse.Core/Host/MirrorPulseAppStatusPipe.cs
