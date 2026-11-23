@@ -10,20 +10,20 @@
     <ScrollViewer HorizontalScrollBarVisibility="Disabled">
         <StackPanel Spacing="16" Padding="32" MaxWidth="760">
             <TextBlock Text="Configure Adapter instance" Style="{StaticResource TitleTextBlockStyle}" />
+            <StackPanel x:Name="AdapterPresentationPanel" Spacing="8" Visibility="Collapsed" />
             <TextBlock x:Name="AdapterNameText" TextWrapping="Wrap" />
-            <TextBlock Text="Choose where this Adapter reads files and how its folders appear in MirrorPulse." TextWrapping="Wrap" />
             <TextBox x:Name="AdapterLabelTextBox" Header="Instance name" />
+            <StackPanel x:Name="RootLabelsPanel" Spacing="12" />
             <TextBox x:Name="SourcePathTextBox" Header="Source" />
             <TextBox x:Name="UsernameTextBox" Header="Username" Visibility="Collapsed" />
             <PasswordBox x:Name="SecretBox" Header="Password or token" Visibility="Collapsed" />
             <TextBlock x:Name="SecretHintText" TextWrapping="Wrap" Opacity="0.75" Visibility="Collapsed" />
             <StackPanel x:Name="ConfigurationFieldsPanel" Spacing="12" />
-            <StackPanel x:Name="RootLabelsPanel" Spacing="12" />
             <TextBox x:Name="AdditionalConfigurationTextBox" Header="Additional non-secret settings (JSON)"
                      PlaceholderText="Enter string settings as JSON" TextWrapping="Wrap"
                      AcceptsReturn="True" MinHeight="80" />
             <ToggleSwitch x:Name="StartWithMirrorPulseToggle" Header="Start this instance with MirrorPulse" IsOn="True" />
-            <TextBlock Text="New instances start after MirrorPulse is restarted." TextWrapping="Wrap" Opacity="0.75" />
+            <TextBlock Text="Restart MirrorPulse to apply saved configuration." TextWrapping="Wrap" Opacity="0.75" />
             <StackPanel Orientation="Horizontal" Spacing="12">
                 <Button x:Name="CreateButton" Content="Create instance" Click="CreateButton_Click" />
                 <Button Content="Cancel" Click="CancelButton_Click" />

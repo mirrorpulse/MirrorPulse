@@ -403,6 +403,8 @@ public sealed partial class MirrorPulseHostApplication : IAsyncDisposable
             await MirrorPulseProductCatalog.ReadRuntimeSnapshotAsync(_paths, cancellationToken)
                 .ConfigureAwait(false);
         IReadOnlyList<RootId> deferredRescans = await _catalog.ReadDeferredRescanRootsAsync(cancellationToken).ConfigureAwait(false);
+        var signedForms = topology.Installations.Where(item => item.Manifest.Presentation is not null)
+            .Select(item => item.InstallId).ToHashSet();
         return new MirrorPulseControlTopology(
             topology.Installations.Select(installation => new MirrorPulseControlInstallation(
                 installation.AdapterId.ToString(),
@@ -440,7 +442,12 @@ public sealed partial class MirrorPulseHostApplication : IAsyncDisposable
                 instance.Enabled,
                 instance.LifecycleState.ToString(),
                 instance.WorkerSessionId?.ToString(),
-                instance.CreatedAt)).ToArray(),
+                instance.CreatedAt)
+            {
+                ConfigurationRevision = signedForms.Contains(instance.InstallId) ? instance.ConfigurationRevision ?? Guid.Empty : null,
+                ConfiguredPasswordFields = signedForms.Contains(instance.InstallId)
+                    ? instance.CredentialBindings?.Keys.Order(StringComparer.Ordinal).ToArray() ?? [] : null,
+            }).ToArray(),
             topology.Roots.Select(root => new MirrorPulseControlRoot(
                 root.AdapterId.ToString(),
                 root.InstanceId.ToString(),
@@ -1140,7 +1147,7 @@ public sealed partial class MirrorPulseHostApplication : IAsyncDisposable
     {
         await provisioner.ConfigureAsync(instanceId, arguments.DisplayName,
             arguments.Configuration, arguments.RootLabels, arguments.Secret, arguments.RemoveCredential,
-            cancellationToken).ConfigureAwait(false);
+            arguments.SecretFields, arguments.ExpectedConfigurationRevision, cancellationToken).ConfigureAwait(false);
         return await ReadStatusAsync(cancellationToken).ConfigureAwait(false);
     }
 

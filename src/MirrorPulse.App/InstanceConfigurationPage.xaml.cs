@@ -13,6 +13,7 @@ namespace MirrorPulse.App;
 public sealed partial class InstanceConfigurationPage : Page
 {
     private MirrorPulseControlInstallation? _installation;
+    private MirrorPulseControlInstance? _instance;
     private readonly Dictionary<string, TextBox> _rootLabels = new(StringComparer.Ordinal);
     private readonly List<(AdapterConfigurationField Field, XamlControl Input)> _configurationInputs = [];
 
@@ -26,8 +27,11 @@ public sealed partial class InstanceConfigurationPage : Page
         base.OnNavigatedTo(e);
         try
         {
-            string installId = InstallId.Parse(e.Parameter as string ?? string.Empty).ToString();
             MirrorPulseControlTopology topology = await AppControl.Client.GetAdapterTopologyAsync();
+            if (e.Parameter is InstanceId instanceId)
+                _instance = topology.Instances.SingleOrDefault(item => item.InstanceId == instanceId.ToString())
+                    ?? throw new FileNotFoundException("The selected Adapter instance was not found.");
+            string installId = _instance?.InstallId ?? InstallId.Parse(e.Parameter as string ?? string.Empty).ToString();
             _installation = topology.Installations.SingleOrDefault(item => item.InstallId == installId)
                 ?? throw new FileNotFoundException("The selected Adapter installation was not found.");
             MirrorPulseControlAdapterForm form = _installation.Form
@@ -40,7 +44,7 @@ public sealed partial class InstanceConfigurationPage : Page
             bool showCredentialInputs = !isLocal && !isSmb;
             bool hasOfficialSource = isLocal || isSmb || isWebDav;
             AdapterNameText.Text = adapterId + " · " + _installation.Version;
-            AdapterLabelTextBox.Text = form.Title;
+            AdapterLabelTextBox.Text = _instance?.DisplayName ?? form.Presentation?.Title ?? form.Title;
             SourcePathTextBox.Header = isLocal ? "Local source directory" : isSmb
                 ? "Network share path" : "Server endpoint";
             SourcePathTextBox.PlaceholderText = isLocal ? @"C:\Users\You\Documents" : isSmb
@@ -51,7 +55,16 @@ public sealed partial class InstanceConfigurationPage : Page
             SecretHintText.Visibility = showCredentialInputs ? Visibility.Visible : Visibility.Collapsed;
             SecretHintText.Text = "Optional password or token. MirrorPulse stores it in Windows Credential Manager.";
 
-            if (form.ConfigurationFields.Count > 0)
+            if (form.Presentation is not null)
+            {
+                SourcePathTextBox.Visibility = Visibility.Collapsed;
+                UsernameTextBox.Visibility = Visibility.Collapsed;
+                SecretBox.Visibility = Visibility.Collapsed;
+                SecretHintText.Visibility = Visibility.Collapsed;
+                AdditionalConfigurationTextBox.Visibility = Visibility.Collapsed;
+                LoadSignedForm(form, _installation.InstallationDirectory);
+            }
+            else if (form.ConfigurationFields.Count > 0)
             {
                 SourcePathTextBox.Visibility = Visibility.Collapsed;
                 UsernameTextBox.Visibility = Visibility.Collapsed;
@@ -92,8 +105,10 @@ public sealed partial class InstanceConfigurationPage : Page
                 .ToHashSet(StringComparer.OrdinalIgnoreCase);
             foreach (MirrorPulseControlAdapterRootDefinition definition in form.RootDefinitions)
             {
-                string suggested = definition.DirectoryName;
-                for (int suffix = 2; usedLabels.Contains(suggested); suffix++)
+                var currentRoot = topology.Roots.SingleOrDefault(root => root.InstanceId == _instance?.InstanceId &&
+                    root.UniquenessKey == definition.Key);
+                string suggested = currentRoot?.Label ?? definition.DirectoryName;
+                for (int suffix = 2; currentRoot is null && usedLabels.Contains(suggested); suffix++)
                 {
                     suggested = $"{definition.DirectoryName} {suffix}";
                 }
@@ -102,6 +117,12 @@ public sealed partial class InstanceConfigurationPage : Page
                 var box = new TextBox { Header = $"MirrorPulse folder · {definition.Label}", Text = suggested };
                 _rootLabels.Add(definition.Key, box);
                 RootLabelsPanel.Children.Add(box);
+            }
+
+            if (_instance is not null)
+            {
+                StartWithMirrorPulseToggle.Visibility = Visibility.Collapsed;
+                CreateButton.Content = "Save";
             }
         }
         catch (Exception exception)
@@ -121,6 +142,13 @@ public sealed partial class InstanceConfigurationPage : Page
         CreateButton.IsEnabled = false;
         try
         {
+            if (_installation.Form?.Presentation is not null)
+            {
+                await SaveSignedFormAsync();
+                Frame.Navigate(typeof(InstalledAdaptersPage));
+                return;
+            }
+
             string adapterId = _installation.AdapterId;
             bool usesManifestForm = _configurationInputs.Count > 0;
             string? sourceKey = usesManifestForm ? null : adapterId switch

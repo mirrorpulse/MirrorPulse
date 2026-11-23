@@ -1,5 +1,6 @@
 using System.Collections.ObjectModel;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using MirrorPulse.Adapter.Sdk;
 using MirrorPulse.Core.CloudFiles;
 using MirrorPulse.Core.Contracts;
@@ -15,6 +16,10 @@ public sealed class AdapterWorkerProtocolSession
 
     private static readonly string[] RequiredCapabilities =
         ["root-addresses", "stable-operations", "conditional-targets", "bounded-streams", "cancel-ack"];
+    private static readonly JsonSerializerOptions ReadyPayloadOptions = new()
+    {
+        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
+    };
     private readonly RootRegistration[] _roots;
     private IReadOnlySet<string>? _durableCopyRoots;
 
@@ -180,7 +185,8 @@ public sealed class AdapterWorkerProtocolSession
                 configuration = RootConfiguration(instance.Configuration, root.UniquenessKey),
             }).ToArray(),
             configuration = instance.Configuration,
-        });
+            credentialBindings = instance.CredentialBindings,
+        }, ReadyPayloadOptions);
     }
 
     private static ReadOnlyDictionary<string, string> RootConfiguration(IReadOnlyDictionary<string, string> configuration, string rootKey)

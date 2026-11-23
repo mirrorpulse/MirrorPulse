@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using System.Text.Json.Serialization;
 
 namespace MirrorPulse.Core.Contracts;
 
@@ -58,6 +59,14 @@ public sealed record AdapterInstance
     /// References to secrets in the MP-managed credential store, never secret values.
     /// </summary>
     public IReadOnlyList<string> CredentialReferences { get; }
+
+    /// <summary>Opaque vault references indexed by signed password field key.</summary>
+    [JsonInclude]
+    public IReadOnlyDictionary<string, string>? CredentialBindings { get; internal init; }
+
+    /// <summary>Changes when the configuration or selected package changes.</summary>
+    [JsonInclude]
+    public Guid? ConfigurationRevision { get; internal init; }
 
     public string FileCacheDirectory { get; }
 

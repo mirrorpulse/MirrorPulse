@@ -607,7 +607,8 @@ public sealed partial class MirrorPulseCliHostOperations : IMirrorPulseCliHostOp
                         ParseMap(command.Arguments, "config"),
                         ParseMap(command.Arguments, "root"),
                         GetOptionalOption(command.Arguments, "secret"),
-                        !HasFlag(command.Arguments, "disabled")), cancellationToken)
+                        !HasFlag(command.Arguments, "disabled"),
+                        ParseSecretFields(command.Arguments, allowRemoval: false)), cancellationToken)
                         .ConfigureAwait(false);
                     human = "Adapter instance created: " +
                         ((MirrorPulse.Core.Host.MirrorPulseAppStatusResponse)result).CreatedInstanceId;
@@ -618,7 +619,11 @@ public sealed partial class MirrorPulseCliHostOperations : IMirrorPulseCliHostOp
                         instanceId,
                         GetRequiredOption(command.Arguments, "name"),
                         ParseMap(command.Arguments, "config"),
-                        ParseMap(command.Arguments, "root")), cancellationToken)
+                        ParseMap(command.Arguments, "root"),
+                        GetOptionalOption(command.Arguments, "secret"),
+                        HasFlag(command.Arguments, "remove-credential"),
+                        ParseSecretFields(command.Arguments, allowRemoval: true),
+                        ParseConfigurationRevision(command.Arguments)), cancellationToken)
                         .ConfigureAwait(false);
                     human = "Adapter instance configured: " + instanceId;
                     break;
@@ -883,6 +888,36 @@ public sealed partial class MirrorPulseCliHostOperations : IMirrorPulseCliHostOp
         }
 
         return map;
+    }
+
+    private static Dictionary<string, string?>? ParseSecretFields(
+        IReadOnlyList<string> arguments, bool allowRemoval)
+    {
+        var changes = new Dictionary<string, string?>(StringComparer.Ordinal);
+        for (int index = 0; index < arguments.Count; index++)
+        {
+            bool clear = arguments[index].Equals("--clear-secret-field", StringComparison.OrdinalIgnoreCase);
+            if (!clear && !arguments[index].Equals("--secret-field", StringComparison.OrdinalIgnoreCase)) continue;
+            if (++index >= arguments.Count || (clear && !allowRemoval))
+                throw new ArgumentException("Use --secret-field KEY=VALUE to supply a named password, or --clear-secret-field KEY when editing.");
+            string entry = arguments[index];
+            int separator = clear ? entry.Length : entry.IndexOf('=');
+            if (separator <= 0 || entry.StartsWith("--", StringComparison.Ordinal) ||
+                !changes.TryAdd(entry[..separator], clear ? null : entry[(separator + 1)..]))
+            {
+                throw new ArgumentException("Supply each named password field once with a valid key.");
+            }
+        }
+
+        return changes.Count == 0 ? null : changes;
+    }
+
+    private static Guid? ParseConfigurationRevision(IReadOnlyList<string> arguments)
+    {
+        string? revision = GetOptionalOption(arguments, "revision");
+        if (revision is null) return null;
+        return Guid.TryParseExact(revision, "D", out Guid value) ? value
+            : throw new ArgumentException("The --revision option requires a configuration revision from instance list --json.");
     }
 
     private static (Guid Id, Guid OperationId, bool Recursive) ParseRetirementOptions(IReadOnlyList<string> arguments, bool preparation)

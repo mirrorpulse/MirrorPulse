@@ -84,7 +84,14 @@ public sealed record MirrorPulseControlInstance(
     bool Enabled,
     string LifecycleState,
     string? WorkerSessionId,
-    DateTimeOffset CreatedAt);
+    DateTimeOffset CreatedAt)
+{
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public Guid? ConfigurationRevision { get; init; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public IReadOnlyList<string>? ConfiguredPasswordFields { get; init; }
+}
 
 public sealed record MirrorPulseControlRoot(
     string AdapterId,
@@ -254,7 +261,9 @@ public sealed record InstanceCreateArguments(
     IReadOnlyDictionary<string, string> Configuration,
     IReadOnlyDictionary<string, string> RootLabels,
     [property: MirrorPulseSensitiveData] string? Secret,
-    bool Enabled) : IMirrorPulseControlArguments;
+    bool Enabled,
+    [property: MirrorPulseSensitiveData, JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    IReadOnlyDictionary<string, string?>? SecretFields = null) : IMirrorPulseControlArguments;
 
 public sealed record InstanceConfigureArguments(
     string InstanceId,
@@ -262,7 +271,11 @@ public sealed record InstanceConfigureArguments(
     IReadOnlyDictionary<string, string> Configuration,
     IReadOnlyDictionary<string, string> RootLabels,
     [property: MirrorPulseSensitiveData] string? Secret = null,
-    bool RemoveCredential = false) : IMirrorPulseControlArguments;
+    bool RemoveCredential = false,
+    [property: MirrorPulseSensitiveData, JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    IReadOnlyDictionary<string, string?>? SecretFields = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    Guid? ExpectedConfigurationRevision = null) : IMirrorPulseControlArguments;
 
 public sealed record InstanceIdArguments(string InstanceId) : IMirrorPulseControlArguments;
 

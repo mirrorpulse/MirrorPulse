@@ -222,6 +222,11 @@ public static class MirrorPulseCliHelp
                                          Manage installed Adapters.
           instance list|create|configure|enable|disable|select-version
                                          Manage Adapter instances.
+          instance create --install-id ID --name NAME [--config KEY=VALUE] [--root KEY=LABEL]
+                         [--secret-field KEY=VALUE]
+          instance configure --instance-id ID --name NAME [--revision GUID] [--config KEY=VALUE]
+                             [--secret-field KEY=VALUE] [--clear-secret-field KEY]
+                                         For signed forms, use the revision from instance list --json.
           root list                      Inspect managed roots and namespace recovery.
           root prepare-rename ROOT_ID LABEL
                                          Prepare a Label-only managed root rename.

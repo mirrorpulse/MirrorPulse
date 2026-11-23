@@ -1,6 +1,7 @@
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using MirrorPulse.Control.Contracts;
+using MirrorPulse.Core.Contracts;
 
 namespace MirrorPulse.App;
 
@@ -87,10 +88,12 @@ public sealed partial class InstalledAdaptersPage : Page
             VersionSelector.ItemsSource = Array.Empty<string>();
             UseVersionButton.IsEnabled = false;
             AdapterEnableToggle.IsEnabled = false;
+            ConfigureInstanceButton.IsEnabled = false;
             return;
         }
 
         MirrorPulseControlInstance instance = _instances[index];
+        ConfigureInstanceButton.IsEnabled = instance.ConfigurationRevision is not null;
         _versions = _topology.Installations.Where(installation => installation.AdapterId == instance.AdapterId)
             .OrderBy(installation => installation.Version, StringComparer.Ordinal)
             .ToArray();
@@ -168,6 +171,13 @@ public sealed partial class InstalledAdaptersPage : Page
 
     private void InstallAdapterButton_Click(object sender, RoutedEventArgs e) =>
         Frame.Navigate(typeof(AdapterInstallPage));
+
+    private void ConfigureInstanceButton_Click(object sender, RoutedEventArgs e)
+    {
+        int index = InstanceSelector.SelectedIndex;
+        if (index >= 0 && index < _instances.Length && _instances[index].ConfigurationRevision is not null)
+            Frame.Navigate(typeof(InstanceConfigurationPage), InstanceId.Parse(_instances[index].InstanceId));
+    }
 
     private void CreateInstanceButton_Click(object sender, RoutedEventArgs e)
     {

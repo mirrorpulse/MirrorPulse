@@ -6,6 +6,7 @@ namespace MirrorPulse.Control.Contracts;
 public static class MirrorPulseControlErrorCodes
 {
     public const string InvalidRequest = "mp.control.invalidRequest";
+    public const string StaleAdapterConfiguration = "mp.control.staleAdapterConfiguration";
     public const string UnknownCommand = "mp.control.unknownCommand";
     public const string ProtocolVersionUnsupported = "mp.control.protocolVersionUnsupported";
     public const string FrameTooLarge = "mp.control.frameTooLarge";

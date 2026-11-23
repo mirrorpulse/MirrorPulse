@@ -8,6 +8,7 @@ namespace MirrorPulse.Core.Host;
 /// <summary>Creates a configured Adapter instance while keeping its secret out of the product catalog.</summary>
 public sealed class MirrorPulseAdapterInstanceProvisioner
 {
+    private static readonly Dictionary<string, string?> NoSecretChanges = new(StringComparer.Ordinal);
     private readonly MirrorPulseProductCatalog _catalog;
     private readonly ISecureCredentialStore _credentials;
     private readonly string _dataRoot;
@@ -42,6 +43,22 @@ public sealed class MirrorPulseAdapterInstanceProvisioner
         InstalledAdapter installation = await _catalog.FindAsync(installId, cancellationToken)
             .ConfigureAwait(false) ?? throw new FileNotFoundException(
                 "The selected Adapter installation is not registered.");
+        string instanceCacheRoot = Path.Combine(_dataRoot, "adapters", "instances", Guid.NewGuid().ToString("D"));
+        if (installation.Manifest.Presentation is { } presentation)
+        {
+            if (request.Secret is not null)
+                throw new InvalidDataException("Use named password fields for this Adapter.");
+            var changes = request.SecretFields ?? NoSecretChanges;
+            var signedConfiguration = SignedAdapterFormValidator.Apply(presentation, null, request.Configuration, changes);
+            return await SaveSignedFormAsync(installation.AdapterId, null, changes, (bindings, token) =>
+                _catalog.CreateSignedAdapterInstanceAsync(installId, request.DisplayName, signedConfiguration,
+                    Path.Combine(instanceCacheRoot, "files"), Path.Combine(instanceCacheRoot, "transfers"),
+                    request.Enabled, request.RootLabels, bindings, token), cancellationToken).ConfigureAwait(false);
+        }
+
+        if (request.SecretFields is not null)
+            throw new InvalidDataException("This Adapter does not declare named password fields.");
+
         var configuration = new Dictionary<string, string>(
             AdapterConfigurationFieldValidator.ValidateAndApplyDefaults(
                 installation.Manifest, request.Configuration, request.Secret), StringComparer.Ordinal);
@@ -65,8 +82,6 @@ public sealed class MirrorPulseAdapterInstanceProvisioner
                 await SaveSecretAsync(credential, request.Secret!, cancellationToken).ConfigureAwait(false);
             }
 
-            string instanceCacheRoot = Path.Combine(_dataRoot, "adapters", "instances",
-                Guid.NewGuid().ToString("D"));
             AdapterInstance instance = await _catalog.CreateInstanceAsync(installId, request.DisplayName,
                 configuration, references, Path.Combine(instanceCacheRoot, "files"),
                 Path.Combine(instanceCacheRoot, "transfers"), request.Enabled, request.RootLabels,
@@ -89,8 +104,11 @@ public sealed class MirrorPulseAdapterInstanceProvisioner
     public async Task<AdapterInstance> ConfigureAsync(
         InstanceId instanceId, string displayName, IReadOnlyDictionary<string, string> patch,
         IReadOnlyDictionary<string, string> rootLabels, string? secret = null, bool removeCredential = false,
+        IReadOnlyDictionary<string, string?>? secretFields = null, Guid? expectedRevision = null,
         CancellationToken cancellationToken = default)
     {
+        ArgumentNullException.ThrowIfNull(patch);
+        ArgumentNullException.ThrowIfNull(rootLabels);
         if (removeCredential && secret is not null)
         {
             throw new InvalidDataException("Credential replacement and removal cannot be combined.");
@@ -104,16 +122,36 @@ public sealed class MirrorPulseAdapterInstanceProvisioner
         await _catalog.CredentialGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
+            MirrorPulseAdapterTopology topology = await _catalog.ReadAdapterTopologyAsync(cancellationToken)
+                .ConfigureAwait(false);
+            AdapterInstance instance = topology.Instances.SingleOrDefault(item => item.InstanceId == instanceId)
+                ?? throw new FileNotFoundException("The Adapter instance is not installed.");
+            InstalledAdapter installation = topology.Installations.Single(item => item.InstallId == instance.InstallId);
+            if (installation.Manifest.Presentation is { } presentation)
+            {
+                if (secret is not null || removeCredential)
+                    throw new InvalidDataException("Use named password fields for this Adapter.");
+                if (expectedRevision is null)
+                    throw new InvalidDataException("An Adapter configuration revision is required.");
+                if (expectedRevision != (instance.ConfigurationRevision ?? Guid.Empty))
+                    throw new AdapterConfigurationRevisionException();
+
+                var changes = secretFields ?? NoSecretChanges;
+                var signedConfiguration = SignedAdapterFormValidator.Apply(presentation, instance, patch, changes);
+                return await SaveSignedFormAsync(installation.AdapterId, instance, changes, (bindings, token) =>
+                    _catalog.ConfigureSignedAdapterFormAsync(instanceId, displayName, signedConfiguration, rootLabels,
+                        new(installation.InstallId, expectedRevision.Value, bindings), token),
+                    cancellationToken).ConfigureAwait(false);
+            }
+
+            if (secretFields is not null || expectedRevision is not null)
+                throw new InvalidDataException("This Adapter does not declare a signed configuration form.");
             if (secret is null && !removeCredential)
             {
                 return await _catalog.ConfigureInstanceAsync(instanceId, displayName, patch, rootLabels,
                     cancellationToken).ConfigureAwait(false);
             }
 
-            MirrorPulseAdapterTopology topology = await _catalog.ReadAdapterTopologyAsync(cancellationToken)
-                .ConfigureAwait(false);
-            AdapterInstance instance = topology.Instances.Single(item => item.InstanceId == instanceId);
-            InstalledAdapter installation = topology.Installations.Single(item => item.InstallId == instance.InstallId);
             AdapterConfigurationFieldValidator.ApplyPatch(installation.Manifest, instance, patch);
             instance.Configuration.TryGetValue("credentialReference", out string? previousReference);
             CredentialReference? candidate = secret is null ? null : Reference(Guid.NewGuid().ToString("D"), instance);
@@ -143,6 +181,38 @@ public sealed class MirrorPulseAdapterInstanceProvisioner
             }
         }
         finally { _catalog.CredentialGate.Release(); }
+    }
+
+    private async Task<AdapterInstance> SaveSignedFormAsync(AdapterId adapterId, AdapterInstance? instance,
+        IReadOnlyDictionary<string, string?> secretChanges,
+        Func<IReadOnlyDictionary<string, string>, CancellationToken, Task<AdapterInstance>> commit,
+        CancellationToken cancellationToken)
+    {
+        var bindings = instance?.CredentialBindings is { } previous
+            ? new Dictionary<string, string>(previous, StringComparer.Ordinal)
+            : new Dictionary<string, string>(StringComparer.Ordinal);
+        try
+        {
+            foreach ((string key, string? value) in secretChanges)
+            {
+                if (bindings.Remove(key, out string? retired))
+                    await _catalog.ScheduleCredentialCleanupAsync(Reference(retired, adapterId), cancellationToken)
+                        .ConfigureAwait(false);
+                if (value is null) continue;
+
+                CredentialReference candidate = Reference(Guid.NewGuid().ToString("D"), adapterId);
+                await _catalog.ScheduleCredentialCleanupAsync(candidate, cancellationToken).ConfigureAwait(false);
+                await SaveSecretAsync(candidate, value, cancellationToken).ConfigureAwait(false);
+                bindings.Add(key, candidate.ReferenceId);
+            }
+
+            return await commit(bindings, cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            if (secretChanges.Count > 0)
+                await RecoverCoreAsync(CancellationToken.None).ConfigureAwait(false);
+        }
     }
 
     /// <summary>Retries interrupted cleanup without deleting any currently referenced credential.</summary>
@@ -189,5 +259,8 @@ public sealed class MirrorPulseAdapterInstanceProvisioner
     }
 
     private static CredentialReference Reference(string id, AdapterInstance instance)
-        => new(id, CredentialKind.Password, instance.AdapterId.ToString(), CredentialScope.CurrentUser, DateTimeOffset.UtcNow);
+        => Reference(id, instance.AdapterId);
+
+    private static CredentialReference Reference(string id, AdapterId adapterId)
+        => new(id, CredentialKind.Password, adapterId.ToString(), CredentialScope.CurrentUser, DateTimeOffset.UtcNow);
 }

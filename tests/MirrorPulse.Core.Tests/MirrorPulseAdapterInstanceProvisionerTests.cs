@@ -121,11 +121,104 @@ public sealed class MirrorPulseAdapterInstanceProvisionerTests
         }
     }
 
+    [TestMethod]
+    public async Task SignedFormPersistsNamedPasswordsAndRejectsStaleOrInvalidEdits()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "MirrorPulse-provisioner-tests", Guid.NewGuid().ToString("N"));
+        var paths = new MirrorPulseStoragePaths(Path.Combine(root, "sync"), Path.Combine(root, "data"));
+        var manifest = new AdapterManifest(2, AdapterId.Parse("example.signed-form"), "Example", "1.0.0",
+            new ProtocolVersionRange(2, 2), new Dictionary<string, string>
+            {
+                ["win-x64"] = "worker/win-x64/worker.exe",
+                ["win-arm64"] = "worker/win-arm64/worker.exe",
+            },
+            new AdapterInstallPolicy(null), new AdapterInstancePolicy(null, 1),
+            new AdapterCapabilities(true, false, true, true), ["en-US"], "1.0.0",
+            [new AdapterRootDefinition("files", "Files", "Files", false)])
+        {
+            Presentation = new("logo.png", new Dictionary<string, AdapterPackageLocale>
+            {
+                ["en-us"] = new("Source", "Connect an account",
+                [
+                    new(AdapterPackageFormKind.Text, "Account", Key: "account", Required: true),
+                    new(AdapterPackageFormKind.MultiChoice, "Folders", Key: "folders", DefaultValue: "one",
+                        Options: [new("one", "One"), new("two", "Two")]),
+                    new(AdapterPackageFormKind.Password, "Password", Key: "password", Required: true),
+                    new(AdapterPackageFormKind.Password, "PIN", Key: "pin"),
+                ]),
+            }),
+        };
+        var installation = new InstalledAdapter(manifest, InstallId.New(), Path.Combine(root, "installed"),
+            new Sha256Digest(new string('A', 64)), AdapterInstallSource.LocalFile, null, true, DateTimeOffset.UtcNow,
+            AdapterLifecycleState.Installed);
+        var credentials = new MemoryCredentialStore();
+        var noLabels = new Dictionary<string, string>();
+        var noValues = new Dictionary<string, string>();
+        try
+        {
+            AdapterInstance created;
+            await using (var catalog = await MirrorPulseProductCatalog.OpenAsync(paths))
+            {
+                await catalog.AddInstallationAsync(installation);
+                var provisioner = new MirrorPulseAdapterInstanceProvisioner(catalog, credentials, paths.DataRootPath);
+                var request = new MirrorPulseCreateInstanceRequest(installation.InstallId.ToString(), "Source",
+                    new Dictionary<string, string> { ["account"] = "sample" }, noLabels, null, true,
+                    new Dictionary<string, string?> { ["password"] = "first-password", ["pin"] = "first-pin" });
+                await Assert.ThrowsExactlyAsync<AdapterConfigurationValidationException>(() => provisioner.CreateAsync(request with
+                {
+                    Configuration = new Dictionary<string, string> { ["account"] = "sample", ["pin"] = "wrong-input" },
+                }));
+                created = await provisioner.CreateAsync(request);
+                Assert.AreEqual("one", created.Configuration["folders"]);
+                Assert.IsFalse(created.Configuration.ContainsKey("password"));
+                Assert.IsFalse(created.Configuration.ContainsKey("pin"));
+            }
+
+            await using var reopened = await MirrorPulseProductCatalog.OpenAsync(paths);
+            var edits = new MirrorPulseAdapterInstanceProvisioner(reopened, credentials, paths.DataRootPath);
+            var reloaded = (await reopened.ReadAdapterTopologyAsync()).Instances.Single();
+            Assert.AreEqual(created.ConfigurationRevision, reloaded.ConfigurationRevision);
+            string passwordReference = reloaded.CredentialBindings!["password"];
+            string pinReference = reloaded.CredentialBindings["pin"];
+            Assert.AreEqual("first-password", credentials.Read(passwordReference));
+            Assert.AreEqual("first-pin", credentials.Read(pinReference));
+
+            var replacement = new Dictionary<string, string?> { ["password"] = "new-password", ["pin"] = null };
+            await Assert.ThrowsExactlyAsync<InvalidDataException>(() => edits.ConfigureAsync(created.InstanceId, "Source",
+                noValues, new Dictionary<string, string> { ["unknown"] = "Invalid root" },
+                secretFields: replacement, expectedRevision: reloaded.ConfigurationRevision));
+            Assert.AreEqual("first-password", credentials.Read(passwordReference));
+            Assert.AreEqual("first-pin", credentials.Read(pinReference));
+            Assert.AreEqual(2, credentials.Count);
+
+            await Assert.ThrowsExactlyAsync<AdapterConfigurationValidationException>(() => edits.ConfigureAsync(created.InstanceId, "Source",
+                new Dictionary<string, string> { ["folders"] = "one,one" }, noLabels,
+                expectedRevision: reloaded.ConfigurationRevision));
+            AdapterInstance edited = await edits.ConfigureAsync(created.InstanceId, "Renamed deployment",
+                new Dictionary<string, string> { ["folders"] = "one,two" }, noLabels,
+                secretFields: replacement, expectedRevision: reloaded.ConfigurationRevision);
+            Assert.AreEqual(created.InstanceId, edited.InstanceId);
+            Assert.AreNotEqual(reloaded.ConfigurationRevision, edited.ConfigurationRevision);
+            Assert.AreEqual("one,two", edited.Configuration["folders"]);
+            Assert.AreEqual("new-password", credentials.Read(edited.CredentialBindings!["password"]));
+            Assert.AreEqual(1, credentials.Count);
+            Assert.HasCount(1, edited.CredentialReferences);
+            await Assert.ThrowsExactlyAsync<AdapterConfigurationRevisionException>(() => edits.ConfigureAsync(created.InstanceId, "Stale",
+                noValues, noLabels, secretFields: replacement, expectedRevision: reloaded.ConfigurationRevision));
+            Assert.AreEqual(1, credentials.Count);
+        }
+        finally
+        {
+            if (Directory.Exists(root)) Directory.Delete(root, recursive: true);
+        }
+    }
+
     private sealed class MemoryCredentialStore : ISecureCredentialStore
     {
         private readonly Dictionary<string, byte[]> _values = new(StringComparer.Ordinal);
 
         public int DeletionCount { get; private set; }
+        public int Count => _values.Count;
 
         public ValueTask SaveAsync(CredentialReference reference, ReadOnlyMemory<byte> secret,
             CancellationToken cancellationToken = default)

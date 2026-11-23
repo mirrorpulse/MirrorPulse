@@ -16,6 +16,7 @@
             <ListView x:Name="InstalledAdaptersList" SelectionMode="Single" />
             <Button Content="Create instance from selected installation" Click="CreateInstanceButton_Click" HorizontalAlignment="Left" />
             <ComboBox x:Name="InstanceSelector" Header="Adapter instance" MinWidth="320" HorizontalAlignment="Left" SelectionChanged="InstanceSelector_SelectionChanged" />
+            <Button x:Name="ConfigureInstanceButton" Content="Configure selected instance" IsEnabled="False" Click="ConfigureInstanceButton_Click" />
             <ComboBox x:Name="VersionSelector" Header="Installed version for this instance" MinWidth="320" HorizontalAlignment="Left" SelectionChanged="VersionSelector_SelectionChanged" />
             <Button x:Name="UseVersionButton" Content="Use selected version" IsEnabled="False" HorizontalAlignment="Left" Click="UseVersionButton_Click" />
             <ToggleSwitch x:Name="AdapterEnableToggle" Header="Start this instance with MirrorPulse" Toggled="AdapterEnableToggle_Toggled" />

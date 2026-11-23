@@ -204,7 +204,11 @@ public sealed partial class MirrorPulseProductCatalog : IInstalledAdapterCatalog
                     instance.Configuration, instance.CredentialReferences, instance.FileCacheDirectory,
                     instance.TransferCacheDirectory, enabled,
                     enabled ? AdapterLifecycleState.Enabled : AdapterLifecycleState.Disabled,
-                    null, instance.CreatedAt)).ToArray();
+                    null, instance.CreatedAt)
+                {
+                    CredentialBindings = instance.CredentialBindings,
+                    ConfigurationRevision = instance.ConfigurationRevision,
+                }).ToArray();
             RootRegistration[] roots = current.Roots.Select(root =>
             {
                 if (root.InstanceId != instanceId ||
@@ -266,7 +270,11 @@ public sealed partial class MirrorPulseProductCatalog : IInstalledAdapterCatalog
                     item.AdapterId, installId, item.InstanceId, item.DisplayName,
                     item.Configuration, item.CredentialReferences, item.FileCacheDirectory,
                     item.TransferCacheDirectory, item.Enabled, item.LifecycleState,
-                    null, item.CreatedAt)).ToArray();
+                    null, item.CreatedAt)
+                {
+                    CredentialBindings = item.CredentialBindings,
+                    ConfigurationRevision = installId == item.InstallId ? item.ConfigurationRevision : Guid.NewGuid(),
+                }).ToArray();
             var next = new MirrorPulseAdapterTopology(current.Installations, instances, current.Roots);
             ValidateTopology(next);
             await ValidateManagedRootNamesAsync(next, cancellationToken).ConfigureAwait(false);
@@ -308,6 +316,13 @@ public sealed partial class MirrorPulseProductCatalog : IInstalledAdapterCatalog
                 adapter.AdapterId != instance.AdapterId)
             {
                 throw new InvalidDataException("An Adapter instance has no matching installation or repeats an ID.");
+            }
+
+            if (instance.CredentialBindings is { } bindings &&
+                (bindings.Values.Distinct(StringComparer.Ordinal).Count() != bindings.Count ||
+                    bindings.Values.Any(reference => !instance.CredentialReferences.Contains(reference, StringComparer.Ordinal))))
+            {
+                throw new InvalidDataException("An Adapter instance has inconsistent password bindings.");
             }
         }
 

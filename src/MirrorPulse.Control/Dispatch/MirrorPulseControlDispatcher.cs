@@ -107,6 +107,13 @@ public static class MirrorPulseControlErrorMapper
                 "The current remote batch must settle before preparing the root Label. Retry the preparation.",
                 ErrorCategory.Conflict,
                 retryable: true),
+            MirrorPulse.Core.Host.AdapterConfigurationRevisionException => new ControlError(
+                MirrorPulseControlErrorCodes.StaleAdapterConfiguration,
+                "The Adapter configuration changed. Reload it before saving.",
+                ErrorCategory.Conflict,
+                retryable: true),
+            MirrorPulse.Core.Host.AdapterConfigurationValidationException validation => new ControlError(
+                MirrorPulseControlErrorCodes.InvalidRequest, validation.Message, ErrorCategory.Validation),
             OperationCanceledException => new ControlError(
                 MirrorPulseControlErrorCodes.OperationCancelled,
                 "The operation was cancelled.",
