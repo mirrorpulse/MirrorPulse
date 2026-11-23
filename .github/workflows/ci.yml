@@ -459,7 +459,7 @@ jobs:
             throw 'The Local Adapter package or signature is missing.'
           }
           New-Item -ItemType Directory -Path artifacts/evidence -Force | Out-Null
-          pwsh ./eng/verify-cli-regression.ps1 -Runtime win-arm64 -PackagePath $package.FullName -EvidencePath artifacts/evidence/cli-regression.json
+          pwsh ./eng/verify-cli-regression.ps1 -Runtime win-arm64 -CliHostPublishDirectory "$env:RUNNER_TEMP/mirrorpulse-cli-host-win-arm64" -PackagePath $package.FullName -EvidencePath artifacts/evidence/cli-regression.json
 
       - name: Preserve original ARM64 CLI regression results and failures
         if: always()
@@ -481,7 +481,7 @@ jobs:
           $packages = @(Get-ChildItem -LiteralPath artifacts/official-local -Recurse -Filter '*.mpadapter' -File)
           if ($packages.Count -ne 1 -or -not (Test-Path -LiteralPath ($packages[0].FullName + '.signature.json'))) { throw 'The exact frozen signed Local package is required.' }
           New-Item -ItemType Directory -Path artifacts/evidence/cli-move-keep-remote -Force | Out-Null
-          pwsh ./eng/verify-cli-integration.ps1 -Runtime win-arm64 -PackagePath $packages[0].FullName -Coalescing -CoalescingAction KeepRemote -MoveConflict -EvidencePath artifacts/evidence/cli-move-keep-remote/report.json
+          pwsh ./eng/verify-cli-integration.ps1 -Runtime win-arm64 -CliHostPublishDirectory "$env:RUNNER_TEMP/mirrorpulse-cli-host-win-arm64" -PackagePath $packages[0].FullName -Coalescing -CoalescingAction KeepRemote -MoveConflict -EvidencePath artifacts/evidence/cli-move-keep-remote/report.json
           if ($LASTEXITCODE -ne 0) { throw 'The default Host controlled-Move KeepRemote fixture failed.' }
 
       - name: Preserve signed ARM64 default Host Move originals
@@ -504,7 +504,7 @@ jobs:
           New-Item -ItemType Directory -Path artifacts/evidence/cli-move-only-keep-remote -Force | Out-Null
           $journalQualification = @()
           if ('${{ inputs.verify_shell }}' -eq 'true') { $journalQualification = @('-RequirePureMoveJournal') }
-          pwsh ./eng/verify-cli-integration.ps1 -Runtime win-arm64 -PackagePath $packages[0].FullName -Coalescing -CoalescingAction KeepRemote -MoveOnlyConflict -EvidencePath artifacts/evidence/cli-move-only-keep-remote/report.json @journalQualification
+          pwsh ./eng/verify-cli-integration.ps1 -Runtime win-arm64 -CliHostPublishDirectory "$env:RUNNER_TEMP/mirrorpulse-cli-host-win-arm64" -PackagePath $packages[0].FullName -Coalescing -CoalescingAction KeepRemote -MoveOnlyConflict -EvidencePath artifacts/evidence/cli-move-only-keep-remote/report.json @journalQualification
           if ($LASTEXITCODE -ne 0) { throw 'The default Host pure rename KeepRemote fixture failed.' }
 
       - name: Preserve signed ARM64 pure rename originals
@@ -525,7 +525,7 @@ jobs:
           $packages = @(Get-ChildItem -LiteralPath artifacts/official-local -Recurse -Filter '*.mpadapter' -File)
           if ($packages.Count -ne 1 -or -not (Test-Path -LiteralPath ($packages[0].FullName + '.signature.json'))) { throw 'The exact frozen signed Local package is required.' }
           New-Item -ItemType Directory -Path artifacts/evidence/cli-coalescing -Force | Out-Null
-          pwsh ./eng/verify-cli-integration.ps1 -Runtime win-arm64 -PackagePath $packages[0].FullName -Coalescing -EvidencePath artifacts/evidence/cli-coalescing/report.json
+          pwsh ./eng/verify-cli-integration.ps1 -Runtime win-arm64 -CliHostPublishDirectory "$env:RUNNER_TEMP/mirrorpulse-cli-host-win-arm64" -PackagePath $packages[0].FullName -Coalescing -EvidencePath artifacts/evidence/cli-coalescing/report.json
           if ($LASTEXITCODE -ne 0) { throw 'The independent real signed coalescing conflict choice failed.' }
 
       - name: Preserve independent signed ARM64 coalescing results and failures
@@ -545,7 +545,7 @@ jobs:
           $packages = @(Get-ChildItem -LiteralPath artifacts/official-local -Recurse -Filter '*.mpadapter' -File)
           if ($packages.Count -ne 1 -or -not (Test-Path -LiteralPath ($packages[0].FullName + '.signature.json'))) { throw 'The exact frozen signed Local package is required.' }
           New-Item -ItemType Directory -Path artifacts/evidence/cli-keep-remote -Force | Out-Null
-          pwsh ./eng/verify-cli-integration.ps1 -Runtime win-arm64 -PackagePath $packages[0].FullName -Coalescing -CoalescingAction KeepRemote -EvidencePath artifacts/evidence/cli-keep-remote/report.json
+          pwsh ./eng/verify-cli-integration.ps1 -Runtime win-arm64 -CliHostPublishDirectory "$env:RUNNER_TEMP/mirrorpulse-cli-host-win-arm64" -PackagePath $packages[0].FullName -Coalescing -CoalescingAction KeepRemote -EvidencePath artifacts/evidence/cli-keep-remote/report.json
           if ($LASTEXITCODE -ne 0) { throw 'The real signed KeepRemote conflict choice failed.' }
 
       - name: Preserve signed ARM64 KeepRemote results and failures
@@ -601,7 +601,7 @@ jobs:
           $packages = @(Get-ChildItem -LiteralPath artifacts/official-local -Recurse -Filter '*.mpadapter' -File)
           if ($packages.Count -ne 1 -or -not (Test-Path -LiteralPath ($packages[0].FullName + '.signature.json'))) { throw 'Require one frozen official signed Local package.' }
           New-Item -ItemType Directory -Path artifacts/evidence/cli-create-keep-remote -Force | Out-Null
-          pwsh ./eng/verify-cli-integration.ps1 -Runtime win-arm64 -PackagePath $packages[0].FullName -Coalescing -CoalescingAction KeepRemote -CreateConflict -EvidencePath artifacts/evidence/cli-create-keep-remote/report.json
+          pwsh ./eng/verify-cli-integration.ps1 -Runtime win-arm64 -CliHostPublishDirectory "$env:RUNNER_TEMP/mirrorpulse-cli-host-win-arm64" -PackagePath $packages[0].FullName -Coalescing -CoalescingAction KeepRemote -CreateConflict -EvidencePath artifacts/evidence/cli-create-keep-remote/report.json
           if ($LASTEXITCODE -ne 0) { throw 'The default Host controlled-Create KeepRemote fixture failed.' }
 
       - name: Preserve signed ARM64 default Host Create originals
@@ -622,7 +622,7 @@ jobs:
           $packages = @(Get-ChildItem -LiteralPath artifacts/official-local -Recurse -Filter '*.mpadapter' -File)
           if ($packages.Count -ne 1 -or -not (Test-Path -LiteralPath ($packages[0].FullName + '.signature.json'))) { throw 'Require one frozen official signed Local package.' }
           New-Item -ItemType Directory -Path artifacts/evidence/cli-empty-create-keep-remote -Force | Out-Null
-          pwsh ./eng/verify-cli-integration.ps1 -Runtime win-arm64 -PackagePath $packages[0].FullName -Coalescing -CoalescingAction KeepRemote -CreateConflict -EmptyCreate -EvidencePath artifacts/evidence/cli-empty-create-keep-remote/report.json
+          pwsh ./eng/verify-cli-integration.ps1 -Runtime win-arm64 -CliHostPublishDirectory "$env:RUNNER_TEMP/mirrorpulse-cli-host-win-arm64" -PackagePath $packages[0].FullName -Coalescing -CoalescingAction KeepRemote -CreateConflict -EmptyCreate -EvidencePath artifacts/evidence/cli-empty-create-keep-remote/report.json
           if ($LASTEXITCODE -ne 0) { throw 'The disabled default Host empty-creation fixture failed.' }
 
       - name: Preserve signed ARM64 empty creation originals

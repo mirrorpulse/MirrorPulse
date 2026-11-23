@@ -15,6 +15,7 @@ param(
     [switch]$RequirePureMoveJournal,
     [ValidateSet("Debug", "Release")]
     [string]$Configuration = "Release",
+    [string]$CliHostPublishDirectory,
     [string]$EvidencePath
 )
 
@@ -39,6 +40,23 @@ if ($Coalescing -and ($Regression -or [string]::IsNullOrWhiteSpace($EvidencePath
     throw 'The independent coalescing fixture requires its own evidence path and explicitly enabled disposable native environment.'
 }
 $repositoryRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
+if ($CliHostPublishDirectory) {
+    $CliHostPublishDirectory = (Resolve-Path -LiteralPath $CliHostPublishDirectory).Path
+    $source = git -C $repositoryRoot rev-parse HEAD
+    $publish = Get-Content -LiteralPath (Join-Path $CliHostPublishDirectory 'publish-manifest.json') -Raw | ConvertFrom-Json
+    if ($LASTEXITCODE -ne 0 -or $source -cnotmatch '\A[0-9a-f]{40}\z' -or $publish.schemaVersion -ne 1 -or
+        $publish.sourceSha -cne $source -or $publish.runtime -cne $Runtime -or $publish.configuration -cne $Configuration) {
+        throw 'The shared publish must match the verification source, runtime and configuration.'
+    }
+    foreach ($relativePath in @('mp.exe', 'host/MirrorPulse.Host.exe')) {
+        $entry = @($publish.files | Where-Object path -CEQ $relativePath)
+        $file = Get-Item -LiteralPath (Join-Path $CliHostPublishDirectory $relativePath)
+        if ($entry.Count -ne 1 -or $entry[0].length -ne $file.Length -or
+            $entry[0].sha256 -cne (Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash.ToLowerInvariant()) {
+            throw 'A shared CLI or Host executable differs from its publish manifest.'
+        }
+    }
+}
 . (Join-Path $PSScriptRoot 'cli-integration-failure-policy.ps1')
 . (Join-Path $PSScriptRoot 'cli-active-replacement.ps1')
 . (Join-Path $PSScriptRoot 'cli-root-label-lifecycle.ps1')
@@ -233,12 +251,17 @@ try {
         [IO.File]::WriteAllText((Join-Path $sourceRoot 'cli-active-replacement.bin'), 'original bytes to preserve in the private backup')
     }
 
-    $cliProject = Join-Path $repositoryRoot "src\MirrorPulse.Cli\MirrorPulse.Cli.csproj"
-    $hostProject = Join-Path $repositoryRoot "src\MirrorPulse.Host\MirrorPulse.Host.csproj"
-    & dotnet publish $cliProject --configuration $Configuration --runtime $Runtime --self-contained true --no-restore --output $cliRoot
-    if ($LASTEXITCODE -ne 0) { throw "CLI publish failed." }
-    & dotnet publish $hostProject --configuration $Configuration --runtime $Runtime --self-contained true --no-restore --output $hostRoot
-    if ($LASTEXITCODE -ne 0) { throw "Host publish failed." }
+    if ($CliHostPublishDirectory) {
+        $cliRoot = $CliHostPublishDirectory
+        $hostRoot = Join-Path $CliHostPublishDirectory 'host'
+    } else {
+        $cliProject = Join-Path $repositoryRoot 'src/MirrorPulse.Cli/MirrorPulse.Cli.csproj'
+        $hostProject = Join-Path $repositoryRoot 'src/MirrorPulse.Host/MirrorPulse.Host.csproj'
+        & dotnet publish $cliProject --configuration $Configuration --runtime $Runtime --self-contained true --no-restore --output $cliRoot
+        if ($LASTEXITCODE -ne 0) { throw 'CLI publish failed.' }
+        & dotnet publish $hostProject --configuration $Configuration --runtime $Runtime --self-contained true --no-restore --output $hostRoot
+        if ($LASTEXITCODE -ne 0) { throw 'Host publish failed.' }
+    }
     $probeProject = Join-Path $repositoryRoot 'tests\MirrorPulse.CfSharp.CrashProbe\MirrorPulse.CfSharp.CrashProbe.csproj'
     & dotnet publish $probeProject --configuration $Configuration --self-contained false --no-restore --output $probeRoot
     if ($LASTEXITCODE -ne 0) { throw 'The test-only external consumer publish failed.' }

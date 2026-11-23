@@ -9,6 +9,11 @@ param(
 
 $ErrorActionPreference = "Stop"
 $repositoryRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
+$sourceSha = git -C $repositoryRoot rev-parse HEAD
+if ($LASTEXITCODE -ne 0 -or $sourceSha -cnotmatch '\A[0-9a-f]{40}\z' -or
+    ($env:GITHUB_SHA -and $env:GITHUB_SHA -cne $sourceSha)) {
+    throw 'Could not bind the CLI and Host publish to the source revision.'
+}
 $ownedOutput = $false
 if ([string]::IsNullOrWhiteSpace($OutputDirectory)) {
     $OutputDirectory = Join-Path ([IO.Path]::GetTempPath()) "MirrorPulse-cli-host-$Runtime-$([guid]::NewGuid().ToString('N'))"
@@ -52,6 +57,7 @@ try {
         }
     [ordered]@{
         schemaVersion = 1
+        sourceSha = $sourceSha
         runtime = $Runtime
         configuration = $Configuration
         cliVersion = $version.Substring($version.LastIndexOf(' ') + 1)
