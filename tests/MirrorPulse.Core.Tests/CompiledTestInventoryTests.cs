@@ -11,6 +11,49 @@ public sealed class CompiledTestInventoryTests
 {
     private static readonly string[] Assemblies = ["MirrorPulse.Core.Tests", "MirrorPulse.CloudFiles.CfSharp.Tests", "MirrorPulse.Cli.Tests"];
     private static readonly string[] Outcomes = ["Passed", "Failed", "NotExecuted"];
+    private static string? _preparedFixture;
+
+    [ClassInitialize]
+    public static async Task PrepareCommonFixture(TestContext _)
+    {
+        string repository = TestRepository.FindRepositoryRoot();
+        string root = Directory.CreateTempSubdirectory("MirrorPulse-compiled-inventory-prepared-").FullName;
+        try
+        {
+            string eng = Path.Combine(root, "eng");
+            Directory.CreateDirectory(eng);
+            foreach (string name in new[] { "collect-managed-test-originals.ps1", "collect-compiled-test-inventory.ps1", "compiled-test-inventory-policy.ps1", "test-suites.json" })
+                File.Copy(Path.Combine(repository, "eng", name), Path.Combine(eng, name));
+
+            await File.WriteAllTextAsync(Path.Combine(root, ".gitignore"), "bin/\nartifacts/\n");
+            const string framework = "net10.0-windows10.0.26100.0";
+            foreach (string name in Assemblies)
+            {
+                string project = Path.Combine(root, "tests", name);
+                string output = Path.Combine(project, "bin", "Release", framework);
+                Directory.CreateDirectory(output);
+                File.Copy(Path.Combine(repository, "tests", name, name + ".csproj"), Path.Combine(project, name + ".csproj"));
+                File.Copy(Path.Combine(repository, "tests", name, "bin", "Release", framework, name + ".dll"), Path.Combine(output, name + ".dll"));
+            }
+
+            await RequireAsync(root, "git", "init", "--quiet");
+            await RequireAsync(root, "git", "add", ".");
+            await RequireAsync(root, "git", "-c", "user.name=Compiled inventory fixture", "-c", "user.email=fixture@example.invalid", "commit", "--quiet", "-m", "Fixture source");
+            await RequireAsync(root, "pwsh", "-NoProfile", "-File", Path.Combine(eng, "collect-managed-test-originals.ps1"), "-Phase", "Prepare");
+            _preparedFixture = root;
+        }
+        catch
+        {
+            DeleteFixture(root);
+            throw;
+        }
+    }
+
+    [ClassCleanup]
+    public static void DeleteCommonFixture()
+    {
+        if (_preparedFixture is { } prepared) DeleteFixture(prepared);
+    }
 
     [TestMethod]
     [DataRow("complete", true)]
@@ -40,30 +83,19 @@ public sealed class CompiledTestInventoryTests
     [DataRow("changedTotal", false)]
     public async Task ReconciliationRequiresEveryOriginalCompiledCaseAndPreservesNegativeOutcomes(string boundary, bool succeeds)
     {
-        string repository = TestRepository.FindRepositoryRoot();
-        string root = Path.Combine(Path.GetTempPath(), $"MirrorPulse-compiled-inventory-{Guid.NewGuid():N}");
-        Directory.CreateDirectory(root);
+        string preparedFixture = _preparedFixture ?? throw new InvalidOperationException("The inventory fixture was not prepared.");
+        string root = Directory.CreateTempSubdirectory("MirrorPulse-compiled-inventory-").FullName;
         try
         {
-            foreach (string name in new[] { "collect-managed-test-originals.ps1", "collect-compiled-test-inventory.ps1", "compiled-test-inventory-policy.ps1", "test-suites.json" })
+            foreach (string file in Directory.EnumerateFiles(preparedFixture, "*", SearchOption.AllDirectories))
             {
-                string destination = Path.Combine(root, "eng", name); Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
-                File.Copy(Path.Combine(repository, "eng", name), destination);
+                string destination = Path.Combine(root, Path.GetRelativePath(preparedFixture, file));
+                Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
+                File.Copy(file, destination);
             }
-            await File.WriteAllTextAsync(Path.Combine(root, ".gitignore"), "bin/\nartifacts/\n");
-            const string framework = "net10.0-windows10.0.26100.0";
-            foreach (string name in Assemblies)
-            {
-                string project = Path.Combine(root, "tests", name); string output = Path.Combine(project, "bin", "Release", framework);
-                Directory.CreateDirectory(output);
-                File.Copy(Path.Combine(repository, "tests", name, name + ".csproj"), Path.Combine(project, name + ".csproj"));
-                File.Copy(Path.Combine(repository, "tests", name, "bin", "Release", framework, name + ".dll"), Path.Combine(output, name + ".dll"));
-            }
-            await RequireAsync(root, "git", "init", "--quiet"); await RequireAsync(root, "git", "add", ".");
-            await RequireAsync(root, "git", "-c", "user.name=Compiled inventory fixture", "-c", "user.email=fixture@example.invalid", "commit", "--quiet", "-m", "Fixture source");
+
             string collector = Path.Combine(root, "eng", "collect-managed-test-originals.ps1");
             string verifier = Path.Combine(root, "eng", "collect-compiled-test-inventory.ps1");
-            await RequireAsync(root, "pwsh", "-NoProfile", "-File", collector, "-Phase", "Prepare");
             string originals = Path.Combine(root, "artifacts", "test-results", "managed-originals");
             string results = Path.Combine(root, "artifacts", "test-results", "managed"); Directory.CreateDirectory(results);
             string discovery = Path.Combine(originals, "discovery"); Directory.CreateDirectory(discovery);
@@ -172,15 +204,17 @@ public sealed class CompiledTestInventoryTests
                 CollectionAssert.AreEqual(Outcomes, rows.Take(3).Select(row => row!["outcome"]!.GetValue<string>()).ToArray());
             }
         }
-        finally
-        {
-            string full = Path.GetFullPath(root);
-            Assert.IsTrue(full.StartsWith(Path.GetFullPath(Path.GetTempPath()), StringComparison.OrdinalIgnoreCase));
-            Assert.IsTrue(Path.GetFileName(full).StartsWith("MirrorPulse-compiled-inventory-", StringComparison.Ordinal));
-            Assert.AreEqual((FileAttributes)0, File.GetAttributes(full) & FileAttributes.ReparsePoint);
-            foreach (string path in Directory.EnumerateFiles(full, "*", SearchOption.AllDirectories)) File.SetAttributes(path, FileAttributes.Normal);
-            Directory.Delete(full, recursive: true);
-        }
+        finally { DeleteFixture(root); }
+    }
+
+    private static void DeleteFixture(string root)
+    {
+        string full = Path.GetFullPath(root);
+        Assert.IsTrue(full.StartsWith(Path.GetFullPath(Path.GetTempPath()), StringComparison.OrdinalIgnoreCase));
+        Assert.IsTrue(Path.GetFileName(full).StartsWith("MirrorPulse-compiled-inventory-", StringComparison.Ordinal));
+        Assert.AreEqual((FileAttributes)0, File.GetAttributes(full) & FileAttributes.ReparsePoint);
+        foreach (string path in Directory.EnumerateFiles(full, "*", SearchOption.AllDirectories)) File.SetAttributes(path, FileAttributes.Normal);
+        Directory.Delete(full, recursive: true);
     }
 
     private static XNamespace Ns => "http://microsoft.com/schemas/VisualStudio/TeamTest/2010";
