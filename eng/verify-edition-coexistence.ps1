@@ -3,6 +3,7 @@ param([Parameter(Mandatory)][string]$EvidencePath)
 
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'installed-process-images.ps1')
+. (Join-Path $PSScriptRoot 'installed-startup-diagnostics.ps1')
 $os = Get-CimInstance Win32_OperatingSystem
 if ($os.ProductType -ne 1 -or [version]$os.Version -lt [version]'10.0.26100.0' -or
     [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture -ne 'Arm64') {
@@ -34,7 +35,8 @@ $custom = @{
     ProviderId='7e2494ee-f27a-44cd-a564-15dc2eee476e'; Name='Sample Drive'; EnvironmentPrefix='MIRRORPULSE_EDITION_SAMPLE_DRIVE_'; Fixture='custom'
 }
 $editions = @($standard, $custom)
-$evidence = [ordered]@{ schemaVersion=1; sourceSha=$sourceSha; runtime='win-arm64'; phase='Preflight'; verified=$false }
+$evidence = [ordered]@{ schemaVersion=1; sourceSha=$sourceSha; runtime='win-arm64'; phase='Preflight'; verified=$false; hosts=@() }
+$hostAttempt = $null
 
 function Invoke-ShellCheck($Edition, [switch]$Unregister) {
     $action = if ($Unregister) { 'unregister' } else { 'read' }
@@ -193,13 +195,18 @@ namespace MirrorPulse {
         }
     }
 
-    $evidence.phase = 'Concurrent Hosts and Shell roots'
     foreach ($edition in $editions) {
+        $evidence.phase = 'Host startup ' + $edition.Name
+        $hostAttempt = [DateTimeOffset]::UtcNow
         $null = Invoke-EditionCli $edition @('status')
         $edition.HostId = Get-EditionHost $edition
+        $hostAttempt = $null
+        $evidence.phase = 'Shell registration ' + $edition.Name
         if ((Invoke-ShellCheck $edition) -cne 'Present') { throw 'A running edition has no Shell root.' }
+        $evidence.hosts += @{ identity=$edition.PackageName; packageBound=$true; shellRegistered=$true }
     }
     if ($standard.HostId -eq $custom.HostId) { throw 'Both CLI aliases route to the same Host.' }
+    $evidence.phase = 'Independent configuration'
     $standardBefore = (Invoke-EditionCli $standard @('config')).locale
     $customBefore = (Invoke-EditionCli $custom @('config')).locale
     $updated = if ($customBefore -ceq 'zh-CN') { 'en-US' } else { 'zh-CN' }
@@ -209,6 +216,7 @@ namespace MirrorPulse {
         throw 'A configuration write did not stay within the selected edition.'
     }
     $firstCustomHost = $custom.HostId
+    $evidence.phase = 'Custom restart'
     $null = Invoke-EditionCli $custom @('host', 'restart')
     $custom.HostId = Get-EditionHost $custom
     if ($custom.HostId -eq $firstCustomHost -or (Get-EditionHost $standard) -ne $standard.HostId -or
@@ -237,6 +245,19 @@ namespace MirrorPulse {
     $evidence.packages = @($editions | ForEach-Object { @{ identity=$_.PackageName; alias=$_.Alias; sha256=$_.Sha256 } })
     $evidence.phase = 'Complete'
     $evidence.verified = $true
+} catch {
+    if ($hostAttempt -and $edition.Installed) {
+        try {
+            $packageData = Join-Path (Join-Path $local 'Packages') $edition.Installed.PackageFamilyName
+            $roots = @((Join-Path $local $edition.Prefix),
+                (Join-Path $packageData "LocalCache/Local/$($edition.Prefix)"),
+                (Join-Path $packageData "LocalState/$($edition.Prefix)"))
+            $evidence.startupDiagnostics = Get-InstalledHostStartupDiagnostics -DataRoots $roots -Since $hostAttempt
+            $evidence.processObservations = @(Get-InstalledHostExitObservation -ExpectedExecutable `
+                (Join-Path $edition.Installed.InstallLocation 'host/MirrorPulse.Host.exe'))
+        } catch { Write-Warning 'Bounded Host startup diagnostics could not be collected.' }
+    }
+    throw
 } finally {
     foreach ($edition in $editions) {
         try {
@@ -259,6 +280,6 @@ namespace MirrorPulse {
     }
     $evidence.cleanedUp = -not $cleanupFailed
     if ($cleanupFailed) { $evidence.verified = $false }
-    $evidence | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $EvidencePath -Encoding utf8
+    $evidence | ConvertTo-Json -Depth 7 | Set-Content -LiteralPath $EvidencePath -Encoding utf8
     if ($cleanupFailed) { throw 'The edition coexistence fixture was not fully uninstalled.' }
 }
