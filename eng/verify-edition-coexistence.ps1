@@ -215,15 +215,21 @@ namespace MirrorPulse {
         (Invoke-EditionCli $standard @('config')).locale -cne $standardBefore) {
         throw 'A configuration write did not stay within the selected edition.'
     }
+    $evidence.configurationIsolated = $true
     $firstCustomHost = $custom.HostId
     $evidence.phase = 'Custom restart'
-    $null = Invoke-EditionCli $custom @('host', 'restart')
+    $restarting = Invoke-EditionCli $custom @('host', 'restart')
+    if ($restarting.processId -ne $firstCustomHost -or (Get-Process -Id $firstCustomHost -ErrorAction SilentlyContinue)) {
+        throw 'The restart request did not drain the original custom Host.'
+    }
+    # A normal command starts the next Host after the old one drains.
+    $null = Invoke-EditionCli $custom @('status')
     $custom.HostId = Get-EditionHost $custom
     if ($custom.HostId -eq $firstCustomHost -or (Get-EditionHost $standard) -ne $standard.HostId -or
         (Invoke-EditionCli $custom @('config')).locale -cne $updated -or (Invoke-ShellCheck $custom) -cne 'Present') {
         throw 'Restart did not preserve the custom configuration independently of the standard Host.'
     }
-    $evidence.configurationIsolated = $true
+    $evidence.customRestartIsolated = $true
 
     $evidence.phase = 'Concurrent application activation'
     $standard.WindowId = Start-EditionWindow $standard
