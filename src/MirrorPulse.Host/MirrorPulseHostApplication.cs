@@ -422,7 +422,11 @@ public sealed partial class MirrorPulseHostApplication : IAsyncDisposable
                         ? locale.DisplayName : installation.AdapterId.ToString(),
                     installation.Manifest.RootDefinitions.Select(root => new MirrorPulseControlAdapterRootDefinition(
                         root.Key, root.Label, root.DirectoryName)).ToArray(),
-                    installation.Manifest.ConfigurationFields),
+                    installation.Manifest.ConfigurationFields)
+                {
+                    Presentation = installation.Manifest.Presentation?.Resolve(_configuration.Locale),
+                    LogoPath = installation.Manifest.Presentation?.LogoPath,
+                },
             }).ToArray(),
             topology.Instances.Select(instance => new MirrorPulseControlInstance(
                 instance.AdapterId.ToString(),

@@ -61,7 +61,14 @@ public sealed record MirrorPulseControlInstallation(
 /// <summary>Public, non-secret configuration metadata from the installed package.</summary>
 public sealed record MirrorPulseControlAdapterForm(string Title,
     IReadOnlyList<MirrorPulseControlAdapterRootDefinition> RootDefinitions,
-    IReadOnlyList<AdapterConfigurationField> ConfigurationFields);
+    IReadOnlyList<AdapterConfigurationField> ConfigurationFields)
+{
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public AdapterPackageLocale? Presentation { get; init; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? LogoPath { get; init; }
+}
 
 public sealed record MirrorPulseControlAdapterRootDefinition(string Key, string Label, string DirectoryName);
 

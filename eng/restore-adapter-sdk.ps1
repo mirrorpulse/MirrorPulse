@@ -46,7 +46,7 @@ function New-SdkRequestFailure([string]$Boundary, [int]$Status) {
     return [IO.IOException]::new("The fixed SDK $Boundary failed ($category).")
 }
 function Receive-PinnedPackage([string]$Path) {
-    $url = "https://github.com/MirrorPulse/adapter-template/releases/download/$($pin.tag)/$asset"
+    $url = "https://github.com/MirrorPulse/adapter-sdk/releases/download/$($pin.tag)/$asset"
     try {
         Invoke-WebRequest -Uri $url -OutFile $Path -MaximumRetryCount 1 -RetryIntervalSec 2 `
             -ConnectionTimeoutSeconds 15 -OperationTimeoutSeconds 30
@@ -59,13 +59,13 @@ function Receive-PinnedPackage([string]$Path) {
     }
     # The second route selects the same immutable bytes; no version or hash fallback is allowed.
     try {
-        $release = Invoke-RestMethod -Uri "https://api.github.com/repos/mirrorpulse/adapter-template/releases/tags/$($pin.tag)" `
+        $release = Invoke-RestMethod -Uri "https://api.github.com/repos/mirrorpulse/adapter-sdk/releases/tags/$($pin.tag)" `
             -Headers (Get-SdkApiHeaders 'application/vnd.github+json') -MaximumRetryCount 2 -RetryIntervalSec 2 `
             -ConnectionTimeoutSeconds 15 -OperationTimeoutSeconds 30
     } catch { throw (New-SdkRequestFailure 'release metadata request' (Get-SdkRequestStatus $_)) }
     $selected = @($release.assets | Where-Object { $_.name -ceq $asset })
     if ($release.tag_name -cne $pin.tag -or $release.draft -or $selected.Count -ne 1 -or
-        $selected[0].size -ne $pin.length -or $selected[0].url -cnotmatch '\Ahttps://api\.github\.com/repos/mirrorpulse/adapter-template/releases/assets/[1-9][0-9]*\z' -or
+        $selected[0].size -ne $pin.length -or $selected[0].url -cnotmatch '\Ahttps://api\.github\.com/repos/mirrorpulse/adapter-sdk/releases/assets/[1-9][0-9]*\z' -or
         $selected[0].digest -cne ('sha256:' + $pin.sha256)) {
         throw 'The fixed SDK release asset API does not match its original pin.'
     }

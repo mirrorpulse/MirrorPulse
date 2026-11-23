@@ -1,4 +1,6 @@
+using System.IO.Compression;
 using System.Text.Json;
+using MirrorPulse.Adapter.Sdk;
 using MirrorPulse.Core.Contracts;
 
 namespace MirrorPulse.Core.Packaging;
@@ -20,7 +22,22 @@ public static class AdapterPackageManifestReader
         ArgumentNullException.ThrowIfNull(stream);
         using JsonDocument document = await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken)
             .ConfigureAwait(false);
+        return ReadManifest(document.RootElement, presentation: null);
+    }
+
+    internal static async Task<AdapterManifest> ReadSignedAsync(Stream manifestStream, ZipArchive archive,
+        IReadOnlyCollection<string> signedFiles, CancellationToken cancellationToken)
+    {
+        using JsonDocument document = await JsonDocument.ParseAsync(manifestStream, cancellationToken: cancellationToken)
+            .ConfigureAwait(false);
         JsonElement root = document.RootElement;
+        AdapterPackagePresentation? presentation = root.GetProperty("schemaVersion").GetInt32() == AdapterPackageMetadata.SchemaVersion
+            ? SignedAdapterPresentationReader.Read(root, archive, signedFiles) : null;
+        return ReadManifest(root, presentation);
+    }
+
+    private static AdapterManifest ReadManifest(JsonElement root, AdapterPackagePresentation? presentation)
+    {
         JsonElement protocol = root.GetProperty("protocol");
         JsonElement installPolicy = root.GetProperty("installPolicy");
         JsonElement instancePolicy = root.GetProperty("instancePolicy");
@@ -66,7 +83,10 @@ public static class AdapterPackageManifestReader
             root.GetProperty("locales").EnumerateArray()
                 .Select(item => item.GetString() ?? string.Empty).ToArray(),
             root.GetProperty("minimumMirrorPulseVersion").GetString() ?? string.Empty,
-            roots, locales, configurationFields);
+            roots, locales, configurationFields)
+        {
+            Presentation = presentation,
+        };
         Diagnostic[] errors = AdapterManifestValidator.Validate(manifest)
             .Where(item => item.Severity == DiagnosticSeverity.Error).ToArray();
         if (errors.Length > 0)

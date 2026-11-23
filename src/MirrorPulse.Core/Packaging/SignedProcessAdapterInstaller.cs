@@ -135,7 +135,8 @@ public static class SignedProcessAdapterInstaller
         AdapterManifest manifest;
         await using (Stream manifestStream = manifestEntry.Open())
         {
-            manifest = await AdapterPackageManifestReader.ReadAsync(manifestStream, cancellationToken).ConfigureAwait(false);
+            manifest = await AdapterPackageManifestReader.ReadSignedAsync(manifestStream, archive,
+                actualFiles.Select(file => file.Path).ToArray(), cancellationToken).ConfigureAwait(false);
         }
         AdapterPackageCompatibility.Validate(manifest, runtimeIdentifier);
         string adapterId = manifest.AdapterId.ToString();

@@ -47,7 +47,7 @@
         "dependencies": {
           "CfSharp": "[0.1.0-preview.16, )",
           "CfSharp.Storage.Sqlite": "[0.1.0-preview.16, )",
-          "MirrorPulse.Adapter.Sdk": "[0.3.1, 0.3.1]",
+          "MirrorPulse.Adapter.Sdk": "[1.0.0-preview.4, 1.0.0-preview.4]",
           "MirrorPulse.Core": "[1.0.0, )"
         }
       },
@@ -55,7 +55,7 @@
         "type": "Project",
         "dependencies": {
           "Microsoft.Data.Sqlite": "[8.0.31, )",
-          "MirrorPulse.Adapter.Sdk": "[0.3.1, 0.3.1]"
+          "MirrorPulse.Adapter.Sdk": "[1.0.0-preview.4, 1.0.0-preview.4]"
         }
       },
       "CfSharp": {
@@ -89,9 +89,9 @@
       },
       "MirrorPulse.Adapter.Sdk": {
         "type": "CentralTransitive",
-        "requested": "[0.3.1, 0.3.1]",
-        "resolved": "0.3.1",
-        "contentHash": "t4tRzfZ0cWnNxkaQHKIdpyLiyfaKNdoDmM385SM/RnnRxiMSRiGU0GEC5j4W/73jTgI/iFSGcf7RSaAUm3bwEQ=="
+        "requested": "[1.0.0-preview.4, 1.0.0-preview.4]",
+        "resolved": "1.0.0-preview.4",
+        "contentHash": "BO7Xx1FEwkYouNETDxdNgoWO6kJZdxoAThkpbIhxNnsExHfhZieYPdbW+4u0mtiLfdRHyE6OBfPpTQf4bbMz2g=="
       }
     }
   }

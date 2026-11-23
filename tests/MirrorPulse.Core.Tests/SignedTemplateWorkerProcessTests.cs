@@ -35,20 +35,32 @@ public sealed class SignedTemplateWorkerProcessTests
             Assert.IsTrue(installed.IsSigned);
             Assert.AreEqual(2, installed.Manifest.Protocol.Minimum);
             Assert.AreEqual(2, installed.Manifest.Protocol.Maximum);
-            InstanceId instanceId = InstanceId.New();
-            var instance = new AdapterInstance(installed.AdapterId, installed.InstallId, instanceId, "Memory",
-                new Dictionary<string, string>(), [], Path.Combine(directory, "files"), Path.Combine(directory, "transfers"),
-                true, AdapterLifecycleState.Enabled, null, DateTimeOffset.UtcNow);
-            RootRegistration Root(string key) => new(installed.AdapterId, instanceId, RootId.New(), key,
-                key, key, false, RootRegistrationState.Active, DateTimeOffset.UtcNow, RootIdentityScope.InstanceRoot);
-            var topology = new MirrorPulseAdapterTopology([installed], [instance], [Root("left"), Root("right")]);
-            await catalog.SaveAdapterTopologyAsync(topology);
+            AdapterInstance instance = await catalog.CreateInstanceAsync(installed.InstallId, "Memory",
+                new Dictionary<string, string>(), [], Path.Combine(directory, "files"), Path.Combine(directory, "transfers"));
+            InstanceId instanceId = instance.InstanceId;
+            MirrorPulseAdapterTopology topology = await catalog.ReadAdapterTopologyAsync();
+            AdapterManifest retained = topology.Installations.Single().Manifest;
+            if (retained.SchemaVersion == 2)
+            {
+                Assert.HasCount(1, retained.RootDefinitions);
+                Assert.HasCount(1, topology.Roots);
+                AdapterPackagePresentation presentation = retained.Presentation ?? throw new InvalidDataException("Package presentation was lost.");
+                Assert.AreEqual("assets/logo.png", presentation.LogoPath);
+                AdapterPackageLocale english = presentation.Resolve("en-US");
+                Assert.AreEqual("Sample storage Adapter", english.Title);
+                Assert.AreEqual(english.Title, presentation.Resolve("es-ES").Title);
+                Assert.AreEqual(AdapterPackageFormKind.Heading, english.Controls[0].Kind);
+            }
+
+            string[] roots = retained.RootDefinitions.Select(root => root.Key).ToArray();
+            string sourceRoot = roots[0];
+            string destinationRoot = roots[^1];
             await using var supervisor = new AdapterInstanceProcessSupervisor(catalog, new WindowsCredentialManagerStore());
             await supervisor.StartAsync(topology);
             using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
             while ((await catalog.ReadInstanceRuntimeStateAsync(instanceId, timeout.Token))?.Phase != "Connected")
                 await Task.Delay(25, timeout.Token);
-            foreach (string root in new[] { "left", "right" })
+            foreach (string root in roots)
             {
                 MirrorPulseWorkerDirectoryPage page = await supervisor.ReadDirectoryPageAsync(new(instanceId, "", ReadOnlyMemory<byte>.Empty, 1, root), timeout.Token);
                 Assert.HasCount(1, page.Entries);
@@ -59,24 +71,27 @@ public sealed class SignedTemplateWorkerProcessTests
                 Assert.AreEqual(expected, await reader.ReadToEndAsync(timeout.Token));
             }
             using var upload = new MemoryStream(new byte[] { 4, 5, 6 });
-            string revision = await supervisor.UploadAsync(new(instanceId, "upload.bin", null, upload, upload.Length, Guid.NewGuid(), RootKey: "left"), timeout.Token);
-            Assert.IsNull(await supervisor.StatAsync(new(instanceId, "upload.bin", "right"), timeout.Token));
+            string revision = await supervisor.UploadAsync(new(instanceId, "upload.bin", null, upload, upload.Length, Guid.NewGuid(), RootKey: sourceRoot), timeout.Token);
+            if (sourceRoot != destinationRoot)
+            {
+                Assert.IsNull(await supervisor.StatAsync(new(instanceId, "upload.bin", destinationRoot), timeout.Token));
+            }
             Guid operation = Guid.NewGuid();
-            var move = new MirrorPulseWorkerMoveRequest(instanceId, "upload.bin", "moved.bin", revision, false, operation, "left", "right");
+            var move = new MirrorPulseWorkerMoveRequest(instanceId, "upload.bin", "moved.bin", revision, false, operation, sourceRoot, destinationRoot);
             Assert.AreEqual(revision, await supervisor.MoveAsync(move, timeout.Token));
             Assert.AreEqual(revision, await supervisor.MoveAsync(move, timeout.Token));
-            Assert.AreEqual("directory", await supervisor.CreateDirectoryAsync(new(instanceId, "left", "empty", Guid.NewGuid()), timeout.Token));
-            await supervisor.DeleteAsync(new(instanceId, "moved.bin", revision, false, Guid.NewGuid(), "right"), timeout.Token);
-            Assert.IsNull(await supervisor.StatAsync(new(instanceId, "moved.bin", "right"), timeout.Token));
+            Assert.AreEqual("directory", await supervisor.CreateDirectoryAsync(new(instanceId, sourceRoot, "empty", Guid.NewGuid()), timeout.Token));
+            await supervisor.DeleteAsync(new(instanceId, "moved.bin", revision, false, Guid.NewGuid(), destinationRoot), timeout.Token);
+            Assert.IsNull(await supervisor.StatAsync(new(instanceId, "moved.bin", destinationRoot), timeout.Token));
             Assert.IsEmpty(Directory.EnumerateFiles(instance.TransferCacheDirectory));
             using var canceled = CancellationTokenSource.CreateLinkedTokenSource(timeout.Token);
             using var interrupted = new InterruptAfterFirstChunk(canceled);
             await Assert.ThrowsAsync<OperationCanceledException>(() => supervisor.UploadAsync(new(instanceId,
-                "canceled.bin", null, interrupted, interrupted.Length, Guid.NewGuid(), RootKey: "left"), canceled.Token).AsTask());
-            Assert.IsNull(await supervisor.StatAsync(new(instanceId, "canceled.bin", "left"), timeout.Token));
+                "canceled.bin", null, interrupted, interrupted.Length, Guid.NewGuid(), RootKey: sourceRoot), canceled.Token).AsTask());
+            Assert.IsNull(await supervisor.StatAsync(new(instanceId, "canceled.bin", sourceRoot), timeout.Token));
             Assert.IsEmpty(Directory.EnumerateFiles(instance.TransferCacheDirectory), "CancelAck follows lease removal.");
             using var nextUpload = new MemoryStream(new byte[] { 7 });
-            await supervisor.UploadAsync(new(instanceId, "after-cancel.bin", null, nextUpload, 1, Guid.NewGuid(), RootKey: "right"), timeout.Token);
+            await supervisor.UploadAsync(new(instanceId, "after-cancel.bin", null, nextUpload, 1, Guid.NewGuid(), RootKey: destinationRoot), timeout.Token);
         }
         finally { if (Directory.Exists(directory)) Directory.Delete(directory, true); }
     }

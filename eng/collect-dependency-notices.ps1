@@ -96,7 +96,7 @@ foreach ($project in $projects) {
         $packageSource = "https://www.nuget.org/packages/$id/$version"
         if ($id -ceq $sdkPin.packageId) {
             if ($version -cne $sdkPin.version) { throw "The restored SDK version differs from the fixed release." }
-            $packageSource = "https://github.com/MirrorPulse/adapter-template/releases/tag/$($sdkPin.tag)"
+            $packageSource = "https://github.com/MirrorPulse/adapter-sdk/releases/tag/$($sdkPin.tag)"
         }
         $components[$package.Key] = [ordered]@{
             id=$id;version=$version;kind=$package.Value.kind;sha512=$hash;nugetContentHash=$metadata.contentHash

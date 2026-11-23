@@ -59,7 +59,7 @@ public sealed class AdapterSdkDownloadBoundaryTests
                     [CmdletBinding()]
                     param([string]$Uri,[string]$OutFile,[hashtable]$Headers,[int]$MaximumRetryCount,[int]$RetryIntervalSec,
                         [int]$ConnectionTimeoutSeconds,[int]$OperationTimeoutSeconds)
-                    if($Uri -ceq ('https://github.com/MirrorPulse/adapter-template/releases/download/'+$pin.tag+'/'+$pin.asset)) {
+                    if($Uri -ceq ('https://github.com/MirrorPulse/adapter-sdk/releases/download/'+$pin.tag+'/'+$pin.asset)) {
                         $state.primary++;Assert-Transport $ConnectionTimeoutSeconds $OperationTimeoutSeconds $MaximumRetryCount 1
                         if($null -ne $Headers){throw 'The primary public download must not receive API credentials.'}
                         if($Scenario -ceq 'primary'){[IO.File]::WriteAllBytes($OutFile,$bytes);return}
@@ -67,7 +67,7 @@ public sealed class AdapterSdkDownloadBoundaryTests
                         if($Scenario -ceq 'timeout'){throw [TimeoutException]::new($bodyMarker)}
                         Throw-Response 504
                     }
-                    if($Uri -cne 'https://api.github.com/repos/mirrorpulse/adapter-template/releases/assets/123'){throw 'An unselected asset address was requested.'}
+                    if($Uri -cne 'https://api.github.com/repos/mirrorpulse/adapter-sdk/releases/assets/123'){throw 'An unselected asset address was requested.'}
                     $state.asset++;Assert-Transport $ConnectionTimeoutSeconds $OperationTimeoutSeconds $MaximumRetryCount 2
                     Assert-ApiHeaders $Headers 'application/octet-stream'
                     if($Scenario -ceq 'asset-error'){Throw-Response 503}
@@ -79,12 +79,12 @@ public sealed class AdapterSdkDownloadBoundaryTests
                         [int]$ConnectionTimeoutSeconds,[int]$OperationTimeoutSeconds)
                     $state.metadata++;Assert-Transport $ConnectionTimeoutSeconds $OperationTimeoutSeconds $MaximumRetryCount 2
                     Assert-ApiHeaders $Headers 'application/vnd.github+json'
-                    if($Uri -cne ('https://api.github.com/repos/mirrorpulse/adapter-template/releases/tags/'+$pin.tag)){throw 'The fixed release lookup changed.'}
+                    if($Uri -cne ('https://api.github.com/repos/mirrorpulse/adapter-sdk/releases/tags/'+$pin.tag)){throw 'The fixed release lookup changed.'}
                     if($Scenario -ceq 'metadata-error'){Throw-Response 503}
                     [pscustomobject]@{tag_name=$(if($Scenario -ceq 'wrong-release'){'sdk-v9.9.9'}else{$pin.tag});draft=$false;
                         assets=@([pscustomobject]@{name=$pin.asset;size=$pin.length;
                             digest=$(if($Scenario -ceq 'wrong-digest'){'sha256:'+('a'*64)}else{'sha256:'+$pin.sha256});
-                            url=$(if($Scenario -ceq 'wrong-asset'){'https://example.invalid/package'}else{'https://api.github.com/repos/mirrorpulse/adapter-template/releases/assets/123'})})}
+                            url=$(if($Scenario -ceq 'wrong-asset'){'https://example.invalid/package'}else{'https://api.github.com/repos/mirrorpulse/adapter-sdk/releases/assets/123'})})}
                 }
                 $feed=Join-Path $Directory 'artifacts/sdk-feed';$destination=Join-Path $feed $pin.asset
                 if($Scenario -cin @('cache','damaged-cache','required-cache','required-cache-damaged')) {

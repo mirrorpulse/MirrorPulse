@@ -25,7 +25,7 @@ public sealed class ManifestValidatorTests
     public void UnsupportedSchemaAndUnsafeEntrypointAreReported()
     {
         var manifest = new AdapterManifest(
-            2,
+            3,
             AdapterId.Parse("example.webdav"),
             "Example",
             "1.0.0",

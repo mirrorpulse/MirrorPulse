@@ -3,11 +3,11 @@ using System.Collections.ObjectModel;
 namespace MirrorPulse.Core.Contracts;
 
 /// <summary>
-/// Performs static validation of manifest v1 metadata before package execution.
+/// Performs static validation of Adapter manifests before package execution.
 /// </summary>
 public static class AdapterManifestValidator
 {
-    private const int SupportedSchemaVersion = 1;
+    private const int SignedPresentationSchema = 2;
 
     public static IReadOnlyList<Diagnostic> Validate(AdapterManifest? manifest)
     {
@@ -18,9 +18,15 @@ public static class AdapterManifestValidator
             return new ReadOnlyCollection<Diagnostic>(diagnostics);
         }
 
-        if (manifest.SchemaVersion != SupportedSchemaVersion)
+        if (manifest.SchemaVersion is not (1 or SignedPresentationSchema))
         {
             diagnostics.Add(Error("manifest.schema.unsupported", "The Adapter manifest schema is not supported."));
+        }
+        else if (manifest.SchemaVersion == SignedPresentationSchema &&
+            (manifest.Presentation is null || manifest.RootDefinitions.Count != 1 ||
+                manifest.InstancePolicy?.MaximumRootDefinitions != 1 || manifest.ConfigurationFields.Count != 0))
+        {
+            diagnostics.Add(Error("manifest.schema.signedPresentation", "A schema 2 package requires a signed form and a single root."));
         }
 
         if (string.IsNullOrWhiteSpace(manifest.AdapterId.Value))

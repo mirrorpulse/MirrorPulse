@@ -48,7 +48,7 @@ public sealed record AdapterInstancePolicy
 }
 
 /// <summary>
-/// Version-one metadata read from an .mpadapter package.
+/// Metadata read from an .mpadapter package.
 /// </summary>
 public sealed record AdapterManifest
 {
@@ -87,6 +87,8 @@ public sealed record AdapterManifest
     }
 
     public int SchemaVersion { get; }
+
+    public AdapterPackagePresentation? Presentation { get; init; }
 
     public AdapterId AdapterId { get; }
 
