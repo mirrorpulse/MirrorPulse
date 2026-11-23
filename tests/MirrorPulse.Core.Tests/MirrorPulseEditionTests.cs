@@ -1,3 +1,5 @@
+using MirrorPulse.Core.Host;
+
 namespace MirrorPulse.Core.Tests;
 
 [TestClass]
@@ -27,6 +29,16 @@ public sealed class MirrorPulseEditionTests
         Assert.AreEqual(edition.ProviderId, renamed.ProviderId);
         Assert.AreNotEqual(edition.DisplayName, renamed.DisplayName);
         Assert.AreNotEqual(edition.IdentityPrefix, ProductInfo.Edition.IdentityPrefix);
+    }
+
+    [TestMethod]
+    public void EditionsUseSeparateWinUiStatusPipesForTheSameUser()
+    {
+        const string sid = "S-1-5-21-100-200-300-1001";
+        var custom = new MirrorPulseEdition("sample-drive", "Sample Drive", CustomProviderId);
+
+        Assert.AreEqual("MirrorPulse-app-" + sid, MirrorPulseAppStatusPipe.GetPipeName(ProductInfo.Edition, sid));
+        Assert.AreEqual("MirrorPulse.sample-drive-app-" + sid, MirrorPulseAppStatusPipe.GetPipeName(custom, sid));
     }
 
     [TestMethod]

@@ -88,8 +88,10 @@ public sealed class MirrorPulseAppStatusPipe
     {
         using var identity = WindowsIdentity.GetCurrent();
         string sid = identity.User?.Value ?? throw new InvalidOperationException("The current user has no SID.");
-        return $"MirrorPulse-app-{sid}";
+        return GetPipeName(ProductInfo.Edition, sid);
     }
+
+    internal static string GetPipeName(MirrorPulseEdition edition, string sid) => $"{edition.IdentityPrefix}-app-{sid}";
 
     public async Task ServeAsync(CancellationToken cancellationToken)
     {

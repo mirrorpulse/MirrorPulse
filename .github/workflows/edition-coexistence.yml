@@ -10,6 +10,7 @@ on:
       - Directory.Build.props
       - src/MirrorPulse.App/MirrorPulse.EditionPackaging.targets
       - src/MirrorPulse.App/Package.appxmanifest
+      - src/MirrorPulse.Core/Host/MirrorPulseAppStatusPipe.cs
       - src/MirrorPulse.Core/MirrorPulseEdition.cs
       - tests/MirrorPulse.CfSharp.CrashProbe/EditionShellRegistrationProbe.cs
 
