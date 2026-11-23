@@ -21,9 +21,8 @@ MirrorPulse is in development and has no supported production release yet.
 Security fixes target the current development branch. Published preview
 packages are not a substitute for production acceptance.
 
-The [threat model](docs/security-model.md) documents implemented boundaries and
-known limitations. The [capability baseline](docs/cli-capabilities.md) records
-incomplete product paths. A future release will publish its support window.
+A future release will publish its support window. See
+[capabilities and limits](docs/cli-capabilities.md) for current product behavior.
 
 ## Data and signing
 
@@ -35,3 +34,6 @@ Do not commit tokens, passwords or private signing material. Adapter inventory
 signatures, MSIX testing certificates and Microsoft Store signing serve
 different purposes. Signing proves package provenance and integrity, not
 that executable code is harmless.
+
+Adapter Workers run with the current Windows user's access. Install packages
+from a publisher you trust.

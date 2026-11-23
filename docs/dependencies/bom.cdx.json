@@ -6,8 +6,8 @@
     {
       "type": "library",
       "name": "CfSharp.Native",
-      "version": "0.1.0-preview.9",
-      "purl": "pkg:nuget/CfSharp.Native@0.1.0-preview.9",
+      "version": "0.1.0-preview.16",
+      "purl": "pkg:nuget/CfSharp.Native@0.1.0-preview.16",
       "licenses": [
         {
           "expression": "Apache-2.0"
@@ -15,7 +15,7 @@
       ],
       "hashes": [
         {
-          "content": "069f5466cb44dff275193ffeeb69dcc3abd88c068f0b062572f4d366a085a353db232de610c43f7c10582f81e499a20c76c7193491f151186a67bec12883fd5a",
+          "content": "e8c853f7c9adebdcfe6d426667cb1b43c18b9bea8a086ced2862ed779ef7f5c4a449d930925ae6e9fced9cdce7195b2f1fd5b10737d1cdd4f0606e87f1f44a7c",
           "alg": "SHA-512"
         }
       ]
@@ -23,8 +23,8 @@
     {
       "type": "library",
       "name": "CfSharp.Storage.Sqlite",
-      "version": "0.1.0-preview.9",
-      "purl": "pkg:nuget/CfSharp.Storage.Sqlite@0.1.0-preview.9",
+      "version": "0.1.0-preview.16",
+      "purl": "pkg:nuget/CfSharp.Storage.Sqlite@0.1.0-preview.16",
       "licenses": [
         {
           "expression": "Apache-2.0"
@@ -32,7 +32,7 @@
       ],
       "hashes": [
         {
-          "content": "32689b8370e37d0010ec90ad57720dd6f217a9eac82fb2ab45b89189660e393b6162db032501fe5e656725cd69fa4c4d6faf63ba869bc90f82e768c8bbd02129",
+          "content": "6e5e402634775c987d317c055825090cfb3638f48950dfbbe6216aea2cdc35802a11ec830fa3a50c4896b779618d1b561f60cd926ee3c2ff9e98e43a2cd0369d",
           "alg": "SHA-512"
         }
       ]
@@ -40,8 +40,8 @@
     {
       "type": "library",
       "name": "CfSharp",
-      "version": "0.1.0-preview.9",
-      "purl": "pkg:nuget/CfSharp@0.1.0-preview.9",
+      "version": "0.1.0-preview.16",
+      "purl": "pkg:nuget/CfSharp@0.1.0-preview.16",
       "licenses": [
         {
           "expression": "Apache-2.0"
@@ -49,7 +49,7 @@
       ],
       "hashes": [
         {
-          "content": "f319967df2a284ead6d6f6d9f3943369785091e9788a2fb9fc34331cb817305b9d58dd4d41d57d399c0994424c5b6baf33b3b7d7aac8f19c0d688df623eacdba",
+          "content": "96c597742618a355cff94445f7a61dbf73ae48084deec07d424243e7ec418cd12632d24959fd1b1b2c56f47345cc9fc6c8a84e561211332e19a8b8e08ae8dfa0",
           "alg": "SHA-512"
         }
       ]
@@ -164,8 +164,8 @@
       "licenses": [
         {
           "license": {
-            "url": "https://www.nuget.org/packages/Microsoft.Web.WebView2/1.0.3719.77",
-            "name": "NuGet declared file license: LICENSE.txt"
+            "name": "NuGet declared file license: LICENSE.txt",
+            "url": "https://www.nuget.org/packages/Microsoft.Web.WebView2/1.0.3719.77"
           }
         }
       ],
@@ -184,8 +184,8 @@
       "licenses": [
         {
           "license": {
-            "url": "https://www.nuget.org/packages/Microsoft.Windows.AI.MachineLearning/2.1.74",
-            "name": "NuGet declared file license: license.txt"
+            "name": "NuGet declared file license: license.txt",
+            "url": "https://www.nuget.org/packages/Microsoft.Windows.AI.MachineLearning/2.1.74"
           }
         }
       ],
@@ -204,8 +204,8 @@
       "licenses": [
         {
           "license": {
-            "url": "https://www.nuget.org/packages/Microsoft.Windows.SDK.BuildTools.MSIX/1.7.251221100",
-            "name": "NuGet declared file license: sdk_license.txt"
+            "name": "NuGet declared file license: sdk_license.txt",
+            "url": "https://www.nuget.org/packages/Microsoft.Windows.SDK.BuildTools.MSIX/1.7.251221100"
           }
         }
       ],
@@ -241,8 +241,8 @@
       "licenses": [
         {
           "license": {
-            "url": "https://www.nuget.org/packages/Microsoft.Windows.SDK.BuildTools/10.0.26100.4654",
-            "name": "NuGet declared url license: https://aka.ms/WinSDKLicenseURL"
+            "name": "NuGet declared url license: https://aka.ms/WinSDKLicenseURL",
+            "url": "https://www.nuget.org/packages/Microsoft.Windows.SDK.BuildTools/10.0.26100.4654"
           }
         }
       ],
@@ -261,8 +261,8 @@
       "licenses": [
         {
           "license": {
-            "url": "https://www.nuget.org/packages/Microsoft.Windows.SDK.BuildTools/10.0.28000.2705",
-            "name": "NuGet declared url license: https://aka.ms/WinSDKLicenseURL"
+            "name": "NuGet declared url license: https://aka.ms/WinSDKLicenseURL",
+            "url": "https://www.nuget.org/packages/Microsoft.Windows.SDK.BuildTools/10.0.28000.2705"
           }
         }
       ],
@@ -281,8 +281,8 @@
       "licenses": [
         {
           "license": {
-            "url": "https://www.nuget.org/packages/Microsoft.WindowsAppSDK.AI/2.5.5",
-            "name": "NuGet declared file license: license.txt"
+            "name": "NuGet declared file license: license.txt",
+            "url": "https://www.nuget.org/packages/Microsoft.WindowsAppSDK.AI/2.5.5"
           }
         }
       ],
@@ -301,8 +301,8 @@
       "licenses": [
         {
           "license": {
-            "url": "https://www.nuget.org/packages/Microsoft.WindowsAppSDK.Base/2.0.4",
-            "name": "NuGet declared file license: license.txt"
+            "name": "NuGet declared file license: license.txt",
+            "url": "https://www.nuget.org/packages/Microsoft.WindowsAppSDK.Base/2.0.4"
           }
         }
       ],
@@ -321,8 +321,8 @@
       "licenses": [
         {
           "license": {
-            "url": "https://www.nuget.org/packages/Microsoft.WindowsAppSDK.DWrite/2.1.0",
-            "name": "NuGet declared file license: license.txt"
+            "name": "NuGet declared file license: license.txt",
+            "url": "https://www.nuget.org/packages/Microsoft.WindowsAppSDK.DWrite/2.1.0"
           }
         }
       ],
@@ -341,8 +341,8 @@
       "licenses": [
         {
           "license": {
-            "url": "https://www.nuget.org/packages/Microsoft.WindowsAppSDK.Foundation/2.3.12",
-            "name": "NuGet declared file license: license.txt"
+            "name": "NuGet declared file license: license.txt",
+            "url": "https://www.nuget.org/packages/Microsoft.WindowsAppSDK.Foundation/2.3.12"
           }
         }
       ],
@@ -361,8 +361,8 @@
       "licenses": [
         {
           "license": {
-            "url": "https://www.nuget.org/packages/Microsoft.WindowsAppSDK.InteractiveExperiences/2.1.9",
-            "name": "NuGet declared file license: license.txt"
+            "name": "NuGet declared file license: license.txt",
+            "url": "https://www.nuget.org/packages/Microsoft.WindowsAppSDK.InteractiveExperiences/2.1.9"
           }
         }
       ],
@@ -381,8 +381,8 @@
       "licenses": [
         {
           "license": {
-            "url": "https://www.nuget.org/packages/Microsoft.WindowsAppSDK.ML/2.1.94",
-            "name": "NuGet declared file license: license.txt"
+            "name": "NuGet declared file license: license.txt",
+            "url": "https://www.nuget.org/packages/Microsoft.WindowsAppSDK.ML/2.1.94"
           }
         }
       ],
@@ -401,8 +401,8 @@
       "licenses": [
         {
           "license": {
-            "url": "https://www.nuget.org/packages/Microsoft.WindowsAppSDK.Runtime/2.5.1",
-            "name": "NuGet declared file license: license.txt"
+            "name": "NuGet declared file license: license.txt",
+            "url": "https://www.nuget.org/packages/Microsoft.WindowsAppSDK.Runtime/2.5.1"
           }
         }
       ],
@@ -421,8 +421,8 @@
       "licenses": [
         {
           "license": {
-            "url": "https://www.nuget.org/packages/Microsoft.WindowsAppSDK.Search/2.5.5",
-            "name": "NuGet declared file license: license.txt"
+            "name": "NuGet declared file license: license.txt",
+            "url": "https://www.nuget.org/packages/Microsoft.WindowsAppSDK.Search/2.5.5"
           }
         }
       ],
@@ -441,8 +441,8 @@
       "licenses": [
         {
           "license": {
-            "url": "https://www.nuget.org/packages/Microsoft.WindowsAppSDK.Widgets/2.0.5",
-            "name": "NuGet declared file license: license.txt"
+            "name": "NuGet declared file license: license.txt",
+            "url": "https://www.nuget.org/packages/Microsoft.WindowsAppSDK.Widgets/2.0.5"
           }
         }
       ],
@@ -461,8 +461,8 @@
       "licenses": [
         {
           "license": {
-            "url": "https://www.nuget.org/packages/Microsoft.WindowsAppSDK.WinUI/2.3.9",
-            "name": "NuGet declared file license: license.txt"
+            "name": "NuGet declared file license: license.txt",
+            "url": "https://www.nuget.org/packages/Microsoft.WindowsAppSDK.WinUI/2.3.9"
           }
         }
       ],
@@ -481,8 +481,8 @@
       "licenses": [
         {
           "license": {
-            "url": "https://www.nuget.org/packages/Microsoft.WindowsAppSDK/2.5.1",
-            "name": "NuGet declared file license: license.txt"
+            "name": "NuGet declared file license: license.txt",
+            "url": "https://www.nuget.org/packages/Microsoft.WindowsAppSDK/2.5.1"
           }
         }
       ],
@@ -530,8 +530,8 @@
     {
       "type": "library",
       "name": "MirrorPulse.Adapter.Sdk",
-      "version": "0.2.0",
-      "purl": "pkg:nuget/MirrorPulse.Adapter.Sdk@0.2.0",
+      "version": "1.0.0-preview.5",
+      "purl": "pkg:nuget/MirrorPulse.Adapter.Sdk@1.0.0-preview.5",
       "licenses": [
         {
           "expression": "Apache-2.0"
@@ -539,7 +539,7 @@
       ],
       "hashes": [
         {
-          "content": "c73cf9ed944983c9d0ce4190148c89a7e6e554d48bcecfa5e9718d9f25e3fe67c9baeafa84454f913ccd723dbb2bed08196c9df5a0f3e2a747df5783c1a91226",
+          "content": "105159a0a8e62916aa244e23767500c46ab34b14eae0383f8f4000e55ac2262eef0f2747a49410a244085367f234ca39a3fc39b2be214ecfbd78cc90c4fe3e12",
           "alg": "SHA-512"
         }
       ]

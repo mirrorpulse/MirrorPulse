@@ -1,31 +1,21 @@
 # MirrorPulse
 
-MirrorPulse is a Windows Cloud Files application that presents local and remote storage through one Explorer sync root. The project is built around independently packaged Adapter workers for local directories, WebDAV, and SMB.
+MirrorPulse brings local and remote storage into one Windows Explorer sync root.
+MirrorPulse is in development. The first release will include Adapters for local
+directories, WebDAV, and SMB.
 
-## Repository scope
+## Getting started
 
-This repository contains the MirrorPulse application and its runtime code.
+Use a Microsoft-supported Windows 11 desktop release, version 24H2 or later,
+and choose the package for your system's x64 or ARM64 architecture. See
+[Windows support](docs/windows-support.md).
 
-## Development status
+After installing MirrorPulse, run `mp --help` in PowerShell. The
+[CLI reference](docs/cli.md) shows how to install a signed Adapter package,
+connect a storage source, and check synchronization status. See
+[capabilities and limits](docs/cli-capabilities.md) for supported operations.
 
-The no-UI `mp` CLI and current-user Host control path run on x64 and ARM64. The CLI is also packaged as an MSIX app execution alias. The current delivery baseline uses one declared root per Adapter instance, with multiple independent instances sharing one Windows sync root. Synchronization recovery, complete transfers between instances, live instance changes, and parts of the control surface remain incomplete. Same-instance transfers between multiple declared roots are deferred for review after the current journal milestone. See the [capability baseline](docs/cli-capabilities.md) for implemented, partial, and unsupported behavior, and the [CLI reference](docs/cli.md) for commands.
-
-## Requirements
-
-- A Microsoft-supported Windows 11 desktop release, version 24H2 (build 26100) or later. Windows 10 and Windows Server are excluded. See the [support matrix](docs/windows-support.md).
-- .NET 10 SDK selected by `global.json`.
-- x64 or ARM64.
-
-## Build
-
-```powershell
-pwsh -File eng/restore-adapter-sdk.ps1
-dotnet restore MirrorPulse.sln --locked-mode
-dotnet build MirrorPulse.sln --configuration Release --no-restore
-dotnet test MirrorPulse.sln --configuration Release --no-build
-```
-
-The Adapter SDK is restored from a fixed [adapter-template SDK Release](https://github.com/MirrorPulse/adapter-template/releases/tag/sdk-v0.2.0), verified against the committed SHA256 pin, and placed in a local NuGet feed. Other dependencies use nuget.org. An existing SDK feed entry is reverified before restore. See [SDK dependency verification](docs/adapter-sdk.md) for offline restore and version updates.
+Use the [contribution guide](CONTRIBUTING.md) to build from source.
 
 ## Privacy
 
@@ -33,4 +23,6 @@ MirrorPulse keeps configuration, credentials, logs, and synchronization state on
 
 ## License
 
-MirrorPulse is available under the [Apache License 2.0](LICENSE). See [NOTICE](NOTICE) for attribution information.
+MirrorPulse is available under the [Apache License 2.0](LICENSE). See
+[NOTICE](NOTICE) and the [third-party notices](docs/third-party-notices.md) for
+attribution.

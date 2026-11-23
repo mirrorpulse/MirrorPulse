@@ -8,7 +8,8 @@ Contributions to MirrorPulse are accepted under the [Apache License 2.0](LICENSE
 
 ## Language
 
-Use English for tracked source code, configuration, formal documentation, commit messages, issues, and pull requests. Chinese is reserved for the ignored `draft/` collaboration notes.
+Use English for tracked source code, configuration, documentation, commit
+messages, issues, and pull requests.
 
 ## Before opening a pull request
 
@@ -20,15 +21,30 @@ Use English for tracked source code, configuration, formal documentation, commit
 
 ## Local validation
 
+Use the .NET SDK selected by `global.json` and run these commands from the
+repository root.
+
 ```powershell
 pwsh ./eng/verify-build.ps1
+pwsh ./eng/verify-format.ps1
 ```
 
-The current build uses the .NET SDK selected by `global.json`. Windows Cloud Files integration requires a supported Windows environment.
+The build script verifies the locked Adapter SDK, restores the solution, and
+runs a Release build and the ordinary tests. Native Cloud Files registration
+and installed MSIX checks require a clean test account on a
+[supported Windows release](docs/windows-support.md).
+
+The build restores the exact SDK archive pinned in `eng/adapter-sdk.lock.json`
+from the [Adapter SDK releases](https://github.com/mirrorpulse/adapter-sdk/releases).
+For an offline archive, run `pwsh ./eng/restore-adapter-sdk.ps1 -PackagePath PATH`
+before restoring. The archive must match the committed length and SHA-256.
 
 ## Adapter changes
 
-Adapter workers must use the versioned Adapter Host Protocol and remain outside the MP host process. Update the contract tests and package manifest when changing capabilities, roots, installation policy, or protocol behavior.
+Adapter Workers use the versioned Host protocol and run in their own process.
+Update the associated contract tests and package manifest when changing
+capabilities, roots, installation policy, or protocol behavior. Start an
+independent Worker with the [Adapter template](https://github.com/mirrorpulse/adapter-template).
 
 ## Pull requests
 

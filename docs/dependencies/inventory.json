@@ -4,48 +4,48 @@
   "packages": [
     {
       "id": "CfSharp.Native",
-      "version": "0.1.0-preview.9",
+      "version": "0.1.0-preview.16",
       "kind": "restored",
-      "sha512": "Bp9UZstE3/J1GT/+62ncw6vYjAaPCwYlcvTTZqCFo1PbIy3mEMQ/fBBYL4HkmaIMdscZNJHxURhqZ77BKIP9Wg==",
-      "nugetContentHash": "hrhJTluUiTh74gC9Qr85vb2yWEc7qJ08bGlqy3Zn1y0/UsQQtpo4TRcY8K2tb9wBwgq39KKadc0eE/JyUL7DnA==",
+      "sha512": "6MhT98mt69z+bUJmZ8sbQ8GLm+qKCGztKGLtd5739cSkSdkwklrm6fztnNznGVsvH9WxBzfRzdTwYG6H8fRKfA==",
+      "nugetContentHash": "vURpN7m/h0+wElYizc3R4djUQPPvRB8jYXZl1ai5PaA5OSk4v7PV9xkTppZC1w3OvTfBqYjeHiQWVMpkFHvexw==",
       "licenseType": "expression",
       "license": "Apache-2.0",
-      "licenseTextSource": "https://raw.githubusercontent.com/MirrorPulse/CfSharp/a252ea88439475986242691797bc3c1453d30118/LICENSE",
+      "licenseTextSource": "https://raw.githubusercontent.com/mirrorpulse/cfsharp/e0d5d32a7c24b2812d16315897524afd4b54e050/LICENSE",
       "noticeFiles": [
-        "CfSharp.Native.0.1.0-preview.9.LICENSE.txt",
-        "CfSharp.Native.0.1.0-preview.9.NOTICE"
+        "CfSharp.Native.0.1.0-preview.16.LICENSE.txt",
+        "CfSharp.Native.0.1.0-preview.16.NOTICE"
       ],
-      "source": "https://www.nuget.org/packages/CfSharp.Native/0.1.0-preview.9"
+      "source": "https://www.nuget.org/packages/CfSharp.Native/0.1.0-preview.16"
     },
     {
       "id": "CfSharp.Storage.Sqlite",
-      "version": "0.1.0-preview.9",
+      "version": "0.1.0-preview.16",
       "kind": "restored",
-      "sha512": "Mmibg3DjfQAQ7JCtV3IN1vIXqerIL7KrRbiRiWYOOTthYtsDJQH+XmVnJc1p+kxNb69juoabyQ+C52jIu9AhKQ==",
-      "nugetContentHash": "AEFQGdl08aVBk7+mLrbDpXw378X8TeVTGY8Wih9h7I9AozcvtH1PG+BwL6rpOcLrBchkIlUgPXAIBUzQhD2oVw==",
+      "sha512": "bl5AJjR3XJh9MXwFWCUJDPs2OPSJUN+75iFq6izcNYAqEeyDD6OlDEiWt3lhjRtWH2DNkm7jwv+emOQ6LNA2nQ==",
+      "nugetContentHash": "s7uEVtL2hYor6lBQtVa3VB4b+5BTiqsd8hHa34htX2AXYbF44PdZMzLXy+Wg3FlxL5YmmX5iHdPxk2A/teZkXg==",
       "licenseType": "expression",
       "license": "Apache-2.0",
-      "licenseTextSource": "https://raw.githubusercontent.com/MirrorPulse/CfSharp/a252ea88439475986242691797bc3c1453d30118/LICENSE",
+      "licenseTextSource": "https://raw.githubusercontent.com/mirrorpulse/cfsharp/e0d5d32a7c24b2812d16315897524afd4b54e050/LICENSE",
       "noticeFiles": [
-        "CfSharp.Storage.Sqlite.0.1.0-preview.9.LICENSE.txt",
-        "CfSharp.Storage.Sqlite.0.1.0-preview.9.NOTICE"
+        "CfSharp.Storage.Sqlite.0.1.0-preview.16.LICENSE.txt",
+        "CfSharp.Storage.Sqlite.0.1.0-preview.16.NOTICE"
       ],
-      "source": "https://www.nuget.org/packages/CfSharp.Storage.Sqlite/0.1.0-preview.9"
+      "source": "https://www.nuget.org/packages/CfSharp.Storage.Sqlite/0.1.0-preview.16"
     },
     {
       "id": "CfSharp",
-      "version": "0.1.0-preview.9",
+      "version": "0.1.0-preview.16",
       "kind": "restored",
-      "sha512": "8xmWffKihOrW1vbZ85QzaXhQkel4ii+5/DQzHLgXMFudWN1NQdV9OZwJlEJMW2uvM7O316rI8ZwNaI32I+rNug==",
-      "nugetContentHash": "5arZjE7RcqBn5bfDhcnzyLd0O4EzV9i+is6q5HTFvnRXl59pIAfpih9gD7ClqKtM2MvAPV9+GOyheMuGY+Vo6w==",
+      "sha512": "lsWXdCYYo1XP+URF96Ydv3OuSAhN7sB9QkJD5+xBjNEmMtJJWf0bGyxW9HNFzJ/GyKhOVhIRMy4ZqLjgiujfoA==",
+      "nugetContentHash": "UiMkQC42DfVYxbto70o1Kln5N+oSdmTXQFFJ5ZIL0vlOMT36+LrzIfexSf5AswDRiwj3Rh45UrG/OjAZirXrtA==",
       "licenseType": "expression",
       "license": "Apache-2.0",
-      "licenseTextSource": "https://raw.githubusercontent.com/MirrorPulse/CfSharp/a252ea88439475986242691797bc3c1453d30118/LICENSE",
+      "licenseTextSource": "https://raw.githubusercontent.com/mirrorpulse/cfsharp/e0d5d32a7c24b2812d16315897524afd4b54e050/LICENSE",
       "noticeFiles": [
-        "CfSharp.0.1.0-preview.9.LICENSE.txt",
-        "CfSharp.0.1.0-preview.9.NOTICE"
+        "CfSharp.0.1.0-preview.16.LICENSE.txt",
+        "CfSharp.0.1.0-preview.16.NOTICE"
       ],
-      "source": "https://www.nuget.org/packages/CfSharp/0.1.0-preview.9"
+      "source": "https://www.nuget.org/packages/CfSharp/0.1.0-preview.16"
     },
     {
       "id": "Microsoft.AspNetCore.App.Runtime.win-arm64",
@@ -405,17 +405,17 @@
     },
     {
       "id": "MirrorPulse.Adapter.Sdk",
-      "version": "0.2.0",
+      "version": "1.0.0-preview.5",
       "kind": "restored",
-      "sha512": "xzz57ZRJg8nQzkGQFIyJp+blVNSLzs+l6XGNnyXj/mfJuur6hEVPkTzNcj27K+0IGWyd9aDz4qdH31eDwakSJg==",
-      "nugetContentHash": "xzz57ZRJg8nQzkGQFIyJp+blVNSLzs+l6XGNnyXj/mfJuur6hEVPkTzNcj27K+0IGWyd9aDz4qdH31eDwakSJg==",
+      "sha512": "EFFZoKjmKRaqJE4jdnUAxGqzSxTq4Dg/j0AA5VrCJi7vDydHpJQQokQIU2fyNMo5o/w5sr4hTs+9eMyQxP4+Eg==",
+      "nugetContentHash": "EFFZoKjmKRaqJE4jdnUAxGqzSxTq4Dg/j0AA5VrCJi7vDydHpJQQokQIU2fyNMo5o/w5sr4hTs+9eMyQxP4+Eg==",
       "licenseType": "expression",
       "license": "Apache-2.0",
       "licenseTextSource": null,
       "noticeFiles": [
-        "MirrorPulse.Adapter.Sdk.0.2.0.LICENSE"
+        "MirrorPulse.Adapter.Sdk.1.0.0-preview.5.LICENSE"
       ],
-      "source": "https://github.com/MirrorPulse/adapter-template/releases/tag/sdk-v0.2.0"
+      "source": "https://github.com/MirrorPulse/adapter-sdk/releases/tag/sdk-v1.0.0-preview.5"
     },
     {
       "id": "SQLitePCLRaw.bundle_e_sqlite3",
