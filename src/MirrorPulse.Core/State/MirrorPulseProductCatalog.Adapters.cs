@@ -265,10 +265,11 @@ public sealed partial class MirrorPulseProductCatalog : IInstalledAdapterCatalog
                 throw new InvalidDataException("An instance cannot select another Adapter's installation.");
             }
 
+            IReadOnlyDictionary<string, string> configuration = PrepareSelectedInstallationConfiguration(current, instance, selected);
             AdapterInstance[] instances = current.Instances.Select(item =>
                 item.InstanceId != instanceId ? item : new AdapterInstance(
                     item.AdapterId, installId, item.InstanceId, item.DisplayName,
-                    item.Configuration, item.CredentialReferences, item.FileCacheDirectory,
+                    configuration, item.CredentialReferences, item.FileCacheDirectory,
                     item.TransferCacheDirectory, item.Enabled, item.LifecycleState,
                     null, item.CreatedAt)
                 {
@@ -288,6 +289,30 @@ public sealed partial class MirrorPulseProductCatalog : IInstalledAdapterCatalog
         {
             _gate.Release();
         }
+    }
+
+    private static IReadOnlyDictionary<string, string> PrepareSelectedInstallationConfiguration(
+        MirrorPulseAdapterTopology topology, AdapterInstance instance, InstalledAdapter selected)
+    {
+        if (selected.InstallId == instance.InstallId || selected.Manifest.Presentation is not { } presentation ||
+            selected.Manifest.InstancePolicy.MaximumRootDefinitions != 1)
+            return instance.Configuration;
+
+        RootRegistration[] roots = topology.Roots.Where(root => root.InstanceId == instance.InstanceId &&
+            root.State != RootRegistrationState.Removed).ToArray();
+        if (roots.Length > 1)
+            throw new AdapterConfigurationValidationException("This Adapter version requires a deployment with one folder.");
+        if (roots.Length == 0) return instance.Configuration;
+
+        var configuration = new Dictionary<string, string>(instance.Configuration, StringComparer.Ordinal);
+        string prefix = $"root.{roots[0].UniquenessKey}.";
+        foreach (AdapterPackageFormControl field in presentation.Resolve(null).Controls)
+        {
+            if (field.Key is { } key && field.Kind is not (AdapterPackageFormKind.Password or AdapterPackageFormKind.Callback) &&
+                configuration.Remove(prefix + key, out string? value))
+                configuration[key] = value;
+        }
+        return configuration;
     }
 
     private static void ValidateTopology(MirrorPulseAdapterTopology topology)

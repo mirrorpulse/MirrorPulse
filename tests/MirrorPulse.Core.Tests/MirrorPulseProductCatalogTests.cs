@@ -7,6 +7,7 @@ using MirrorPulse.Core.CloudFiles;
 using MirrorPulse.Core.Configuration;
 using MirrorPulse.Core.Conflicts;
 using MirrorPulse.Core.Contracts;
+using MirrorPulse.Core.Host;
 using MirrorPulse.Core.State;
 using MirrorPulse.Core.Sync;
 
@@ -267,6 +268,64 @@ public sealed class MirrorPulseProductCatalogTests
         {
             Directory.Delete(root, recursive: true);
         }
+    }
+
+    [TestMethod]
+    [DataRow(false)]
+    [DataRow(true)]
+    public async Task SelectingASignedSingleRootVersionPreservesTheEffectiveSettingsOrRejectsMultipleRoots(bool twoRoots)
+    {
+        string root = Directory.CreateTempSubdirectory("MirrorPulse-form-migration-").FullName;
+        try
+        {
+            var paths = new MirrorPulseStoragePaths(Path.Combine(root, "sync"), Path.Combine(root, "state"));
+            InstalledAdapter newer = AdapterConfigurationWorkerSessionTests.NewFixture("authorize");
+            AdapterManifest latest = newer.Manifest;
+            var previous = new AdapterManifest(1, latest.AdapterId, latest.Publisher, "0.9.0", latest.Protocol,
+                latest.Entrypoints, new(null), new(null, null), latest.Capabilities, latest.Locales,
+                latest.MinimumMirrorPulseVersion, latest.RootDefinitions);
+            var older = new InstalledAdapter(previous, InstallId.New(), Path.Combine(root, "older"),
+                new(new string('B', 64)), AdapterInstallSource.LocalFile, null, true, DateTimeOffset.UtcNow,
+                AdapterLifecycleState.Installed);
+            InstanceId id = InstanceId.New();
+            var instance = new AdapterInstance(older.AdapterId, older.InstallId, id, "Documents", new Dictionary<string, string>
+            {
+                ["endpoint"] = "https://default.example.test/",
+                ["root.files.endpoint"] = "https://selected.example.test/",
+                ["root.files.extra"] = "preserved",
+            }, [], Path.Combine(root, "files"), Path.Combine(root, "transfers"), true, AdapterLifecycleState.Enabled,
+                null, DateTimeOffset.UtcNow);
+            RootRegistration files = AdapterRootRegistrationMapper.Map(older.AdapterId, id, latest.RootDefinitions.Single(),
+                RootRegistrationState.Active);
+            RootRegistration extra = AdapterRootRegistrationMapper.Map(older.AdapterId, id, new("extra", "Extra", "Extra", false),
+                RootRegistrationState.Disabled);
+            await using var catalog = await MirrorPulseProductCatalog.OpenAsync(paths);
+            await catalog.SaveAdapterTopologyAsync(new([older, newer], [instance], twoRoots ? [files, extra] : [files]));
+
+            if (twoRoots)
+            {
+                await Assert.ThrowsExactlyAsync<AdapterConfigurationValidationException>(() =>
+                    catalog.SelectInstanceInstallationAsync(id, newer.InstallId));
+                var retained = await catalog.ReadAdapterTopologyAsync();
+                Assert.AreEqual(older.InstallId, retained.Instances.Single().InstallId);
+                CollectionAssert.AreEqual(new[] { files.RootId, extra.RootId }, retained.Roots.Select(item => item.RootId).ToArray());
+                return;
+            }
+
+            await catalog.SelectInstanceInstallationAsync(id, newer.InstallId);
+            var migrated = await catalog.ReadAdapterTopologyAsync();
+            Assert.AreEqual(files.RootId, migrated.Roots.Single().RootId);
+            AdapterInstance current = migrated.Instances.Single();
+            Assert.AreEqual(newer.InstallId, current.InstallId);
+            Assert.AreEqual("https://selected.example.test/", current.Configuration["endpoint"]);
+            Assert.AreEqual("preserved", current.Configuration["root.files.extra"]);
+            Assert.IsFalse(current.Configuration.ContainsKey("root.files.endpoint"));
+
+            var reverted = await catalog.SelectInstanceInstallationAsync(id, older.InstallId);
+            Assert.AreEqual(files.RootId, reverted.Roots.Single().RootId);
+            Assert.AreEqual("https://selected.example.test/", reverted.Instances.Single().Configuration["endpoint"]);
+        }
+        finally { Directory.Delete(root, recursive: true); }
     }
 
     [TestMethod]
