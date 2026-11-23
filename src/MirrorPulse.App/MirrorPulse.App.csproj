@@ -42,6 +42,8 @@
     <Manifest Include="$(ApplicationManifest)" />
   </ItemGroup>
 
+  <Import Project="MirrorPulse.EditionPackaging.targets" />
+
   <!--
     Defining the "Msix" ProjectCapability here allows the Single-project MSIX Packaging
     Tools extension to be activated for this project even if the Windows App SDK Nuget
@@ -86,8 +88,8 @@
     </PropertyGroup>
     <RemoveDir Directories="$(MirrorPulseMsixPayloadRoot)" />
     <MakeDir Directories="$(MirrorPulseMsixPayloadRoot)cli;$(MirrorPulseMsixPayloadRoot)host" />
-    <Exec Command="dotnet publish &quot;$(MSBuildThisFileDirectory)..\MirrorPulse.Cli\MirrorPulse.Cli.csproj&quot; --configuration $(Configuration) --runtime $(RuntimeIdentifier) --self-contained true --no-restore --output &quot;$(MirrorPulseMsixPayloadRoot)cli&quot;" />
-    <Exec Command="dotnet publish &quot;$(MSBuildThisFileDirectory)..\MirrorPulse.Host\MirrorPulse.Host.csproj&quot; --configuration $(Configuration) --runtime $(RuntimeIdentifier) --self-contained true --no-restore --output &quot;$(MirrorPulseMsixPayloadRoot)host&quot;" />
+    <Exec Command="dotnet publish &quot;$(MSBuildThisFileDirectory)..\MirrorPulse.Cli\MirrorPulse.Cli.csproj&quot; --configuration $(Configuration) --runtime $(RuntimeIdentifier) --self-contained true --no-restore --output &quot;$(MirrorPulseMsixPayloadRoot)cli&quot; $(_EditionPublishArguments)" />
+    <Exec Command="dotnet publish &quot;$(MSBuildThisFileDirectory)..\MirrorPulse.Host\MirrorPulse.Host.csproj&quot; --configuration $(Configuration) --runtime $(RuntimeIdentifier) --self-contained true --no-restore --output &quot;$(MirrorPulseMsixPayloadRoot)host&quot; $(_EditionPublishArguments)" />
     <ItemGroup>
       <_MirrorPulseCliPayload Include="$(MirrorPulseMsixPayloadRoot)cli\**\*" />
       <_MirrorPulseHostPayload Include="$(MirrorPulseMsixPayloadRoot)host\**\*" />

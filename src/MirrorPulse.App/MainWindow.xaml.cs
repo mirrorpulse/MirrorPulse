@@ -1,5 +1,6 @@
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
+using MirrorPulse.Core;
 using MirrorPulse.Core.Host;
 
 // To learn more about WinUI, the WinUI project structure,
@@ -17,6 +18,8 @@ public sealed partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
+        Title = ProductInfo.Name;
+        AppTitleBar.Title = ProductInfo.Name;
 
         ExtendsContentIntoTitleBar = true;
         SetTitleBar(AppTitleBar);

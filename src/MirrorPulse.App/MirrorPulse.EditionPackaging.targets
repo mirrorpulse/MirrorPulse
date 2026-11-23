@@ -1,0 +1,37 @@
+<Project>
+  <PropertyGroup Condition="'$(MirrorPulseEditionId)' != 'standard'">
+    <_EditionAppxManifest>$(BaseIntermediateOutputPath)EditionManifest\$(Configuration)\$(Platform)\$(RuntimeIdentifier)\Package.appxmanifest</_EditionAppxManifest>
+    <_EditionAppxNamespaces><![CDATA[
+      <Namespace Prefix="f" Uri="http://schemas.microsoft.com/appx/manifest/foundation/windows10" />
+      <Namespace Prefix="mp" Uri="http://schemas.microsoft.com/appx/2014/phone/manifest" />
+      <Namespace Prefix="uap" Uri="http://schemas.microsoft.com/appx/manifest/uap/windows10" />
+      <Namespace Prefix="uap3" Uri="http://schemas.microsoft.com/appx/manifest/uap/windows10/3" />
+      <Namespace Prefix="desktop" Uri="http://schemas.microsoft.com/appx/manifest/desktop/windows10" />
+    ]]></_EditionAppxNamespaces>
+    <_EditionPublishArguments>-p:MirrorPulseEditionProfile=&quot;$(MirrorPulseEditionProfilePath)&quot; -p:ArtifactsPath=&quot;$(ArtifactsPath)&quot;</_EditionPublishArguments>
+  </PropertyGroup>
+  <ItemGroup Condition="'$(MirrorPulseEditionId)' != 'standard'">
+    <AppxManifest Include="$(_EditionAppxManifest)" />
+  </ItemGroup>
+
+  <Target Name="PrepareMirrorPulseEditionManifest"
+          BeforeTargets="PrepareForBuild;_ValidatePresenceOfAppxManifestItems"
+          Condition="'$(MirrorPulseEditionId)' != 'standard' and '$(DesignTimeBuild)' != 'true'">
+    <Error Condition="'$(MirrorPulseEditionProfilePath)' == ''"
+           Text="Building a custom app package requires a MirrorPulse edition profile." />
+    <Error Condition="!$([System.Text.RegularExpressions.Regex]::IsMatch('$(MirrorPulseEditionPackageName)', '^[a-zA-Z0-9.-]{3,50}$')) or '$(MirrorPulseEditionPackageName)' == '0B72358D-6DC9-479D-8C28-F0232B42A0B3'"
+           Text="The edition profile requires a distinct MSIX identity in MirrorPulseEditionPackageName." />
+    <Error Condition="'$(MirrorPulseEditionPublisher)' == '' or '$(MirrorPulseEditionPublisherName)' == ''"
+           Text="The edition profile requires MirrorPulseEditionPublisher and MirrorPulseEditionPublisherName." />
+    <Copy SourceFiles="Package.appxmanifest" DestinationFiles="$(_EditionAppxManifest)" />
+    <XmlPoke XmlInputPath="$(_EditionAppxManifest)" Namespaces="$(_EditionAppxNamespaces)" Query="/f:Package/f:Identity/@Name" Value="$(MirrorPulseEditionPackageName)" />
+    <XmlPoke XmlInputPath="$(_EditionAppxManifest)" Namespaces="$(_EditionAppxNamespaces)" Query="/f:Package/f:Identity/@Publisher" Value="$(MirrorPulseEditionPublisher)" />
+    <XmlPoke XmlInputPath="$(_EditionAppxManifest)" Namespaces="$(_EditionAppxNamespaces)" Query="/f:Package/mp:PhoneIdentity/@PhoneProductId" Value="$(MirrorPulseEditionProviderId)" />
+    <XmlPoke XmlInputPath="$(_EditionAppxManifest)" Namespaces="$(_EditionAppxNamespaces)" Query="/f:Package/f:Properties/f:DisplayName" Value="$(MirrorPulseEditionName)" />
+    <XmlPoke XmlInputPath="$(_EditionAppxManifest)" Namespaces="$(_EditionAppxNamespaces)" Query="/f:Package/f:Properties/f:PublisherDisplayName" Value="$(MirrorPulseEditionPublisherName)" />
+    <XmlPoke XmlInputPath="$(_EditionAppxManifest)" Namespaces="$(_EditionAppxNamespaces)" Query="//uap:VisualElements/@DisplayName" Value="$(MirrorPulseEditionName)" />
+    <XmlPoke XmlInputPath="$(_EditionAppxManifest)" Namespaces="$(_EditionAppxNamespaces)" Query="//uap:VisualElements/@Description" Value="$(MirrorPulseEditionName)" />
+    <XmlPoke XmlInputPath="$(_EditionAppxManifest)" Namespaces="$(_EditionAppxNamespaces)" Query="//uap3:Extension[@Category='windows.appExecutionAlias']/@Executable" Value="$(MirrorPulseEditionCommand).exe" />
+    <XmlPoke XmlInputPath="$(_EditionAppxManifest)" Namespaces="$(_EditionAppxNamespaces)" Query="//desktop:ExecutionAlias/@Alias" Value="$(MirrorPulseEditionCommand).exe" />
+  </Target>
+</Project>

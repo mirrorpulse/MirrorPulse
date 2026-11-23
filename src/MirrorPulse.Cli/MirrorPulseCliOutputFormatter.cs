@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using MirrorPulse.Core;
 
 namespace MirrorPulse.Cli;
 
@@ -30,7 +31,7 @@ public static class MirrorPulseCliOutputFormatter
             return;
         }
 
-        await output.WriteLineAsync($"MirrorPulse mp {version}").ConfigureAwait(false);
+        await output.WriteLineAsync($"{ProductInfo.Name} {MirrorPulseCliApplication.CommandName} {version}").ConfigureAwait(false);
     }
 
     public static async Task WriteHelpAsync(

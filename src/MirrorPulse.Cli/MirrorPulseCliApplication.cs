@@ -11,6 +11,8 @@ public sealed class MirrorPulseCliApplication
     public static string ProductVersion =>
         Assembly.GetExecutingAssembly().GetName().Version?.ToString(3) ?? "0.0.0";
 
+    internal static string CommandName => typeof(MirrorPulseCliApplication).Assembly.GetName().Name ?? "mp";
+
     public static async Task<int> RunAsync(
         IReadOnlyList<string> arguments,
         TextWriter? output = null,

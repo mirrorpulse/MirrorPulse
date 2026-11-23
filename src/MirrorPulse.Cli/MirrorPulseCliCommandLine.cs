@@ -200,11 +200,11 @@ public static class MirrorPulseCliCommandLine
 
 public static class MirrorPulseCliHelp
 {
-    public static string Text => """
-        MirrorPulse command line
+    public static string Text => $"""
+        {MirrorPulse.Core.ProductInfo.Name} command line
 
         Usage:
-          mp [global options] <command> [subcommand] [arguments]
+          {MirrorPulseCliApplication.CommandName} [global options] <command> [subcommand] [arguments]
 
         Global options:
           -h, --help       Show help.

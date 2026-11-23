@@ -4,7 +4,8 @@
     <OutputType>Exe</OutputType>
     <TargetFramework>net10.0-windows</TargetFramework>
     <RuntimeIdentifiers>win-x64;win-arm64</RuntimeIdentifiers>
-    <AssemblyName>mp</AssemblyName>
+    <AssemblyName>$(MirrorPulseEditionCommand)</AssemblyName>
+    <PackageId>mp</PackageId>
     <RootNamespace>MirrorPulse.Cli</RootNamespace>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
@@ -14,4 +15,12 @@
     <ProjectReference Include="..\MirrorPulse.Control\MirrorPulse.Control.csproj" />
   </ItemGroup>
 
+  <Target Name="ValidateMirrorPulseEditionCommand" BeforeTargets="PrepareForBuild">
+    <Error Condition="!$([System.Text.RegularExpressions.Regex]::IsMatch('$(MirrorPulseEditionCommand)', '^[a-z][a-z0-9-]{0,47}$'))"
+           Text="MirrorPulseEditionCommand must be a lowercase executable name without its extension." />
+    <Error Condition="'$(MirrorPulseEditionId)' != 'standard' and '$(MirrorPulseEditionCommand)' == 'mp'"
+           Text="The mp command is reserved for the standard edition." />
+    <Error Condition="'$(MirrorPulseEditionId)' == 'standard' and '$(MirrorPulseEditionCommand)' != 'mp'"
+           Text="The standard edition uses the mp command." />
+  </Target>
 </Project>
