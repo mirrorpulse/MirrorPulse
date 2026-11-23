@@ -1,0 +1,44 @@
+name: Installed edition coexistence
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [develop]
+    paths:
+      - .github/workflows/edition-coexistence.yml
+      - eng/edition-shell-registration.ps1
+      - eng/verify-edition-coexistence.ps1
+      - Directory.Build.props
+      - src/MirrorPulse.App/MirrorPulse.EditionPackaging.targets
+      - src/MirrorPulse.App/Package.appxmanifest
+      - src/MirrorPulse.Core/MirrorPulseEdition.cs
+
+permissions:
+  contents: read
+
+jobs:
+  installed-arm64:
+    runs-on: windows-11-arm
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6
+        with:
+          global-json-file: global.json
+      - name: Acquire the pinned Adapter SDK
+        shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: pwsh ./eng/restore-adapter-sdk.ps1
+      - name: Build, install and verify both editions in one account
+        shell: pwsh
+        run: pwsh ./eng/verify-edition-coexistence.ps1 -EvidencePath artifacts/edition-coexistence.json
+      - name: Retain edition coexistence observations
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: edition-coexistence-arm64
+          path: artifacts/edition-coexistence.json
+          if-no-files-found: warn
