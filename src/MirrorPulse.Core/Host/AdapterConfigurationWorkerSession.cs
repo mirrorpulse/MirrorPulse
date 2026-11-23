@@ -88,7 +88,7 @@ internal sealed class AdapterConfigurationWorkerSession : IAsyncDisposable
         WorkerSessionId sessionId = _instance.WorkerSessionId!.Value;
         string pipeName = WorkerLaunchNonce.CreatePipeName();
         string[] arguments = ["--instance-id", _instance.InstanceId.ToString(), "--worker-session-id", sessionId.ToString(),
-            "--pipe-name", pipeName, "--configuration-only"];
+            "--pipe-name", pipeName, AdapterWorkerProcessArguments.ConfigurationOnlyOption];
         string runtime = RuntimeInformation.ProcessArchitecture switch
         {
             Architecture.X64 => "win-x64",

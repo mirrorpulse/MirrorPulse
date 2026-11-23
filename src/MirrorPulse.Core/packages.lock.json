@@ -14,9 +14,9 @@
       },
       "MirrorPulse.Adapter.Sdk": {
         "type": "Direct",
-        "requested": "[1.0.0-preview.4, 1.0.0-preview.4]",
-        "resolved": "1.0.0-preview.4",
-        "contentHash": "BO7Xx1FEwkYouNETDxdNgoWO6kJZdxoAThkpbIhxNnsExHfhZieYPdbW+4u0mtiLfdRHyE6OBfPpTQf4bbMz2g=="
+        "requested": "[1.0.0-preview.5, 1.0.0-preview.5]",
+        "resolved": "1.0.0-preview.5",
+        "contentHash": "EFFZoKjmKRaqJE4jdnUAxGqzSxTq4Dg/j0AA5VrCJi7vDydHpJQQokQIU2fyNMo5o/w5sr4hTs+9eMyQxP4+Eg=="
       },
       "Microsoft.Data.Sqlite.Core": {
         "type": "Transitive",
