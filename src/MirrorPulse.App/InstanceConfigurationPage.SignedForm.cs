@@ -54,6 +54,19 @@ public sealed partial class InstanceConfigurationPage
             }
 
             ConfigurationFieldsPanel.Children.Add(element);
+            if (control.Key is { } field && control.Kind != AdapterPackageFormKind.Callback &&
+                _instance?.HealthIssues?.Where(issue => issue.FieldKey == field).ToArray() is { Length: > 0 } issues)
+            {
+                string details = string.Join(Environment.NewLine, issues.Select(AdapterHealthText.Describe));
+                AutomationProperties.SetHelpText(element, details);
+                ConfigurationFieldsPanel.Children.Add(new InfoBar
+                {
+                    IsOpen = true,
+                    IsClosable = false,
+                    Severity = InfoBarSeverity.Warning,
+                    Message = details,
+                });
+            }
         }
     }
 

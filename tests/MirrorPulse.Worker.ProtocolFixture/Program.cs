@@ -54,6 +54,8 @@ string[] capabilities = ["root-addresses", "stable-operations", "conditional-tar
 if (configurationOnly) capabilities = [AdapterConfigurationCallbackContract.Capability];
 if (mode is "OriginalDirectory" or "WrongOriginalDirectory" or "OrdinaryDirectoryReply" or "LostOriginalDirectoryReply")
     capabilities = [.. capabilities, AdapterDirectoryEffects.Capability];
+if (mode is "HealthAtStartup" or "HealthRecovers" or "HealthInvalidField")
+    capabilities = [.. capabilities, AdapterDeploymentContract.StructuredHealthCapability];
 await SendAsync(new(1, "Hello", helloId, instance, session, false, JsonSerializer.SerializeToElement(new
 {
     supportedVersions = new { minimum = mode == "RejectedHello" ? 2 : 1, maximum = 2 },
@@ -84,6 +86,36 @@ if (mode == "RejectConfiguration")
 string[] selectedCapabilities = ready.ProtocolVersion == 2
     ? ready.Payload.GetProperty("capabilities").EnumerateArray().Select(value => value.GetString()!).ToArray()
     : [];
+if (mode is "HealthAtStartup" or "HealthRecovers" or "HealthInvalidField" or "HealthWithoutCapability")
+{
+    bool expectedCapability = mode != "HealthWithoutCapability";
+    if (selectedCapabilities.Contains(AdapterDeploymentContract.StructuredHealthCapability, StringComparer.Ordinal) != expectedCapability)
+        throw new InvalidDataException("Wrong health capability negotiation.");
+    if (mode == "HealthRecovers") await SendAsync(new(2, "Connected", Guid.NewGuid(), instance, session, false,
+        JsonSerializer.SerializeToElement(new { })));
+    await SendAsync(new(2, "AdapterHealthReport", Guid.NewGuid(), instance, session, false, JsonSerializer.SerializeToElement(new
+    {
+        issues = new[]
+        {
+            new { reason = "ExpiredCredential", fieldKey = mode == "HealthInvalidField" ? "endpoint" : "token", detail = "ignored-fixture-detail" },
+        },
+    })));
+    if (mode == "HealthAtStartup")
+    {
+        await SendAsync(new(2, "Error", Guid.NewGuid(), instance, session, false,
+            JsonSerializer.SerializeToElement(new { code = "ignored-fixture-detail" })));
+        return;
+    }
+    if (mode == "HealthRecovers")
+    {
+        while (!File.Exists(Path.Combine(cache!, ".mp-health-recovered"))) await Task.Delay(20);
+        await SendAsync(new(2, "AdapterHealthReport", Guid.NewGuid(), instance, session, false,
+            JsonSerializer.SerializeToElement(new { issues = Array.Empty<object>() })));
+    }
+    ControlFrameEnvelope stopped = await ReadAsync();
+    if (stopped.MessageType != "Stop") throw new InvalidDataException("Expected Worker Stop.");
+    return;
+}
 if (ready.ProtocolVersion == 2)
 {
     JsonElement[] roots = ready.Payload.GetProperty("roots").EnumerateArray().ToArray();

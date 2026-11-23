@@ -358,6 +358,7 @@ public sealed partial class MirrorPulseHostApplication : IAsyncDisposable
             current.Instances.Select(instance => instance.InstanceId), cancellationToken)
             .ConfigureAwait(false);
         var entries = new List<MirrorPulseAppInstanceStatus>(current.Instances.Count);
+        var installations = current.Installations.ToDictionary(installation => installation.InstallId);
         foreach (var instance in current.Instances)
         {
             MirrorPulseInstanceRuntimeState? runtime = await _catalog.ReadInstanceRuntimeStateAsync(
@@ -369,7 +370,10 @@ public sealed partial class MirrorPulseHostApplication : IAsyncDisposable
                 instance.Enabled ? runtime?.Phase ?? "Not running" : "Offline",
                 cursor?.CursorFingerprint, cursor?.UpdatedAt, runtime?.LastSuccessfulSync,
                 runtime?.LastErrorCode, runtime?.TransferProgress)
-            { WorkerConnected = instance.Enabled && _workers.IsConnected(instance.InstanceId) });
+            {
+                WorkerConnected = instance.Enabled && _workers.IsConnected(instance.InstanceId),
+                HealthIssues = ReadAdapterHealth(installations[instance.InstallId], instance),
+            });
         }
 
         IReadOnlySet<Guid> snoozed = await _catalog.ReadSnoozedConflictIdsAsync(cancellationToken)
@@ -404,8 +408,7 @@ public sealed partial class MirrorPulseHostApplication : IAsyncDisposable
             await MirrorPulseProductCatalog.ReadRuntimeSnapshotAsync(_paths, cancellationToken)
                 .ConfigureAwait(false);
         IReadOnlyList<RootId> deferredRescans = await _catalog.ReadDeferredRescanRootsAsync(cancellationToken).ConfigureAwait(false);
-        var signedForms = topology.Installations.Where(item => item.Manifest.Presentation is not null)
-            .Select(item => item.InstallId).ToHashSet();
+        var installations = topology.Installations.ToDictionary(installation => installation.InstallId);
         return new MirrorPulseControlTopology(
             topology.Installations.Select(installation => new MirrorPulseControlInstallation(
                 installation.AdapterId.ToString(),
@@ -445,9 +448,11 @@ public sealed partial class MirrorPulseHostApplication : IAsyncDisposable
                 instance.WorkerSessionId?.ToString(),
                 instance.CreatedAt)
             {
-                ConfigurationRevision = signedForms.Contains(instance.InstallId) ? instance.ConfigurationRevision ?? Guid.Empty : null,
-                ConfiguredPasswordFields = signedForms.Contains(instance.InstallId)
+                ConfigurationRevision = installations[instance.InstallId].Manifest.Presentation is not null
+                    ? instance.ConfigurationRevision ?? Guid.Empty : null,
+                ConfiguredPasswordFields = installations[instance.InstallId].Manifest.Presentation is not null
                     ? instance.CredentialBindings?.Keys.Order(StringComparer.Ordinal).ToArray() ?? [] : null,
+                HealthIssues = ReadAdapterHealth(installations[instance.InstallId], instance),
             }).ToArray(),
             topology.Roots.Select(root => new MirrorPulseControlRoot(
                 root.AdapterId.ToString(),
@@ -469,6 +474,13 @@ public sealed partial class MirrorPulseHostApplication : IAsyncDisposable
                 state.TransferProgress?.BytesTransferred,
                 state.TransferProgress?.TotalBytes,
                 state.TransferProgress?.UpdatedAt)).ToArray());
+    }
+
+    private IReadOnlyList<MirrorPulseAdapterHealthIssue>? ReadAdapterHealth(InstalledAdapter installation, AdapterInstance instance)
+    {
+        IReadOnlyList<MirrorPulseAdapterHealthIssue> issues = AdapterDeploymentHealth.Read(installation, instance,
+            _workers.ReadReportedHealth(instance), _configuration.Locale);
+        return issues.Count == 0 ? null : issues;
     }
 
     public Task<MirrorPulseControlSettings> ReadSettingsAsync(

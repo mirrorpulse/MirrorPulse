@@ -47,7 +47,9 @@ public sealed partial class SyncStatusPage : Page
                       (instance.TransferProgress.TotalBytes is null
                           ? $"{instance.TransferProgress.BytesTransferred} bytes"
                           : $"{instance.TransferProgress.BytesTransferred}/{instance.TransferProgress.TotalBytes} bytes");
-                return $"{instance.DisplayName}  ·  {instance.Phase}  ·  {checkpoint}{progress}{error}";
+                string health = instance.HealthIssues is { Count: > 0 }
+                    ? "  ·  " + string.Join(" ", instance.HealthIssues.Select(AdapterHealthText.Describe)) : string.Empty;
+                return $"{instance.DisplayName}  ·  {instance.Phase}  ·  {checkpoint}{progress}{error}{health}";
             }).ToArray();
             StatusMessageText.Text = status.Instances.Count == 0
                 ? "No Adapter instances are configured."

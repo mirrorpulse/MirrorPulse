@@ -2,6 +2,7 @@ using System.Buffers.Binary;
 using System.IO.Pipes;
 using System.Security.Principal;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using MirrorPulse.Core.Conflicts;
 using MirrorPulse.Core.Contracts;
 using MirrorPulse.Core.State;
@@ -21,6 +22,9 @@ public sealed record MirrorPulseAppInstanceStatus(
     MirrorPulseTransferProgress? TransferProgress = null)
 {
     public bool? WorkerConnected { get; init; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public IReadOnlyList<MirrorPulseAdapterHealthIssue>? HealthIssues { get; init; }
 }
 
 public sealed record MirrorPulseAppNotification(

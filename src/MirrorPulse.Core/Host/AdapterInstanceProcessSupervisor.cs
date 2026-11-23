@@ -32,6 +32,7 @@ public sealed class AdapterInstanceProcessSupervisor :
     private readonly ConcurrentDictionary<InstanceId, AdapterWorkerDirectoryPageClient> _directories = new();
     private readonly ConcurrentDictionary<InstanceId, AdapterWorkerMutationClient> _mutations = new();
     private readonly ConcurrentDictionary<InstanceId, SemaphoreSlim> _instanceOperations = new();
+    private readonly ConcurrentDictionary<InstanceId, DeploymentHealthSnapshot> _reportedHealth = new();
     private Task[] _workers = [];
     private bool _started;
 
@@ -81,6 +82,12 @@ public sealed class AdapterInstanceProcessSupervisor :
 
     /// <summary>Observes the live negotiated Worker after its Connected frame, independently of journal/progress status.</summary>
     public bool IsConnected(InstanceId instanceId) => !_shutdown.IsCancellationRequested && _ready.ContainsKey(instanceId);
+
+    /// <summary>Returns only issues reported for the deployment's current package and form revision.</summary>
+    public IReadOnlyList<AdapterHealthIssue> ReadReportedHealth(AdapterInstance instance) =>
+        instance.Enabled && _reportedHealth.TryGetValue(instance.InstanceId, out var reported) &&
+        instance.InstallId == reported.InstallId && instance.ConfigurationRevision == reported.ConfigurationRevision
+            ? reported.Issues : [];
 
     public ValueTask<string> UploadAsync(
         MirrorPulseWorkerUploadRequest request,
@@ -384,6 +391,7 @@ public sealed class AdapterInstanceProcessSupervisor :
         LogField[]? failureObservation = null;
         try
         {
+            _reportedHealth.TryRemove(instance.InstanceId, out _);
             await SetPhaseAsync(instance.InstanceId, "Starting", cancellationToken).ConfigureAwait(false);
             string runtimeIdentifier = System.Runtime.InteropServices.RuntimeInformation.ProcessArchitecture switch
             {
@@ -549,12 +557,12 @@ public sealed class AdapterInstanceProcessSupervisor :
         }
         observation.Advance(WorkerSessionStage.Negotiate);
         ValidateFrame(hello, "Hello", instance.InstanceId, sessionId);
+        InstalledAdapter installation = topology.Installations.Single(item => item.InstallId == instance.InstallId);
         AdapterWorkerProtocolSession protocol;
         try
         {
-            protocol = AdapterWorkerProtocolSession.Negotiate(hello.Payload,
-                topology.Roots.Where(root => root.InstanceId == instance.InstanceId),
-                topology.Installations.Single(i => i.InstallId == instance.InstallId).Manifest.Protocol);
+            protocol = AdapterWorkerProtocolSession.NegotiateDeployment(hello.Payload,
+                topology.Roots.Where(root => root.InstanceId == instance.InstanceId), installation);
         }
         catch (InvalidDataException exception)
         {
@@ -652,6 +660,11 @@ public sealed class AdapterInstanceProcessSupervisor :
                         await SetPhaseAsync(instance.InstanceId, "Connected", cancellationToken).ConfigureAwait(false);
                         _ready[instance.InstanceId] = channel;
                         break;
+                    case AdapterDeploymentHealth.ReportMessage when protocol.Capabilities.Contains(
+                        AdapterDeploymentContract.StructuredHealthCapability, StringComparer.Ordinal):
+                        var issues = AdapterDeploymentHealth.ReadReport(installation.Manifest.Presentation!, frame.Payload);
+                        _reportedHealth[instance.InstanceId] = new(instance.InstallId, instance.ConfigurationRevision, Array.AsReadOnly(issues));
+                        break;
                     case "TransferProgress":
                         await SaveTransferProgressAsync(instance.InstanceId, frame.Payload, cancellationToken)
                             .ConfigureAwait(false);
@@ -665,10 +678,10 @@ public sealed class AdapterInstanceProcessSupervisor :
                         remoteInbox.Post(frame.Payload);
                         break;
                     case "Error":
-                        string code = frame.Payload.TryGetProperty("code", out JsonElement value)
-                            ? value.GetString() ?? "Unknown" : "Unknown";
-                        await LogSessionFailureAsync(instance.InstanceId, new AdapterWorkerOperationException(code), captureObservation()).ConfigureAwait(false);
-                        await SetPhaseAsync(instance.InstanceId, "Worker error", cancellationToken, code)
+                        var error = new AdapterWorkerOperationException(frame.Payload.TryGetProperty("code", out JsonElement value) &&
+                            value.ValueKind == JsonValueKind.String ? value.GetString() : null);
+                        await LogSessionFailureAsync(instance.InstanceId, error, captureObservation()).ConfigureAwait(false);
+                        await SetPhaseAsync(instance.InstanceId, "Worker error", cancellationToken, error.FailureCode)
                             .ConfigureAwait(false);
                         return;
                     default:
@@ -759,4 +772,7 @@ public sealed class AdapterInstanceProcessSupervisor :
         _shutdown.Dispose();
         _log?.Dispose();
     }
+
+    private sealed record DeploymentHealthSnapshot(InstallId InstallId, Guid? ConfigurationRevision,
+        IReadOnlyList<AdapterHealthIssue> Issues);
 }

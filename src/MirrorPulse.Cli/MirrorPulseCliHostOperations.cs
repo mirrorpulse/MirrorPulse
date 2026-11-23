@@ -803,11 +803,19 @@ public sealed partial class MirrorPulseCliHostOperations : IMirrorPulseCliHostOp
 
     private static string FormatStatus(MirrorPulse.Core.Host.MirrorPulseAppStatusResponse status) =>
         $"Pending uploads: {status.PendingUploads}; remote conflicts: {status.PendingRemoteConflicts}; " +
-        $"instances: {status.Instances.Count}";
+        $"instances: {status.Instances.Count}" + FormatHealth(status.Instances.Select(item => (item.DisplayName, item.InstanceId, item.HealthIssues)));
 
     private static string FormatTopology(MirrorPulseControlTopology topology) =>
         $"Installations: {topology.Installations.Count}; instances: {topology.Instances.Count}; " +
-        $"roots: {topology.Roots.Count}";
+        $"roots: {topology.Roots.Count}" + FormatHealth(topology.Instances.Select(item => (item.DisplayName, item.InstanceId, item.HealthIssues)));
+
+    private static string FormatHealth(IEnumerable<(string Name, string Id, IReadOnlyList<MirrorPulseAdapterHealthIssue>? Issues)> deployments)
+    {
+        IEnumerable<string> lines = deployments.Where(item => item.Issues is { Count: > 0 }).Select(item =>
+            $"{item.Name} ({item.Id}) · " + string.Join(", ", item.Issues!.Select(issue =>
+                issue.FieldKey is null ? issue.Reason.ToString() : $"{issue.Reason} [{issue.FieldKey}]")));
+        return string.Concat(lines.Select(line => Environment.NewLine + line));
+    }
 
     private static string FormatSettings(MirrorPulseControlSettings settings) =>
         $"Locale: {settings.Locale}; developer mode: {settings.DeveloperMode}; " +

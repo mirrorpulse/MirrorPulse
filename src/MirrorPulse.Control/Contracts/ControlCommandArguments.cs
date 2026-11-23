@@ -1,4 +1,5 @@
 using System.Text.Json.Serialization;
+using MirrorPulse.Core.Host;
 using MirrorPulse.Core.Conflicts;
 using MirrorPulse.Core.Contracts;
 
@@ -91,6 +92,9 @@ public sealed record MirrorPulseControlInstance(
 
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public IReadOnlyList<string>? ConfiguredPasswordFields { get; init; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public IReadOnlyList<MirrorPulseAdapterHealthIssue>? HealthIssues { get; init; }
 }
 
 public sealed record MirrorPulseControlRoot(

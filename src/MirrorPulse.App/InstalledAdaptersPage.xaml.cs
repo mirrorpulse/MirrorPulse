@@ -42,7 +42,8 @@ public sealed partial class InstalledAdaptersPage : Page
             EmptyStateText.Visibility = topology.Installations.Count == 0
                 ? Visibility.Visible : Visibility.Collapsed;
             InstanceSelector.ItemsSource = _instances.Select(instance =>
-                $"{instance.DisplayName}  ·  {instance.InstanceId}").ToArray();
+                $"{instance.DisplayName}  ·  {instance.InstanceId}" +
+                (instance.HealthIssues?.Any(issue => issue.RequiresConfiguration) == true ? "  ·  Needs configuration" : string.Empty)).ToArray();
             int index = selectedInstanceId is null ? 0 :
                 Array.FindIndex(_instances, instance => instance.InstanceId == selectedInstanceId);
             InstanceSelector.SelectedIndex = _instances.Length == 0 ? -1 : Math.Max(0, index);
@@ -89,11 +90,16 @@ public sealed partial class InstalledAdaptersPage : Page
             UseVersionButton.IsEnabled = false;
             AdapterEnableToggle.IsEnabled = false;
             ConfigureInstanceButton.IsEnabled = false;
+            AdapterHealthNotice.IsOpen = false;
             return;
         }
 
         MirrorPulseControlInstance instance = _instances[index];
         ConfigureInstanceButton.IsEnabled = instance.ConfigurationRevision is not null;
+        AdapterHealthNotice.Title = instance.HealthIssues?.Any(issue => issue.RequiresConfiguration) == true
+            ? "Configuration needs attention" : "Adapter health";
+        AdapterHealthNotice.Message = string.Join(Environment.NewLine, (instance.HealthIssues ?? []).Select(AdapterHealthText.Describe));
+        AdapterHealthNotice.IsOpen = instance.HealthIssues is { Count: > 0 };
         _versions = _topology.Installations.Where(installation => installation.AdapterId == instance.AdapterId)
             .OrderBy(installation => installation.Version, StringComparer.Ordinal)
             .ToArray();
