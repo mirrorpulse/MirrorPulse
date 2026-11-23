@@ -26,15 +26,18 @@ public sealed class MirrorPulseAdapterInstanceProvisioner
 
     public async Task<AdapterInstance> CreateAsync(
         MirrorPulseCreateInstanceRequest request,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default) => await CreateAsync(request, null, cancellationToken).ConfigureAwait(false);
+
+    internal async Task<AdapterInstance> CreateAsync(MirrorPulseCreateInstanceRequest request, InstanceId? reservedId,
+        CancellationToken cancellationToken)
     {
         await _catalog.CredentialGate.WaitAsync(cancellationToken).ConfigureAwait(false);
-        try { return await CreateCoreAsync(request, cancellationToken).ConfigureAwait(false); }
+        try { return await CreateCoreAsync(request, reservedId, cancellationToken).ConfigureAwait(false); }
         finally { _catalog.CredentialGate.Release(); }
     }
 
     private async Task<AdapterInstance> CreateCoreAsync(
-        MirrorPulseCreateInstanceRequest request, CancellationToken cancellationToken)
+        MirrorPulseCreateInstanceRequest request, InstanceId? reservedId, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(request);
         ArgumentNullException.ThrowIfNull(request.Configuration);
@@ -53,7 +56,7 @@ public sealed class MirrorPulseAdapterInstanceProvisioner
             return await SaveSignedFormAsync(installation.AdapterId, null, changes, (bindings, token) =>
                 _catalog.CreateSignedAdapterInstanceAsync(installId, request.DisplayName, signedConfiguration,
                     Path.Combine(instanceCacheRoot, "files"), Path.Combine(instanceCacheRoot, "transfers"),
-                    request.Enabled, request.RootLabels, bindings, token), cancellationToken).ConfigureAwait(false);
+                    request.Enabled, request.RootLabels, bindings, reservedId, token), cancellationToken).ConfigureAwait(false);
         }
 
         if (request.SecretFields is not null)

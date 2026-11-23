@@ -11,6 +11,75 @@ namespace MirrorPulse.Cli.Tests;
 public sealed class MirrorPulseCliSignedConfigurationTests
 {
     [TestMethod]
+    public async Task AuthorizationCommandsUseTheSharedChannelAndPassOnlyReceiptIdsToSave()
+    {
+        Guid authorizationId = Guid.NewGuid();
+        string installId = Guid.NewGuid().ToString("D");
+        string deploymentId = Guid.NewGuid().ToString("D");
+        string pipe = "MirrorPulse-cli-authorization-" + Guid.NewGuid().ToString("N");
+        var dispatcher = new MirrorPulseControlDispatcher();
+        var pending = new AdapterAuthorizationStatus(authorizationId, deploymentId, "sign-in",
+            DateTimeOffset.UtcNow.AddMinutes(5), AdapterAuthorizationPhase.Pending, new Uri("https://example.test/authorize"));
+        dispatcher.Register<InstanceAuthorizationStartArguments, AdapterAuthorizationStatus>(MirrorPulseControlCommands.InstanceAuthorizationStart,
+            (request, _) =>
+            {
+                Assert.AreEqual(expected: installId, actual: request.InstallId);
+                Assert.AreEqual("sign-in", request.CallbackId);
+                Assert.AreEqual("https://example.test/", request.Configuration["source"]);
+                return ValueTask.FromResult(pending);
+            });
+        dispatcher.Register<InstanceAuthorizationArguments, AdapterAuthorizationStatus>(MirrorPulseControlCommands.InstanceAuthorizationPoll,
+            (request, _) =>
+            {
+                Assert.AreEqual(expected: authorizationId, actual: request.AuthorizationId);
+                return ValueTask.FromResult(pending with { Phase = AdapterAuthorizationPhase.ReadyToSave, InteractionUri = null });
+            });
+        dispatcher.Register<InstanceAuthorizationArguments, AdapterAuthorizationStatus>(MirrorPulseControlCommands.InstanceAuthorizationCancel,
+            (request, _) =>
+            {
+                Assert.AreEqual(expected: authorizationId, actual: request.AuthorizationId);
+                return ValueTask.FromResult(pending with { Phase = AdapterAuthorizationPhase.Cancelled, InteractionUri = null });
+            });
+        dispatcher.Register<InstanceCreateArguments, MirrorPulseAppStatusResponse>(MirrorPulseControlCommands.InstanceCreate,
+            (request, _) =>
+            {
+                Assert.AreEqual(expected: authorizationId, actual: request.AuthorizationIds!.Single());
+                Assert.IsNull(request.SecretFields);
+                return ValueTask.FromResult(new MirrorPulseAppStatusResponse(0, 0, [], [], CreatedInstanceId: deploymentId));
+            });
+        using var shutdown = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        var server = new MirrorPulseControlPipeServer(dispatcher.DispatchAsync, pipe);
+        Task serving = server.ServeAsync(shutdown.Token);
+        var client = new MirrorPulseControlClient(new() { PipeName = pipe, ExpectedHostProcessId = Environment.ProcessId });
+        await using var operations = new MirrorPulseCliHostOperations(new MirrorPulseHostStartupOptions(), client);
+        try
+        {
+            await RunAsync(11, "https://example.test/authorize", "auth-start", "--install-id", installId, "--callback", "sign-in",
+                "--config", "source=https://example.test/");
+            await RunAsync(0, "ReadyToSave", "auth-poll", authorizationId.ToString("D"));
+            await RunAsync(0, deploymentId, "create", "--install-id", installId, "--name", "Source",
+                "--authorization", authorizationId.ToString("D"));
+            await RunAsync(MirrorPulseControlExitCodes.Cancelled, "Cancelled", "auth-cancel", authorizationId.ToString("D"));
+        }
+        finally
+        {
+            await shutdown.CancelAsync();
+            await serving;
+        }
+
+        async Task RunAsync(int expectedExit, string expectedText, params string[] arguments)
+        {
+            using var output = new StringWriter();
+            using var error = new StringWriter();
+            int exit = await MirrorPulseCliApplication.RunAsync(["--no-start", "instance", .. arguments], output,
+                error, hostOperations: operations, isPlatformSupported: () => true);
+            Assert.AreEqual(expectedExit, exit);
+            StringAssert.Contains(output.ToString(), expectedText);
+            Assert.AreEqual(string.Empty, error.ToString());
+        }
+    }
+
+    [TestMethod]
     public async Task SendsNamedPasswordChangesAndRevisionThroughTheSharedControlChannel()
     {
         Guid expectedRevision = Guid.NewGuid();

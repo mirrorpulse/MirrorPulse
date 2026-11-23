@@ -4,6 +4,8 @@ using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media.Imaging;
 using MirrorPulse.Control.Contracts;
 using MirrorPulse.Core.Contracts;
+using MirrorPulse.Core.Host;
+using Windows.System;
 
 namespace MirrorPulse.App;
 
@@ -11,6 +13,9 @@ public sealed partial class InstanceConfigurationPage
 {
     private readonly Dictionary<string, Func<string>> _signedValues = new(StringComparer.Ordinal);
     private readonly Dictionary<string, (PasswordBox Input, CheckBox? Clear)> _signedPasswords = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, AdapterAuthorizationStatus> _authorizations = new(StringComparer.Ordinal);
+    private bool _authorizationRequestRunning;
+    private bool _configurationPageActive;
 
     private void LoadSignedForm(MirrorPulseControlAdapterForm form, string installationDirectory)
     {
@@ -41,8 +46,8 @@ public sealed partial class InstanceConfigurationPage
                     element = CreatePasswordInput(control, label);
                     break;
                 case AdapterPackageFormKind.Callback:
-                    // Activation requires a Worker callback session owned by the Host.
-                    continue;
+                    element = CreateAuthorizationControl(control);
+                    break;
                 default:
                     element = CreateValueInput(control, label);
                     break;
@@ -50,6 +55,92 @@ public sealed partial class InstanceConfigurationPage
 
             ConfigurationFieldsPanel.Children.Add(element);
         }
+    }
+
+    private StackPanel CreateAuthorizationControl(AdapterPackageFormControl control)
+    {
+        string key = control.Key!;
+        var panel = new StackPanel { Spacing = 6 };
+        var start = new Button { Content = control.Label };
+        var open = new Button { Content = "Open authorization page", Visibility = Visibility.Collapsed };
+        var check = new Button { Content = "Check authorization", Visibility = Visibility.Collapsed };
+        var cancel = new Button { Content = "Cancel authorization", Visibility = Visibility.Collapsed };
+        var status = new TextBlock { TextWrapping = TextWrapping.Wrap };
+        var buttons = new StackPanel { Spacing = 8 };
+        buttons.Children.Add(start);
+        buttons.Children.Add(open);
+        buttons.Children.Add(check);
+        buttons.Children.Add(cancel);
+        panel.Children.Add(buttons);
+        panel.Children.Add(status);
+
+        start.Click += async (_, _) => await ExecuteAsync(async () =>
+        {
+            string? draftId = _instance is null ? _authorizations.Values.FirstOrDefault(IsActiveAuthorization)?.DeploymentId : null;
+            var result = await AppControl.Client.StartInstanceAuthorizationAsync(new(_installation!.InstallId, key,
+                ReadSignedValues(), _instance?.InstanceId, _instance?.ConfigurationRevision, draftId));
+            if (!_configurationPageActive)
+            {
+                await CancelAbandonedAuthorizationAsync(result);
+                return;
+            }
+            SetStatus(result);
+            if (result.InteractionUri is { } page) await LaunchAsync(page);
+        });
+        open.Click += async (_, _) => await ExecuteAsync(async () =>
+        {
+            if (_authorizations[key].InteractionUri is { } page) await LaunchAsync(page);
+        });
+        check.Click += async (_, _) => await ExecuteAsync(async () => SetStatus(await AppControl.Client
+            .PollInstanceAuthorizationAsync(_authorizations[key].AuthorizationId)));
+        cancel.Click += async (_, _) => await ExecuteAsync(async () => SetStatus(await AppControl.Client
+            .CancelInstanceAuthorizationAsync(_authorizations[key].AuthorizationId)));
+        return panel;
+
+        void SetStatus(AdapterAuthorizationStatus result)
+        {
+            if (!_configurationPageActive) return;
+            _authorizations[key] = result;
+            bool pending = result.Phase == AdapterAuthorizationPhase.Pending;
+            bool ready = result.Phase == AdapterAuthorizationPhase.ReadyToSave;
+            start.Visibility = pending || ready ? Visibility.Collapsed : Visibility.Visible;
+            open.Visibility = pending && result.InteractionUri is not null ? Visibility.Visible : Visibility.Collapsed;
+            check.Visibility = pending ? Visibility.Visible : Visibility.Collapsed;
+            cancel.Visibility = pending || ready ? Visibility.Visible : Visibility.Collapsed;
+            status.Text = result.Phase switch
+            {
+                AdapterAuthorizationPhase.Pending => "Finish authorizing, then check authorization here.",
+                AdapterAuthorizationPhase.ReadyToSave => "Authorization is ready. Save to apply it.",
+                AdapterAuthorizationPhase.Cancelled => "Authorization cancelled.",
+                AdapterAuthorizationPhase.Expired => "Authorization expired. Start again to continue.",
+                _ => "Authorization could not be completed.",
+            };
+        }
+
+        async Task ExecuteAsync(Func<Task> operation)
+        {
+            if (_authorizationRequestRunning || !CreateButton.IsEnabled) return;
+            _authorizationRequestRunning = true;
+            ConfigurationStatusBar.IsOpen = false;
+            try { await operation(); }
+            catch (Exception exception) { ShowError(exception.Message); }
+            finally { _authorizationRequestRunning = false; }
+        }
+
+        async Task LaunchAsync(Uri page)
+        {
+            if (!await Launcher.LaunchUriAsync(page)) ShowError("The authorization page could not be opened.");
+        }
+    }
+
+    private static bool IsActiveAuthorization(AdapterAuthorizationStatus status) =>
+        status.Phase is AdapterAuthorizationPhase.Pending or AdapterAuthorizationPhase.ReadyToSave;
+
+    private static async Task CancelAbandonedAuthorizationAsync(AdapterAuthorizationStatus status)
+    {
+        if (!IsActiveAuthorization(status)) return;
+        try { await AppControl.Client.CancelInstanceAuthorizationAsync(status.AuthorizationId); }
+        catch (Exception) { /* The Host expires drafts that cannot be cancelled while navigating away. */ }
     }
 
     private StackPanel CreatePasswordInput(AdapterPackageFormControl control, string label)
@@ -138,7 +229,12 @@ public sealed partial class InstanceConfigurationPage
 
     private async Task SaveSignedFormAsync()
     {
-        var values = _signedValues.ToDictionary(pair => pair.Key, pair => pair.Value(), StringComparer.Ordinal);
+        if (_authorizations.Values.Any(item => item.Phase == AdapterAuthorizationPhase.Pending))
+            throw new InvalidDataException("Finish or cancel the pending authorization before saving.");
+        var values = ReadSignedValues();
+        Guid[]? authorizationIds = _authorizations.Values.Where(item => item.Phase == AdapterAuthorizationPhase.ReadyToSave)
+            .Select(item => item.AuthorizationId).ToArray();
+        if (authorizationIds.Length == 0) authorizationIds = null;
         var passwords = new Dictionary<string, string?>(StringComparer.Ordinal);
         var roots = _rootLabels.ToDictionary(pair => pair.Key, pair => pair.Value.Text.Trim(), StringComparer.Ordinal);
         foreach ((string key, (PasswordBox input, CheckBox? clear)) in _signedPasswords)
@@ -153,16 +249,21 @@ public sealed partial class InstanceConfigurationPage
         if (_instance is null)
         {
             var created = await AppControl.Client.CreateInstanceAsync(new InstanceCreateArguments(
-                _installation!.InstallId, name, values, roots, null, StartWithMirrorPulseToggle.IsOn, passwords));
+                _installation!.InstallId, name, values, roots, null, StartWithMirrorPulseToggle.IsOn, passwords, authorizationIds));
             if (string.IsNullOrWhiteSpace(created.CreatedInstanceId))
                 throw new InvalidDataException("The Host did not return the new instance ID.");
         }
         else
         {
             await AppControl.Client.ConfigureInstanceAsync(new InstanceConfigureArguments(_instance.InstanceId,
-                name, values, roots, SecretFields: passwords, ExpectedConfigurationRevision: _instance.ConfigurationRevision));
+                name, values, roots, SecretFields: passwords, ExpectedConfigurationRevision: _instance.ConfigurationRevision,
+                AuthorizationIds: authorizationIds));
         }
 
+        _authorizations.Clear();
         foreach (var input in _signedPasswords.Values) input.Input.Password = string.Empty;
     }
+
+    private Dictionary<string, string> ReadSignedValues() =>
+        _signedValues.ToDictionary(pair => pair.Key, pair => pair.Value(), StringComparer.Ordinal);
 }

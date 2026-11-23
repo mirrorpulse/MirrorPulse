@@ -171,21 +171,21 @@ public sealed partial class MirrorPulseProductCatalog
         IReadOnlyDictionary<string, string>? rootLabels = null,
         CancellationToken cancellationToken = default)
         => await CreateInstanceCoreAsync(installId, displayName, configuration, credentialReferences,
-            fileCacheDirectory, transferCacheDirectory, enabled, rootLabels, null, cancellationToken).ConfigureAwait(false);
+            fileCacheDirectory, transferCacheDirectory, enabled, rootLabels, null, null, cancellationToken).ConfigureAwait(false);
 
     internal Task<AdapterInstance> CreateSignedAdapterInstanceAsync(
         InstallId installId, string displayName, IReadOnlyDictionary<string, string> configuration,
         string fileCacheDirectory, string transferCacheDirectory, bool enabled,
         IReadOnlyDictionary<string, string> rootLabels, IReadOnlyDictionary<string, string> credentialBindings,
-        CancellationToken cancellationToken)
+        InstanceId? reservedId, CancellationToken cancellationToken)
         => CreateInstanceCoreAsync(installId, displayName, configuration, credentialBindings.Values.ToArray(),
-            fileCacheDirectory, transferCacheDirectory, enabled, rootLabels, credentialBindings, cancellationToken);
+            fileCacheDirectory, transferCacheDirectory, enabled, rootLabels, credentialBindings, reservedId, cancellationToken);
 
     private async Task<AdapterInstance> CreateInstanceCoreAsync(
         InstallId installId, string displayName, IReadOnlyDictionary<string, string> configuration,
         IReadOnlyList<string> credentialReferences, string fileCacheDirectory, string transferCacheDirectory,
         bool enabled, IReadOnlyDictionary<string, string>? rootLabels,
-        IReadOnlyDictionary<string, string>? credentialBindings, CancellationToken cancellationToken)
+        IReadOnlyDictionary<string, string>? credentialBindings, InstanceId? reservedId, CancellationToken cancellationToken)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(displayName);
         ArgumentNullException.ThrowIfNull(configuration);
@@ -224,7 +224,9 @@ public sealed partial class MirrorPulseProductCatalog
                 throw new InvalidDataException("The Adapter root-definition limit has been exceeded.");
             }
 
-            InstanceId instanceId = InstanceId.New();
+            InstanceId instanceId = reservedId ?? InstanceId.New();
+            if (reservedId is not null && current.Instances.Any(value => value.InstanceId == instanceId))
+                throw new AdapterConfigurationRevisionException();
             AdapterInstance instance = new(
                 installation.AdapterId,
                 installation.InstallId,
@@ -271,6 +273,7 @@ public sealed partial class MirrorPulseProductCatalog
             ValidateTopology(next);
             await ValidateManagedRootNamesAsync(next, cancellationToken).ConfigureAwait(false);
 
+            cancellationToken.ThrowIfCancellationRequested();
             Directory.CreateDirectory(instance.FileCacheDirectory);
             Directory.CreateDirectory(instance.TransferCacheDirectory);
 

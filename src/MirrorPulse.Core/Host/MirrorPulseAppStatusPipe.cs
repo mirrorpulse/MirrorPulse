@@ -49,7 +49,8 @@ public sealed record MirrorPulseCreateInstanceRequest(
     IReadOnlyDictionary<string, string> RootLabels,
     string? Secret,
     bool Enabled,
-    IReadOnlyDictionary<string, string?>? SecretFields = null);
+    IReadOnlyDictionary<string, string?>? SecretFields = null,
+    IReadOnlyList<Guid>? AuthorizationIds = null);
 
 /// <summary>Current-user, bounded request/response channel from WinUI to the owner Host.</summary>
 public sealed class MirrorPulseAppStatusPipe

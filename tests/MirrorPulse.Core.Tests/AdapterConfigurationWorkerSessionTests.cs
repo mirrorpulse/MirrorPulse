@@ -115,7 +115,7 @@ public sealed class AdapterConfigurationWorkerSessionTests
         finally { Directory.Delete(directory, recursive: true); }
     }
 
-    private static InstalledAdapter NewFixture(string callback)
+    internal static InstalledAdapter NewFixture(string callback)
     {
         string executable = Path.ChangeExtension(typeof(ProtocolFixtureMarker).Assembly.Location, ".exe");
         var manifest = new AdapterManifest(2, AdapterId.Parse("example.protocolfixture"), "Fixture", "1.0.0", new(2, 2),

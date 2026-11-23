@@ -538,6 +538,18 @@ public sealed class MirrorPulseControlClient
         SendAsync<InstanceConfigureArguments, MirrorPulseAppStatusResponse>(
             MirrorPulseControlCommands.InstanceConfigure, arguments, cancellationToken);
 
+    public Task<AdapterAuthorizationStatus> StartInstanceAuthorizationAsync(InstanceAuthorizationStartArguments arguments,
+        CancellationToken cancellationToken = default) => SendAsync<InstanceAuthorizationStartArguments, AdapterAuthorizationStatus>(
+            MirrorPulseControlCommands.InstanceAuthorizationStart, arguments, cancellationToken);
+
+    public Task<AdapterAuthorizationStatus> PollInstanceAuthorizationAsync(Guid authorizationId,
+        CancellationToken cancellationToken = default) => SendAsync<InstanceAuthorizationArguments, AdapterAuthorizationStatus>(
+            MirrorPulseControlCommands.InstanceAuthorizationPoll, new(authorizationId), cancellationToken);
+
+    public Task<AdapterAuthorizationStatus> CancelInstanceAuthorizationAsync(Guid authorizationId,
+        CancellationToken cancellationToken = default) => SendAsync<InstanceAuthorizationArguments, AdapterAuthorizationStatus>(
+            MirrorPulseControlCommands.InstanceAuthorizationCancel, new(authorizationId), cancellationToken);
+
     public Task<MirrorPulseAppStatusResponse> SelectInstallationAsync(
         string instanceId,
         string installId,

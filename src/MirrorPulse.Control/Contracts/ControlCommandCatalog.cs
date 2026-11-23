@@ -17,6 +17,9 @@ public static class MirrorPulseControlCommands
     public const string InstanceList = "instance.list";
     public const string InstanceCreate = "instance.create";
     public const string InstanceConfigure = "instance.configure";
+    public const string InstanceAuthorizationStart = "instance.authorization.start";
+    public const string InstanceAuthorizationPoll = "instance.authorization.poll";
+    public const string InstanceAuthorizationCancel = "instance.authorization.cancel";
     public const string InstanceEnable = "instance.enable";
     public const string InstanceSelectVersion = "instance.selectVersion";
     public const string RootList = "root.list";
@@ -88,6 +91,9 @@ public static class MirrorPulseControlCommands
         new(InstanceList, "instance", false, false),
         new(InstanceCreate, "instance", true, true),
         new(InstanceConfigure, "instance", true, true),
+        new(InstanceAuthorizationStart, "instance", true, false),
+        new(InstanceAuthorizationPoll, "instance", true, false),
+        new(InstanceAuthorizationCancel, "instance", true, false),
         new(InstanceEnable, "instance", true, false),
         new(InstanceSelectVersion, "instance", true, false),
         new(RootList, "root", false, false),

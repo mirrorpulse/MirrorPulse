@@ -263,7 +263,9 @@ public sealed record InstanceCreateArguments(
     [property: MirrorPulseSensitiveData] string? Secret,
     bool Enabled,
     [property: MirrorPulseSensitiveData, JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    IReadOnlyDictionary<string, string?>? SecretFields = null) : IMirrorPulseControlArguments;
+    IReadOnlyDictionary<string, string?>? SecretFields = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    IReadOnlyList<Guid>? AuthorizationIds = null) : IMirrorPulseControlArguments;
 
 public sealed record InstanceConfigureArguments(
     string InstanceId,
@@ -275,7 +277,15 @@ public sealed record InstanceConfigureArguments(
     [property: MirrorPulseSensitiveData, JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     IReadOnlyDictionary<string, string?>? SecretFields = null,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    Guid? ExpectedConfigurationRevision = null) : IMirrorPulseControlArguments;
+    Guid? ExpectedConfigurationRevision = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    IReadOnlyList<Guid>? AuthorizationIds = null) : IMirrorPulseControlArguments;
+
+public sealed record InstanceAuthorizationStartArguments(string InstallId, string CallbackId,
+    IReadOnlyDictionary<string, string> Configuration, string? InstanceId = null,
+    Guid? ExpectedConfigurationRevision = null, string? DraftId = null) : IMirrorPulseControlArguments;
+
+public sealed record InstanceAuthorizationArguments(Guid AuthorizationId) : IMirrorPulseControlArguments;
 
 public sealed record InstanceIdArguments(string InstanceId) : IMirrorPulseControlArguments;
 

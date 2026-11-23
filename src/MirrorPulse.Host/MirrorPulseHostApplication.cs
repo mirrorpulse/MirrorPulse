@@ -33,6 +33,7 @@ public sealed partial class MirrorPulseHostApplication : IAsyncDisposable
     private readonly MirrorPulseConflictCenter _conflictCenter;
     private readonly MirrorPulseSystemNotificationPublisher _systemNotifications;
     private readonly AdapterInstanceProcessSupervisor _workers;
+    private AdapterAuthorizationCoordinator? _adapterAuthorization;
     private readonly MirrorPulseNamespaceExecutionSession _namespaceExecution;
     private readonly MirrorPulseNamespaceActor _namespaceActor;
     private readonly MirrorPulseNamespaceWorkAdmission _namespaceWork;
@@ -501,13 +502,15 @@ public sealed partial class MirrorPulseHostApplication : IAsyncDisposable
     {
         var provisioner = new MirrorPulseAdapterInstanceProvisioner(
             _catalog, credentialStore, _paths.DataRootPath);
+        var authorization = new AdapterAuthorizationCoordinator(_catalog, credentialStore, provisioner, _paths.DataRootPath);
+        _adapterAuthorization = authorization;
         _statusPipe = new MirrorPulseAppStatusPipe(
             ReadStatusAsync,
             SnoozeConflictAsync,
             SetInstanceEnabledAsync,
             SelectInstallationAsync,
             InstallAdapterAsync,
-            (request, cancellationToken) => CreateInstanceAsync(provisioner, request, cancellationToken),
+            (request, cancellationToken) => CreateInstanceAsync(authorization, request, cancellationToken),
             ResolveConflictAsync);
         var dispatcher = new MirrorPulseControlDispatcher();
         new MirrorPulseLegacyCommandBridge(
@@ -517,7 +520,7 @@ public sealed partial class MirrorPulseHostApplication : IAsyncDisposable
             SetInstanceEnabledAsync,
             SelectInstallationAsync,
             InstallAdapterAsync,
-            (request, cancellationToken) => CreateInstanceAsync(provisioner, request, cancellationToken),
+            (request, cancellationToken) => CreateInstanceAsync(authorization, request, cancellationToken),
             _ => Task.FromResult(GetHostStatus()),
             StartRequestedAsync,
             StopRequestedAsync,
@@ -527,7 +530,7 @@ public sealed partial class MirrorPulseHostApplication : IAsyncDisposable
             UpdateSettingsAsync,
             CollectDiagnosticsAsync,
             RefreshAsync,
-            (instanceId, arguments, cancellationToken) => ConfigureInstanceAsync(provisioner, instanceId,
+            (instanceId, arguments, cancellationToken) => ConfigureInstanceAsync(authorization, instanceId,
                 arguments, cancellationToken),
             ReadConflictsAsync,
             GetOperationAsync,
@@ -537,6 +540,16 @@ public sealed partial class MirrorPulseHostApplication : IAsyncDisposable
             ExecuteNamespaceMemberMoveAsync,
             ExecuteNamespaceBirthRecoveryAsync)
             .Register(dispatcher);
+        dispatcher.Register<InstanceAuthorizationStartArguments, AdapterAuthorizationStatus>(
+            MirrorPulseControlCommands.InstanceAuthorizationStart, (arguments, token) => authorization.StartAsync(new(
+                InstallId.Parse(arguments.InstallId),
+                arguments.InstanceId is null ? null : InstanceId.Parse(arguments.InstanceId),
+                arguments.DraftId is null ? null : InstanceId.Parse(arguments.DraftId),
+                arguments.ExpectedConfigurationRevision, arguments.CallbackId, arguments.Configuration), token));
+        dispatcher.Register<InstanceAuthorizationArguments, AdapterAuthorizationStatus>(
+            MirrorPulseControlCommands.InstanceAuthorizationPoll, (arguments, token) => authorization.PollAsync(arguments.AuthorizationId, token));
+        dispatcher.Register<InstanceAuthorizationArguments, AdapterAuthorizationStatus>(
+            MirrorPulseControlCommands.InstanceAuthorizationCancel, (arguments, token) => authorization.CancelAsync(arguments.AuthorizationId, token));
         dispatcher.Register<ControlEmptyArguments, IReadOnlyList<MirrorPulseControlRootStatus>>(
             MirrorPulseControlCommands.RootList, async (_, token) => await ReadRootsAsync(token).ConfigureAwait(false));
         dispatcher.Register<ConflictRefreshVersionArguments, MirrorPulseControlConflictVersionRefresh>(
@@ -1127,11 +1140,11 @@ public sealed partial class MirrorPulseHostApplication : IAsyncDisposable
     }
 
     private async Task<MirrorPulseAppStatusResponse> CreateInstanceAsync(
-        MirrorPulseAdapterInstanceProvisioner provisioner,
+        AdapterAuthorizationCoordinator authorization,
         MirrorPulseCreateInstanceRequest request,
         CancellationToken cancellationToken)
     {
-        AdapterInstance instance = await provisioner.CreateAsync(request, cancellationToken)
+        AdapterInstance instance = await authorization.CreateAsync(request, request.AuthorizationIds, cancellationToken)
             .ConfigureAwait(false);
         return (await ReadStatusAsync(cancellationToken).ConfigureAwait(false)) with
         {
@@ -1140,14 +1153,14 @@ public sealed partial class MirrorPulseHostApplication : IAsyncDisposable
     }
 
     private async Task<MirrorPulseAppStatusResponse> ConfigureInstanceAsync(
-        MirrorPulseAdapterInstanceProvisioner provisioner,
+        AdapterAuthorizationCoordinator authorization,
         InstanceId instanceId,
         InstanceConfigureArguments arguments,
         CancellationToken cancellationToken)
     {
-        await provisioner.ConfigureAsync(instanceId, arguments.DisplayName,
+        await authorization.ConfigureAsync(instanceId, arguments.DisplayName,
             arguments.Configuration, arguments.RootLabels, arguments.Secret, arguments.RemoveCredential,
-            arguments.SecretFields, arguments.ExpectedConfigurationRevision, cancellationToken).ConfigureAwait(false);
+            arguments.SecretFields, arguments.ExpectedConfigurationRevision, arguments.AuthorizationIds, cancellationToken).ConfigureAwait(false);
         return await ReadStatusAsync(cancellationToken).ConfigureAwait(false);
     }
 

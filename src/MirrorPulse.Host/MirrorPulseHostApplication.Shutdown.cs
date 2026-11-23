@@ -22,6 +22,7 @@ public sealed partial class MirrorPulseHostApplication
             await MirrorPulseHostResourceCleanup.RunAsync([
                 () => new(_shutdown.CancelAsync()),
                 DrainControlAsync,
+                () => _adapterAuthorization?.DisposeAsync() ?? ValueTask.CompletedTask,
                 _remotePoller.DisposeAsync,
                 _remoteScheduler.DisposeAsync,
                 // Stop queued callbacks and await admitted work while the library and identities remain live.

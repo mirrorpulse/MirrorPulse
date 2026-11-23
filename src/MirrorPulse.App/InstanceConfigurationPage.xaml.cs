@@ -25,6 +25,7 @@ public sealed partial class InstanceConfigurationPage : Page
     protected override async void OnNavigatedTo(NavigationEventArgs e)
     {
         base.OnNavigatedTo(e);
+        _configurationPageActive = true;
         try
         {
             MirrorPulseControlTopology topology = await AppControl.Client.GetAdapterTopologyAsync();
@@ -132,9 +133,19 @@ public sealed partial class InstanceConfigurationPage : Page
         }
     }
 
+    protected override async void OnNavigatedFrom(NavigationEventArgs e)
+    {
+        _configurationPageActive = false;
+        AdapterAuthorizationStatus[] abandoned = _authorizations.Values.Where(IsActiveAuthorization).ToArray();
+        _authorizations.Clear();
+        base.OnNavigatedFrom(e);
+        foreach (AdapterAuthorizationStatus authorization in abandoned)
+            await CancelAbandonedAuthorizationAsync(authorization);
+    }
+
     private async void CreateButton_Click(object sender, RoutedEventArgs e)
     {
-        if (_installation is null)
+        if (_installation is null || _authorizationRequestRunning)
         {
             return;
         }

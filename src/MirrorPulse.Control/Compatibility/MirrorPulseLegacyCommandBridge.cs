@@ -280,7 +280,8 @@ public sealed class MirrorPulseLegacyCommandBridge
                         arguments.RootLabels,
                         arguments.Secret,
                         arguments.Enabled,
-                        arguments.SecretFields),
+                        arguments.SecretFields,
+                        arguments.AuthorizationIds),
                     cancellationToken)));
         }
 

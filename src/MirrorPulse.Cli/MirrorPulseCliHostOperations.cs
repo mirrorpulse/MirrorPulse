@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using MirrorPulse.Control.Client;
 using MirrorPulse.Control.Contracts;
+using MirrorPulse.Core.Host;
 
 namespace MirrorPulse.Cli;
 
@@ -608,7 +609,8 @@ public sealed partial class MirrorPulseCliHostOperations : IMirrorPulseCliHostOp
                         ParseMap(command.Arguments, "root"),
                         GetOptionalOption(command.Arguments, "secret"),
                         !HasFlag(command.Arguments, "disabled"),
-                        ParseSecretFields(command.Arguments, allowRemoval: false)), cancellationToken)
+                        ParseSecretFields(command.Arguments, allowRemoval: false),
+                        ParseAuthorizationIds(command.Arguments)), cancellationToken)
                         .ConfigureAwait(false);
                     human = "Adapter instance created: " +
                         ((MirrorPulse.Core.Host.MirrorPulseAppStatusResponse)result).CreatedInstanceId;
@@ -623,9 +625,24 @@ public sealed partial class MirrorPulseCliHostOperations : IMirrorPulseCliHostOp
                         GetOptionalOption(command.Arguments, "secret"),
                         HasFlag(command.Arguments, "remove-credential"),
                         ParseSecretFields(command.Arguments, allowRemoval: true),
-                        ParseConfigurationRevision(command.Arguments)), cancellationToken)
+                        ParseConfigurationRevision(command.Arguments), ParseAuthorizationIds(command.Arguments)), cancellationToken)
                         .ConfigureAwait(false);
                     human = "Adapter instance configured: " + instanceId;
+                    break;
+                case ("instance", "auth-start"):
+                case ("instance", "auth-poll"):
+                case ("instance", "auth-cancel"):
+                    AdapterAuthorizationStatus authorization = await RunAuthorizationCommandAsync(command, cancellationToken).ConfigureAwait(false);
+                    result = authorization;
+                    human = $"{authorization.Phase} · {authorization.AuthorizationId:D} · deployment {authorization.DeploymentId}";
+                    if (authorization.InteractionUri is not null) human += $"{Environment.NewLine}{authorization.InteractionUri.AbsoluteUri}";
+                    exitCode = authorization.Phase switch
+                    {
+                        AdapterAuthorizationPhase.Pending => MirrorPulseControlExitCodes.Pending,
+                        AdapterAuthorizationPhase.Cancelled => MirrorPulseControlExitCodes.Cancelled,
+                        AdapterAuthorizationPhase.Failed or AdapterAuthorizationPhase.Expired => MirrorPulseControlExitCodes.Validation,
+                        _ => MirrorPulseControlExitCodes.Success,
+                    };
                     break;
                 case ("instance", "enable"):
                 case ("instance", "disable"):
@@ -918,6 +935,33 @@ public sealed partial class MirrorPulseCliHostOperations : IMirrorPulseCliHostOp
         if (revision is null) return null;
         return Guid.TryParseExact(revision, "D", out Guid value) ? value
             : throw new ArgumentException("The --revision option requires a configuration revision from instance list --json.");
+    }
+
+    private Task<AdapterAuthorizationStatus> RunAuthorizationCommandAsync(MirrorPulseCliCommand command, CancellationToken token)
+    {
+        IReadOnlyList<string> args = command.Arguments;
+        if (command.Path[1].Equals("auth-start", StringComparison.OrdinalIgnoreCase))
+            return _client.StartInstanceAuthorizationAsync(new(GetRequiredOption(args, "install-id"),
+                GetRequiredOption(args, "callback"), ParseMap(args, "config"), GetOptionalOption(args, "instance-id"),
+                ParseConfigurationRevision(args), GetOptionalOption(args, "draft-id")), token);
+
+        if (args.Count != 1 || !Guid.TryParseExact(args[0], "D", out Guid id) || id == Guid.Empty)
+            throw new ArgumentException("Provide one authorization ID returned by instance auth-start.");
+        return command.Path[1].Equals("auth-cancel", StringComparison.OrdinalIgnoreCase)
+            ? _client.CancelInstanceAuthorizationAsync(id, token) : _client.PollInstanceAuthorizationAsync(id, token);
+    }
+
+    private static Guid[]? ParseAuthorizationIds(IReadOnlyList<string> arguments)
+    {
+        var ids = new List<Guid>();
+        for (int index = 0; index < arguments.Count; index++)
+        {
+            if (!arguments[index].Equals("--authorization", StringComparison.OrdinalIgnoreCase)) continue;
+            if (++index >= arguments.Count || !Guid.TryParseExact(arguments[index], "D", out Guid id) || id == Guid.Empty)
+                throw new ArgumentException("The --authorization option requires an ID returned by instance auth-start.");
+            ids.Add(id);
+        }
+        return ids.Count == 0 ? null : ids.ToArray();
     }
 
     private static (Guid Id, Guid OperationId, bool Recursive) ParseRetirementOptions(IReadOnlyList<string> arguments, bool preparation)

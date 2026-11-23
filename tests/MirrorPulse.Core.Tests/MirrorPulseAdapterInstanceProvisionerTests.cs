@@ -213,7 +213,7 @@ public sealed class MirrorPulseAdapterInstanceProvisionerTests
         }
     }
 
-    private sealed class MemoryCredentialStore : ISecureCredentialStore
+    internal sealed class MemoryCredentialStore : ISecureCredentialStore
     {
         private readonly Dictionary<string, byte[]> _values = new(StringComparer.Ordinal);
 

@@ -40,7 +40,8 @@ public static class MirrorPulseCliCommandLine
             ["adapter"] = NewSet("list", "install", "remove", "update", "uninstall"),
             ["conflict"] = NewSet("list", "show", "snooze", "resolve", "refresh-version"),
             ["host"] = NewSet("status", "start", "stop", "restart"),
-            ["instance"] = NewSet("list", "create", "configure", "enable", "disable", "select-version"),
+            ["instance"] = NewSet("list", "create", "configure", "enable", "disable", "select-version",
+                "auth-start", "auth-poll", "auth-cancel"),
             ["operation"] = NewSet("get", "watch", "cancel"),
             ["root"] = NewSet("list", "prepare-rename", "execute-rename", "cancel-rename", "recover"),
             ["namespace"] = NewSet("member", "birth", "protection", "remote", "transfer"),
@@ -223,10 +224,14 @@ public static class MirrorPulseCliHelp
           instance list|create|configure|enable|disable|select-version
                                          Manage Adapter instances.
           instance create --install-id ID --name NAME [--config KEY=VALUE] [--root KEY=LABEL]
-                         [--secret-field KEY=VALUE]
+                         [--secret-field KEY=VALUE] [--authorization ID]
           instance configure --instance-id ID --name NAME [--revision GUID] [--config KEY=VALUE]
-                             [--secret-field KEY=VALUE] [--clear-secret-field KEY]
+                             [--secret-field KEY=VALUE] [--clear-secret-field KEY] [--authorization ID]
                                          For signed forms, use the revision from instance list --json.
+          instance auth-start --install-id ID --callback ID [--config KEY=VALUE]
+                              [--instance-id ID --revision GUID | --draft-id ID]
+          instance auth-poll|auth-cancel AUTHORIZATION_ID
+                                         Follow the returned page, poll, and pass a ready authorization to save.
           root list                      Inspect managed roots and namespace recovery.
           root prepare-rename ROOT_ID LABEL
                                          Prepare a Label-only managed root rename.

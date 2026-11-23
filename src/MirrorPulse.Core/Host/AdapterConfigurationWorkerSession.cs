@@ -42,12 +42,19 @@ internal sealed class AdapterConfigurationWorkerSession : IAsyncDisposable
     public static async Task<AdapterConfigurationWorkerSession> OpenAsync(InstalledAdapter installation,
         AdapterInstance? instance, IReadOnlyDictionary<string, string> configuration, string authorizationRoot,
         AdapterConfigurationCallbackRequest invocation, ISecureCredentialStore credentials,
+        CancellationToken cancellationToken) => await OpenAsync(installation, instance, instance?.InstanceId ?? InstanceId.New(),
+            configuration, authorizationRoot, invocation, credentials, cancellationToken).ConfigureAwait(false);
+
+    public static async Task<AdapterConfigurationWorkerSession> OpenAsync(InstalledAdapter installation,
+        AdapterInstance? instance, InstanceId targetId, IReadOnlyDictionary<string, string> configuration,
+        string authorizationRoot, AdapterConfigurationCallbackRequest invocation, ISecureCredentialStore credentials,
         CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         if (!installation.IsSigned || installation.Manifest.Presentation is not { } presentation)
             throw new NotSupportedException("Authorization requires a signed Adapter configuration form.");
-        if (instance is not null && (instance.InstallId != installation.InstallId || instance.AdapterId != installation.AdapterId))
+        if (instance is not null && (instance.InstanceId != targetId || instance.InstallId != installation.InstallId ||
+                instance.AdapterId != installation.AdapterId))
             throw new InvalidDataException("The Adapter installation does not match the selected deployment.");
         if (invocation.InvocationId == Guid.Empty || invocation.ExpiresAt <= DateTimeOffset.UtcNow)
             throw new InvalidDataException("The Adapter authorization has expired.");
@@ -56,7 +63,7 @@ internal sealed class AdapterConfigurationWorkerSession : IAsyncDisposable
         var preview = SignedAdapterFormValidator.Preview(presentation, instance, configuration);
         var sessionId = WorkerSessionId.New();
         string workspace = WorkerPersistentStateDirectory.Prepare(authorizationRoot, new InstanceId(sessionId.Value));
-        var context = new AdapterInstance(installation.AdapterId, installation.InstallId, instance?.InstanceId ?? InstanceId.New(),
+        var context = new AdapterInstance(installation.AdapterId, installation.InstallId, targetId,
             instance?.DisplayName ?? presentation.Resolve(null).Title, preview, instance?.CredentialReferences ?? [],
             Path.Combine(workspace, "files"), Path.Combine(workspace, "transfer"), false, AdapterLifecycleState.Disabled,
             sessionId, DateTimeOffset.UtcNow)
