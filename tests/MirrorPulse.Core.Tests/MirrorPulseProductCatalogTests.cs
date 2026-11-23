@@ -329,6 +329,73 @@ public sealed class MirrorPulseProductCatalogTests
     }
 
     [TestMethod]
+    [DataRow("webdav", true)]
+    [DataRow("smb", true)]
+    [DataRow("webdav", false)]
+    public async Task NetworkFormMigrationKeepsTheAuthorizedRootCredentialAndSupportsRollback(string provider, bool authorized)
+    {
+        string root = Directory.CreateTempSubdirectory("MirrorPulse-network-migration-").FullName;
+        try
+        {
+            var paths = new MirrorPulseStoragePaths(Path.Combine(root, "sync"), Path.Combine(root, "state"));
+            AdapterId adapterId = AdapterId.Parse("com.mirrorpulse.adapter." + provider);
+            AdapterRootDefinition definition = new(provider, "Documents", "Documents", false);
+            var entrypoints = new Dictionary<string, string>
+            {
+                ["win-x64"] = "worker/win-x64/worker.exe",
+                ["win-arm64"] = "worker/win-arm64/worker.exe",
+            };
+            AdapterManifest Manifest(int schema, string version, int? rootLimit) => new(schema, adapterId, "MirrorPulse", version,
+                new(2, 2), entrypoints, new(null), new(null, rootLimit), new(true, false, true, true), ["en-US"], "1.0.0", [definition]);
+            InstalledAdapter Installation(AdapterManifest manifest) => new(manifest, InstallId.New(), Path.Combine(root, manifest.Version),
+                new(new string('A', 64)), AdapterInstallSource.LocalFile, null, true, DateTimeOffset.UtcNow, AdapterLifecycleState.Installed);
+            InstalledAdapter previous = Installation(Manifest(1, "0.9.0", null));
+            InstalledAdapter next = Installation(Manifest(2, "1.0.0", 1) with
+            {
+                Presentation = new("logo.png", new Dictionary<string, AdapterPackageLocale>
+                {
+                    ["en-us"] = new("Network provider", "Test fixture", [new(AdapterPackageFormKind.Password, "Password", "password")]),
+                }),
+            });
+            InstanceId id = InstanceId.New();
+            const string scopedReference = "authorized-reference";
+            string scopedKey = $"root.{provider}.credentialReference";
+            var instance = new AdapterInstance(adapterId, previous.InstallId, id, "Documents", new Dictionary<string, string>
+            {
+                ["credentialReference"] = "deployment-default",
+                [scopedKey] = authorized ? scopedReference : "other-deployment-reference",
+            }, ["deployment-default", scopedReference], Path.Combine(root, "files"), Path.Combine(root, "transfers"), true,
+                AdapterLifecycleState.Enabled, null, DateTimeOffset.UtcNow);
+            RootRegistration registration = AdapterRootRegistrationMapper.Map(adapterId, id, definition, RootRegistrationState.Active);
+            await using var catalog = await MirrorPulseProductCatalog.OpenAsync(paths);
+            await catalog.SaveAdapterTopologyAsync(new([previous, next], [instance], [registration]));
+
+            if (!authorized)
+            {
+                await Assert.ThrowsExactlyAsync<AdapterConfigurationValidationException>(() => catalog.SelectInstanceInstallationAsync(id, next.InstallId));
+                var retained = await catalog.ReadAdapterTopologyAsync();
+                Assert.AreEqual(previous.InstallId, retained.Instances.Single().InstallId);
+                Assert.AreEqual("other-deployment-reference", retained.Instances.Single().Configuration[scopedKey]);
+                return;
+            }
+
+            var upgraded = await catalog.SelectInstanceInstallationAsync(id, next.InstallId);
+            AdapterInstance updated = upgraded.Instances.Single();
+            Assert.AreEqual(scopedReference, updated.CredentialBindings!["password"]);
+            Assert.IsFalse(updated.Configuration.ContainsKey(scopedKey));
+            Assert.IsFalse(updated.Configuration.ContainsKey("credentialReference"));
+            if (provider == "webdav") Assert.AreEqual("Basic", updated.Configuration["authentication"]);
+            CollectionAssert.AreEqual(instance.CredentialReferences.ToArray(), updated.CredentialReferences.ToArray());
+            Assert.AreEqual(registration.RootId, upgraded.Roots.Single().RootId);
+            var rolledBack = await catalog.SelectInstanceInstallationAsync(id, previous.InstallId);
+            Assert.AreEqual(scopedReference, rolledBack.Instances.Single().Configuration["credentialReference"]);
+            Assert.IsNull(rolledBack.Instances.Single().CredentialBindings);
+            Assert.AreEqual(registration.RootId, rolledBack.Roots.Single().RootId);
+        }
+        finally { Directory.Delete(root, recursive: true); }
+    }
+
+    [TestMethod]
     public async Task VersionOneCatalogUpgradesWithoutLosingWorkerFingerprint()
     {
         string root = Path.Combine(Path.GetTempPath(), "MirrorPulse-tests", Guid.NewGuid().ToString("N"));

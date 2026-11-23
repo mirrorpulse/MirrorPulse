@@ -265,7 +265,7 @@ public sealed partial class MirrorPulseProductCatalog : IInstalledAdapterCatalog
                 throw new InvalidDataException("An instance cannot select another Adapter's installation.");
             }
 
-            IReadOnlyDictionary<string, string> configuration = PrepareSelectedInstallationConfiguration(current, instance, selected);
+            var (configuration, credentialBindings) = PrepareSelectedInstallationConfiguration(current, instance, selected);
             AdapterInstance[] instances = current.Instances.Select(item =>
                 item.InstanceId != instanceId ? item : new AdapterInstance(
                     item.AdapterId, installId, item.InstanceId, item.DisplayName,
@@ -273,7 +273,7 @@ public sealed partial class MirrorPulseProductCatalog : IInstalledAdapterCatalog
                     item.TransferCacheDirectory, item.Enabled, item.LifecycleState,
                     null, item.CreatedAt)
                 {
-                    CredentialBindings = item.CredentialBindings,
+                    CredentialBindings = credentialBindings,
                     ConfigurationRevision = installId == item.InstallId ? item.ConfigurationRevision : Guid.NewGuid(),
                 }).ToArray();
             var next = new MirrorPulseAdapterTopology(current.Installations, instances, current.Roots);
@@ -291,27 +291,69 @@ public sealed partial class MirrorPulseProductCatalog : IInstalledAdapterCatalog
         }
     }
 
-    private static IReadOnlyDictionary<string, string> PrepareSelectedInstallationConfiguration(
-        MirrorPulseAdapterTopology topology, AdapterInstance instance, InstalledAdapter selected)
+    private static (IReadOnlyDictionary<string, string> Configuration, IReadOnlyDictionary<string, string>? CredentialBindings)
+        PrepareSelectedInstallationConfiguration(
+            MirrorPulseAdapterTopology topology, AdapterInstance instance, InstalledAdapter selected)
     {
-        if (selected.InstallId == instance.InstallId || selected.Manifest.Presentation is not { } presentation ||
-            selected.Manifest.InstancePolicy.MaximumRootDefinitions != 1)
-            return instance.Configuration;
+        if (selected.InstallId == instance.InstallId) return (instance.Configuration, instance.CredentialBindings);
+        bool networkProvider = instance.AdapterId.Value is "com.mirrorpulse.adapter.webdav" or "com.mirrorpulse.adapter.smb";
+        if (selected.Manifest.Presentation is not { } presentation || selected.Manifest.InstancePolicy.MaximumRootDefinitions != 1)
+        {
+            return networkProvider && selected.Manifest.Presentation is null && instance.CredentialBindings is not null
+                ? (PrepareLegacyNetworkConfiguration(instance), null)
+                : (instance.Configuration, instance.CredentialBindings);
+        }
 
         RootRegistration[] roots = topology.Roots.Where(root => root.InstanceId == instance.InstanceId &&
             root.State != RootRegistrationState.Removed).ToArray();
         if (roots.Length > 1)
             throw new AdapterConfigurationValidationException("This Adapter version requires a deployment with one folder.");
-        if (roots.Length == 0) return instance.Configuration;
 
         var configuration = new Dictionary<string, string>(instance.Configuration, StringComparer.Ordinal);
-        string prefix = $"root.{roots[0].UniquenessKey}.";
-        foreach (AdapterPackageFormControl field in presentation.Resolve(null).Controls)
+        string? prefix = roots.Length == 1 ? $"root.{roots[0].UniquenessKey}." : null;
+        IReadOnlyList<AdapterPackageFormControl> controls = presentation.Resolve(null).Controls;
+        if (prefix is not null)
         {
-            if (field.Key is { } key && field.Kind is not (AdapterPackageFormKind.Password or AdapterPackageFormKind.Callback) &&
-                configuration.Remove(prefix + key, out string? value))
-                configuration[key] = value;
+            foreach (AdapterPackageFormControl field in controls)
+            {
+                if (field.Key is { } key && field.Kind is not (AdapterPackageFormKind.Password or AdapterPackageFormKind.Callback) &&
+                    configuration.Remove(prefix + key, out string? value))
+                    configuration[key] = value;
+            }
         }
+
+        var bindings = instance.CredentialBindings;
+        if (networkProvider && controls.Any(field => field.Kind == AdapterPackageFormKind.Password && field.Key == "password"))
+        {
+            bindings ??= BindLegacyNetworkCredential(instance, configuration, prefix);
+            configuration.Remove("credentialReference");
+            if (prefix is not null) configuration.Remove(prefix + "credentialReference");
+        }
+        return (configuration, bindings);
+    }
+
+    private static Dictionary<string, string> BindLegacyNetworkCredential(AdapterInstance instance,
+        Dictionary<string, string> configuration, string? rootPrefix)
+    {
+        string? reference = rootPrefix is not null && configuration.TryGetValue(rootPrefix + "credentialReference", out string? scoped)
+            ? scoped : configuration.GetValueOrDefault("credentialReference");
+        var bindings = new Dictionary<string, string>(StringComparer.Ordinal);
+        if (string.IsNullOrEmpty(reference)) return bindings;
+        if (!instance.CredentialReferences.Contains(reference, StringComparer.Ordinal))
+            throw new AdapterConfigurationValidationException("The legacy credential is unavailable for this deployment.");
+        bindings.Add("password", reference);
+        if (instance.AdapterId.Value == "com.mirrorpulse.adapter.webdav") configuration.TryAdd("authentication", "Basic");
+        return bindings;
+    }
+
+    private static Dictionary<string, string> PrepareLegacyNetworkConfiguration(AdapterInstance instance)
+    {
+        var configuration = new Dictionary<string, string>(instance.Configuration, StringComparer.Ordinal);
+        if (instance.CredentialBindings!.TryGetValue("password", out string? reference) &&
+            (instance.AdapterId.Value != "com.mirrorpulse.adapter.webdav" || configuration.GetValueOrDefault("authentication") != "None"))
+            configuration["credentialReference"] = reference;
+        else
+            configuration.Remove("credentialReference");
         return configuration;
     }
 

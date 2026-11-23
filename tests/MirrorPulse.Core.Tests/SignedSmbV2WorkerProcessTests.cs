@@ -61,23 +61,56 @@ public sealed class SignedSmbV2WorkerProcessTests
             }
             configuration["root.offline.networkPath"] = "invalid-network-path";
             configuration["root.offline.credentialReference"] = "must-not-be-requested";
-            InstanceId instanceId = InstanceId.New();
-            var instance = new AdapterInstance(installed.AdapterId, installed.InstallId, instanceId, "SMB",
-                configuration, ["left-credential", "right-credential"], Path.Combine(directory, "files"), Path.Combine(directory, "transfers"),
-                true, AdapterLifecycleState.Enabled, null, DateTimeOffset.UtcNow);
-            RootRegistration Root(string key, bool enabled = true) => new(installed.AdapterId, instanceId, RootId.New(), key,
-                key, key, false, enabled ? RootRegistrationState.Active : RootRegistrationState.Disabled,
-                DateTimeOffset.UtcNow, RootIdentityScope.InstanceRoot);
-            var topology = new MirrorPulseAdapterTopology([installed], [instance], [Root("left"), Root("right"), Root("offline", false)]);
-            await catalog.SaveAdapterTopologyAsync(topology);
-            await using var supervisor = new AdapterInstanceProcessSupervisor(catalog, new RootCredentialStore());
-            await supervisor.StartAsync(topology);
+            AdapterInstance leftDeployment;
+            AdapterInstance rightDeployment;
+            string leftKey = "left";
+            string rightKey = "right";
+            ISecureCredentialStore credentialStore;
             using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(45));
-            while (true)
+            if (installed.Manifest.Presentation is null)
             {
-                MirrorPulseInstanceRuntimeState? state = await catalog.ReadInstanceRuntimeStateAsync(instanceId, timeout.Token);
-                if (state?.Phase == "Connected") break;
-                if (state?.Phase is "Worker failed" or "Worker error") Assert.Fail("SMB Worker failed: " + state.LastErrorCode);
+                var legacyInstanceId = InstanceId.New();
+                leftDeployment = new(installed.AdapterId, installed.InstallId, legacyInstanceId, "SMB",
+                    configuration, ["left-credential", "right-credential"], Path.Combine(directory, "files"), Path.Combine(directory, "transfers"),
+                    true, AdapterLifecycleState.Enabled, null, DateTimeOffset.UtcNow);
+                rightDeployment = leftDeployment;
+                RootRegistration Root(string key, bool enabled = true) => new(installed.AdapterId, legacyInstanceId, RootId.New(), key,
+                    key, key, false, enabled ? RootRegistrationState.Active : RootRegistrationState.Disabled,
+                    DateTimeOffset.UtcNow, RootIdentityScope.InstanceRoot);
+                await catalog.SaveAdapterTopologyAsync(new([installed], [leftDeployment], [Root("left"), Root("right"), Root("offline", false)]), timeout.Token);
+                credentialStore = new RootCredentialStore();
+            }
+            else
+            {
+                Assert.AreEqual("smb", installed.Manifest.RootDefinitions.Single().Key);
+                var signedCredentials = new MirrorPulseAdapterInstanceProvisionerTests.MemoryCredentialStore();
+                var provisioner = new MirrorPulseAdapterInstanceProvisioner(catalog, signedCredentials, paths.DataRootPath);
+                Task<AdapterInstance> CreateNamedDeploymentAsync(string key) => provisioner.CreateAsync(new(installed.InstallId.ToString(), key,
+                    new Dictionary<string, string>
+                    {
+                        ["networkPath"] = configuration[$"root.{key}.networkPath"],
+                        ["username"] = configuration[$"root.{key}.username"],
+                        ["domain"] = configuration[$"root.{key}.domain"],
+                    }, new Dictionary<string, string> { ["smb"] = key }, null, true,
+                    new Dictionary<string, string?> { ["password"] = Fixture(key.ToUpperInvariant() + "_PASSWORD") }), timeout.Token);
+                leftDeployment = await CreateNamedDeploymentAsync("left");
+                rightDeployment = await CreateNamedDeploymentAsync("right");
+                Assert.AreNotEqual(leftDeployment.CredentialBindings!["password"], rightDeployment.CredentialBindings!["password"]);
+                leftKey = rightKey = "smb";
+                credentialStore = signedCredentials;
+            }
+
+            MirrorPulseAdapterTopology topology = await catalog.ReadAdapterTopologyAsync(timeout.Token);
+            InstanceId instanceId = leftDeployment.InstanceId;
+            await using var supervisor = new AdapterInstanceProcessSupervisor(catalog, credentialStore);
+            await supervisor.StartAsync(topology);
+            while (!supervisor.IsConnected(instanceId) || !supervisor.IsConnected(rightDeployment.InstanceId))
+            {
+                foreach (AdapterInstance deployment in topology.Instances)
+                {
+                    MirrorPulseInstanceRuntimeState? state = await catalog.ReadInstanceRuntimeStateAsync(deployment.InstanceId, timeout.Token);
+                    if (state?.Phase is "Worker failed" or "Worker error") Assert.Fail("SMB Worker failed: " + state.LastErrorCode);
+                }
                 await Task.Delay(25, timeout.Token);
             }
             AdapterInstanceWorkerPayload launch = AdapterInstanceWorkerLaunchResolver.Resolve(topology, instanceId, WorkerSessionId.New(), runtime);
@@ -99,28 +132,28 @@ public sealed class SignedSmbV2WorkerProcessTests
             byte[] content = "new SMB content"u8.ToArray();
             using var upload = new MemoryStream(content);
             string revision = await supervisor.UploadAsync(new(instanceId, "upload.bin", null, upload, content.Length,
-                Guid.NewGuid(), RootKey: "left"), timeout.Token);
-            Assert.IsNull(await supervisor.StatAsync(new(instanceId, "upload.bin", "right"), timeout.Token));
-            string oldRevision = (await supervisor.StatAsync(new(instanceId, "same.txt", "left"), timeout.Token))!;
+                Guid.NewGuid(), RootKey: leftKey), timeout.Token);
+            Assert.IsNull(await supervisor.StatAsync(new(rightDeployment.InstanceId, "upload.bin", rightKey), timeout.Token));
+            string oldRevision = (await supervisor.StatAsync(new(instanceId, "same.txt", leftKey), timeout.Token))!;
             using var replacement = new MemoryStream(content);
             await supervisor.UploadAsync(new(instanceId, "same.txt", oldRevision, replacement, content.Length,
-                Guid.NewGuid(), RootKey: "left"), timeout.Token);
+                Guid.NewGuid(), RootKey: leftKey), timeout.Token);
             using var stale = new MemoryStream(content);
             await Assert.ThrowsExactlyAsync<MirrorPulseWorkerMutationConflictException>(async () =>
                 await supervisor.UploadAsync(new(instanceId, "same.txt", oldRevision, stale, content.Length,
-                    Guid.NewGuid(), RootKey: "left"), timeout.Token));
+                    Guid.NewGuid(), RootKey: leftKey), timeout.Token));
             CollectionAssert.AreEqual(content, await File.ReadAllBytesAsync(Path.Combine(source, "left", "same.txt"), timeout.Token));
             Assert.AreEqual("right", await File.ReadAllTextAsync(Path.Combine(source, "right", "same.txt"), timeout.Token));
-            var move = new MirrorPulseWorkerMoveRequest(instanceId, "upload.bin", "moved.bin", revision, false, Guid.NewGuid(), "left", "left");
+            var move = new MirrorPulseWorkerMoveRequest(instanceId, "upload.bin", "moved.bin", revision, false, Guid.NewGuid(), leftKey, leftKey);
             string movedRevision = await supervisor.MoveAsync(move, timeout.Token);
             Assert.AreEqual(movedRevision, await supervisor.MoveAsync(move, timeout.Token));
-            await supervisor.CreateDirectoryAsync(new(instanceId, "left", "empty", Guid.NewGuid()), timeout.Token);
-            string directoryRevision = (await supervisor.StatAsync(new(instanceId, "empty", "left"), timeout.Token))!;
-            await supervisor.DeleteAsync(new(instanceId, "empty", directoryRevision, true, Guid.NewGuid(), "left"), timeout.Token);
+            await supervisor.CreateDirectoryAsync(new(instanceId, leftKey, "empty", Guid.NewGuid()), timeout.Token);
+            string directoryRevision = (await supervisor.StatAsync(new(instanceId, "empty", leftKey), timeout.Token))!;
+            await supervisor.DeleteAsync(new(instanceId, "empty", directoryRevision, true, Guid.NewGuid(), leftKey), timeout.Token);
             Assert.IsFalse(Directory.Exists(Path.Combine(source, "left", "empty")));
-            await supervisor.DeleteAsync(new(instanceId, "moved.bin", movedRevision, false, Guid.NewGuid(), "left"), timeout.Token);
-            Assert.IsNull(await supervisor.StatAsync(new(instanceId, "moved.bin", "left"), timeout.Token));
-            Assert.IsEmpty(Directory.EnumerateFiles(instance.TransferCacheDirectory));
+            await supervisor.DeleteAsync(new(instanceId, "moved.bin", movedRevision, false, Guid.NewGuid(), leftKey), timeout.Token);
+            Assert.IsNull(await supervisor.StatAsync(new(instanceId, "moved.bin", leftKey), timeout.Token));
+            Assert.IsEmpty(Directory.EnumerateFiles(leftDeployment.TransferCacheDirectory));
         }
         finally
         {

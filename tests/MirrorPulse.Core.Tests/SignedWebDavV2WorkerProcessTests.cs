@@ -55,19 +55,53 @@ public sealed class SignedWebDavV2WorkerProcessTests
                 ["root.offline.endpoint"] = "invalid-endpoint",
                 ["root.offline.credentialReference"] = "unavailable-credential"
             };
-            InstanceId instanceId = InstanceId.New();
-            var instance = new AdapterInstance(installed.AdapterId, installed.InstallId, instanceId, "WebDAV",
-                configuration, ["left-credential", "right-credential"], Path.Combine(directory, "files"), Path.Combine(directory, "transfers"),
-                true, AdapterLifecycleState.Enabled, null, DateTimeOffset.UtcNow);
-            RootRegistration Root(string key, bool enabled = true) => new(installed.AdapterId, instanceId, RootId.New(), key,
-                key, key, false, enabled ? RootRegistrationState.Active : RootRegistrationState.Disabled,
-                DateTimeOffset.UtcNow, RootIdentityScope.InstanceRoot);
-            var topology = new MirrorPulseAdapterTopology([installed], [instance], [Root("left"), Root("right"), Root("offline", false)]);
-            await catalog.SaveAdapterTopologyAsync(topology);
-            await using var supervisor = new AdapterInstanceProcessSupervisor(catalog, new RootCredentialStore());
-            await supervisor.StartAsync(topology);
+            AdapterInstance leftDeployment;
+            AdapterInstance rightDeployment;
+            string leftKey = "left";
+            string rightKey = "right";
+            ISecureCredentialStore credentialStore;
             using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(45));
-            while ((await catalog.ReadInstanceRuntimeStateAsync(instanceId, timeout.Token))?.Phase != "Connected")
+            if (installed.Manifest.Presentation is null)
+            {
+                var legacyInstanceId = InstanceId.New();
+                leftDeployment = new(installed.AdapterId, installed.InstallId, legacyInstanceId, "WebDAV",
+                    configuration, ["left-credential", "right-credential"], Path.Combine(directory, "files"), Path.Combine(directory, "transfers"),
+                    true, AdapterLifecycleState.Enabled, null, DateTimeOffset.UtcNow);
+                rightDeployment = leftDeployment;
+                RootRegistration Root(string key, bool enabled = true) => new(installed.AdapterId, legacyInstanceId, RootId.New(), key,
+                    key, key, false, enabled ? RootRegistrationState.Active : RootRegistrationState.Disabled,
+                    DateTimeOffset.UtcNow, RootIdentityScope.InstanceRoot);
+                await catalog.SaveAdapterTopologyAsync(new([installed], [leftDeployment], [Root("left"), Root("right"), Root("offline", false)]), timeout.Token);
+                credentialStore = new RootCredentialStore();
+            }
+            else
+            {
+                Assert.AreEqual("webdav", installed.Manifest.RootDefinitions.Single().Key);
+                var signedCredentials = new MirrorPulseAdapterInstanceProvisionerTests.MemoryCredentialStore();
+                var provisioner = new MirrorPulseAdapterInstanceProvisioner(catalog, signedCredentials, paths.DataRootPath);
+                leftDeployment = await provisioner.CreateAsync(new(installed.InstallId.ToString(), "left", new Dictionary<string, string>
+                {
+                    ["endpoint"] = left.Endpoint.AbsoluteUri,
+                    ["authentication"] = "Basic",
+                    ["username"] = "user-left",
+                }, new Dictionary<string, string> { ["webdav"] = "left" }, null, true,
+                    new Dictionary<string, string?> { ["password"] = "secret-left" }), timeout.Token);
+                rightDeployment = await provisioner.CreateAsync(new(installed.InstallId.ToString(), "right", new Dictionary<string, string>
+                {
+                    ["endpoint"] = right.Endpoint.AbsoluteUri,
+                    ["authentication"] = "Bearer",
+                }, new Dictionary<string, string> { ["webdav"] = "right" }, null, true,
+                    new Dictionary<string, string?> { ["password"] = "secret-right" }), timeout.Token);
+                Assert.AreNotEqual(leftDeployment.CredentialBindings!["password"], rightDeployment.CredentialBindings!["password"]);
+                leftKey = rightKey = "webdav";
+                credentialStore = signedCredentials;
+            }
+
+            MirrorPulseAdapterTopology topology = await catalog.ReadAdapterTopologyAsync(timeout.Token);
+            InstanceId instanceId = leftDeployment.InstanceId;
+            await using var supervisor = new AdapterInstanceProcessSupervisor(catalog, credentialStore);
+            await supervisor.StartAsync(topology);
+            while (!supervisor.IsConnected(instanceId) || !supervisor.IsConnected(rightDeployment.InstanceId))
                 await Task.Delay(25, timeout.Token);
             AdapterInstanceWorkerPayload launch = AdapterInstanceWorkerLaunchResolver.Resolve(topology, instanceId, WorkerSessionId.New(), runtime);
             VerifyPrivateRuntime(launch.LaunchRequest.ExecutablePath);
@@ -89,32 +123,32 @@ public sealed class SignedWebDavV2WorkerProcessTests
             byte[] content = Encoding.UTF8.GetBytes("new content");
             using var upload = new MemoryStream(content);
             string revision = await supervisor.UploadAsync(new(instanceId, "upload.bin", null, upload, content.Length,
-                Guid.NewGuid(), RootKey: "left"), timeout.Token);
+                Guid.NewGuid(), RootKey: leftKey), timeout.Token);
             Assert.AreEqual(SignedWebDavV2HttpFixture.Revision(content), revision);
-            Assert.IsNull(await supervisor.StatAsync(new(instanceId, "upload.bin", "right"), timeout.Token));
+            Assert.IsNull(await supervisor.StatAsync(new(rightDeployment.InstanceId, "upload.bin", rightKey), timeout.Token));
             using var stale = new MemoryStream(content);
             await Assert.ThrowsExactlyAsync<MirrorPulseWorkerMutationConflictException>(async () =>
                 await supervisor.UploadAsync(new(instanceId, "same.txt", "\"stale\"", stale, content.Length,
-                    Guid.NewGuid(), RootKey: "left"), timeout.Token));
-            string oldRevision = (await supervisor.StatAsync(new(instanceId, "same.txt", "left"), timeout.Token))!;
+                    Guid.NewGuid(), RootKey: leftKey), timeout.Token));
+            string oldRevision = (await supervisor.StatAsync(new(instanceId, "same.txt", leftKey), timeout.Token))!;
             using var replacement = new MemoryStream(content);
             await supervisor.UploadAsync(new(instanceId, "same.txt", oldRevision, replacement, content.Length,
-                Guid.NewGuid(), RootKey: "left"), timeout.Token);
+                Guid.NewGuid(), RootKey: leftKey), timeout.Token);
             Assert.AreEqual("new content", Encoding.UTF8.GetString(left.Files["same.txt"]));
             Assert.AreEqual("right", Encoding.UTF8.GetString(right.Files["same.txt"]));
             Guid moveId = Guid.NewGuid();
-            var move = new MirrorPulseWorkerMoveRequest(instanceId, "upload.bin", "moved.bin", revision, false, moveId, "left", "left");
+            var move = new MirrorPulseWorkerMoveRequest(instanceId, "upload.bin", "moved.bin", revision, false, moveId, leftKey, leftKey);
             string movedRevision = await supervisor.MoveAsync(move, timeout.Token);
             Assert.AreEqual(movedRevision, await supervisor.MoveAsync(move, timeout.Token));
             CollectionAssert.AreEqual(content, left.Files["moved.bin"]);
-            await supervisor.CreateDirectoryAsync(new(instanceId, "left", "empty", Guid.NewGuid()), timeout.Token);
+            await supervisor.CreateDirectoryAsync(new(instanceId, leftKey, "empty", Guid.NewGuid()), timeout.Token);
             Assert.IsTrue(left.Directories.ContainsKey("empty"));
-            await supervisor.DeleteAsync(new(instanceId, "empty", "\"directory\"", true, Guid.NewGuid(), "left"), timeout.Token);
+            await supervisor.DeleteAsync(new(instanceId, "empty", "\"directory\"", true, Guid.NewGuid(), leftKey), timeout.Token);
             Assert.IsFalse(left.Directories.ContainsKey("empty"));
             Assert.IsEmpty(left.Locks);
-            await supervisor.DeleteAsync(new(instanceId, "moved.bin", movedRevision, false, Guid.NewGuid(), "left"), timeout.Token);
-            Assert.IsNull(await supervisor.StatAsync(new(instanceId, "moved.bin", "left"), timeout.Token));
-            Assert.IsEmpty(Directory.EnumerateFiles(instance.TransferCacheDirectory));
+            await supervisor.DeleteAsync(new(instanceId, "moved.bin", movedRevision, false, Guid.NewGuid(), leftKey), timeout.Token);
+            Assert.IsNull(await supervisor.StatAsync(new(instanceId, "moved.bin", leftKey), timeout.Token));
+            Assert.IsEmpty(Directory.EnumerateFiles(leftDeployment.TransferCacheDirectory));
         }
         finally { if (Directory.Exists(directory)) Directory.Delete(directory, true); }
     }
