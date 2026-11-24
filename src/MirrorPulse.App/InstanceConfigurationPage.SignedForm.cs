@@ -81,6 +81,10 @@ public sealed partial class InstanceConfigurationPage
         var check = new Button { Content = "Check authorization", Visibility = Visibility.Collapsed };
         var cancel = new Button { Content = "Cancel authorization", Visibility = Visibility.Collapsed };
         var status = new TextBlock { TextWrapping = TextWrapping.Wrap };
+        AutomationProperties.SetAutomationId(start, $"AdapterCallback.{key}.Start");
+        AutomationProperties.SetAutomationId(check, $"AdapterCallback.{key}.Check");
+        AutomationProperties.SetAutomationId(cancel, $"AdapterCallback.{key}.Cancel");
+        AutomationProperties.SetAutomationId(status, $"AdapterCallback.{key}.Status");
         var buttons = new StackPanel { Spacing = 8 };
         buttons.Children.Add(start);
         buttons.Children.Add(open);

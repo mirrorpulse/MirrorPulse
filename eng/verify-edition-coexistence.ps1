@@ -3,7 +3,8 @@ param(
     [Parameter(Mandatory)][string]$EvidencePath,
     [ValidateSet('X64', 'Arm64')][string]$ExpectedArchitecture = [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString(),
     [string]$DirectLocalPackagePath,
-    [ValidatePattern('\A[0-9A-Fa-f]{64}\z')][string]$DirectLocalPackageSha256
+    [ValidatePattern('\A[0-9A-Fa-f]{64}\z')][string]$DirectLocalPackageSha256,
+    [switch]$VerifyInstalledAuthorization
 )
 
 $ErrorActionPreference = 'Stop'
@@ -88,6 +89,32 @@ function Invoke-EditionCli($Edition, [string[]]$Arguments) {
     $response = $result | ConvertFrom-Json
     if ($response.kind -cne 'result') { throw 'The installed CLI did not return a result.' }
     $response.data
+}
+
+function Get-EditionDataRoots($Edition) {
+    $packageData = Join-Path (Join-Path $local 'Packages') $Edition.Installed.PackageFamilyName
+    (Join-Path $local $Edition.Prefix)
+    (Join-Path $packageData "LocalCache/Local/$($Edition.Prefix)")
+    (Join-Path $packageData "LocalState/$($Edition.Prefix)")
+}
+
+function Get-EditionWorkerFailure($Edition, [string]$InstanceId, [DateTimeOffset]$Since) {
+    $records = foreach ($root in Get-EditionDataRoots $Edition) {
+        $log = [IO.FileInfo]::new((Join-Path $root 'logs/workers/mirrorpulse.log'))
+        if (!$log.Exists -or $log.Length -gt 4MB -or $log.LinkTarget -or $log.Directory.LinkTarget) { continue }
+        foreach ($line in Get-Content -LiteralPath $log.FullName -Tail 32) {
+            try { $event = $line | ConvertFrom-Json -ErrorAction Stop } catch { continue }
+            if ($event.Code -ceq 'WorkerSessionFailed' -and $event.Fields.instanceId -ceq $InstanceId -and
+                [DateTimeOffset]$event.OccurredAt -ge $Since) {
+                [pscustomobject]@{ time=$event.OccurredAt; category=$event.Fields.failureCategory
+                    hresult=$event.Fields.hresult; nativeError=$event.Fields.workerNativeErrorCode
+                    stage=$event.Fields.workerStage; failureCode=$event.Fields.workerFailureCode
+                    exitCode=$event.Fields.workerProcessExitCode; deadline=$event.Fields.workerDeadlineExpired
+                    pipeConnected=$event.Fields.workerPipeConnected }
+            }
+        }
+    }
+    $records | Sort-Object time -Descending | Select-Object -First 1
 }
 
 function Assert-EditionProcess($Edition, [int]$ProcessId, [string]$RelativePath) {
@@ -328,6 +355,7 @@ $directProfile
     $evidence.configurationIsolated = $true
     $firstCustomHost = $custom.HostId
     $evidence.phase = 'Custom restart'
+    $workerStart = [DateTimeOffset]::UtcNow
     $restarting = Invoke-EditionCli $custom @('host', 'restart')
     if ($restarting.processId -ne $firstCustomHost -or (Get-Process -Id $firstCustomHost -ErrorAction SilentlyContinue)) {
         throw 'The restart request did not drain the original custom Host.'
@@ -371,7 +399,11 @@ $directProfile
             $deployment = @((Invoke-EditionCli $custom @('--no-start', 'status')).instances |
                 Where-Object instanceId -CEQ $directInstanceId)
             if ($deployment.Count -eq 1 -and $deployment[0].workerConnected -eq $true) { break }
-            if ([DateTime]::UtcNow -ge $deadline) { throw 'The signed Local Worker did not connect for update discovery.' }
+            if ([DateTime]::UtcNow -ge $deadline) {
+                $evidence.directLocal.updateReadiness = @{ workerPhase=$deployment.phase; workerErrorCode=$deployment.lastErrorCode }
+                $evidence.directLocal.workerFailure = Get-EditionWorkerFailure $custom $directInstanceId $workerStart
+                throw 'The signed Local Worker did not connect for update discovery.'
+            }
             Start-Sleep -Milliseconds 250
         } while ($true)
         $update = Invoke-EditionCli $custom @('--no-start', 'instance', 'check-update', '--instance-id', $directInstanceId)
@@ -435,16 +467,18 @@ $directProfile
     }
     Assert-EditionProcess $standard $standard.WindowId 'MirrorPulse.App.exe'
     $evidence.standardStillRunningAfterCustomUninstall = $true
+    if ($VerifyInstalledAuthorization) {
+        $evidence.phase = 'Installed WinUI authorization'
+        . (Join-Path $PSScriptRoot 'installed-authorization-fixture.ps1')
+        Invoke-InstalledAuthorization $standard
+    }
     $evidence.packages = @($editions | ForEach-Object { @{ identity=$_.PackageName; alias=$_.Alias; sha256=$_.Sha256 } })
     $evidence.phase = 'Complete'
     $evidence.verified = $true
 } catch {
     if ($hostAttempt -and $edition.Installed) {
         try {
-            $packageData = Join-Path (Join-Path $local 'Packages') $edition.Installed.PackageFamilyName
-            $roots = @((Join-Path $local $edition.Prefix),
-                (Join-Path $packageData "LocalCache/Local/$($edition.Prefix)"),
-                (Join-Path $packageData "LocalState/$($edition.Prefix)"))
+            $roots = @(Get-EditionDataRoots $edition)
             $evidence.startupDiagnostics = Get-InstalledHostStartupDiagnostics -DataRoots $roots -Since $hostAttempt
             $evidence.processObservations = @(Get-InstalledHostExitObservation -ExpectedExecutable `
                 (Join-Path $edition.Installed.InstallLocation 'host/MirrorPulse.Host.exe'))

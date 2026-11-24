@@ -14,7 +14,8 @@
             <TextBlock Text="Connect your storage adapters and keep your files available in one Cloud Files location." TextWrapping="Wrap" />
             <InfoBar IsOpen="True" Severity="Informational" Title="Your data stays local" Message="MirrorPulse does not collect usage data or upload diagnostics." />
             <StackPanel Orientation="Horizontal" Spacing="12">
-                <Button x:Name="GetStartedButton" Content="Get started" Click="GetStartedButton_Click" />
+                <Button x:Name="GetStartedButton" Content="Get started" Click="GetStartedButton_Click"
+                        AutomationProperties.AutomationId="GetStarted" />
                 <TextBlock x:Name="StartupStatusText" VerticalAlignment="Center" TextWrapping="Wrap" />
             </StackPanel>
         </StackPanel>

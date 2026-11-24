@@ -6,10 +6,17 @@ on:
       verify_signed_direct_local:
         type: boolean
         default: false
+      verify_installed_authorization:
+        type: boolean
+        default: false
   workflow_dispatch:
     inputs:
       verify_signed_direct_local:
         description: Verify the published single-root Local package in the direct custom edition
+        type: boolean
+        default: false
+      verify_installed_authorization:
+        description: Verify the signed authorization journey in installed WinUI
         type: boolean
         default: false
   push:
@@ -18,10 +25,14 @@ on:
       - .github/workflows/edition-coexistence.yml
       - eng/verify-edition-coexistence.ps1
       - eng/verify-direct-edition-ui.ps1
+      - eng/installed-authorization-fixture.ps1
+      - eng/verify-installed-authorization-ui.ps1
       - Directory.Build.props
       - src/MirrorPulse.App/MirrorPulse.App.csproj
       - src/MirrorPulse.App/MirrorPulse.EditionPackaging.targets
       - src/MirrorPulse.App/InstanceConfigurationPage*
+      - src/MirrorPulse.App/InstalledAdaptersPage.xaml
+      - src/MirrorPulse.App/MainPage.xaml
       - src/MirrorPulse.App/SyncStatusPage.xaml
       - src/MirrorPulse.App/Package.appxmanifest
       - src/MirrorPulse.Core/Host/MirrorPulseAppStatusPipe.cs
@@ -59,6 +70,7 @@ jobs:
         shell: pwsh
         env:
           VERIFY_SIGNED_DIRECT_LOCAL: ${{ inputs.verify_signed_direct_local }}
+          VERIFY_INSTALLED_AUTHORIZATION: ${{ inputs.verify_installed_authorization }}
         run: |
           $arguments = @{ ExpectedArchitecture = 'Arm64'; EvidencePath = 'artifacts/edition-coexistence.json' }
           if ($env:VERIFY_SIGNED_DIRECT_LOCAL -ceq 'true') {
@@ -68,6 +80,9 @@ jobs:
             }
             $arguments.DirectLocalPackagePath = Join-Path 'artifacts/edition-local/com.mirrorpulse.adapter.local' $entries[0].package
             $arguments.DirectLocalPackageSha256 = $entries[0].packageSha256
+          }
+          if ($env:VERIFY_INSTALLED_AUTHORIZATION -ceq 'true') {
+            $arguments.VerifyInstalledAuthorization = $true
           }
           ./eng/verify-edition-coexistence.ps1 @arguments
       - name: Retain edition coexistence observations

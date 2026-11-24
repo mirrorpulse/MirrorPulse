@@ -315,7 +315,8 @@ async Task ServeAuthorizationAsync()
                     await SendAsync(new(2, "CredentialRequest", Guid.NewGuid(), instance, session, false,
                         JsonSerializer.SerializeToElement(new { referenceId = Guid.NewGuid().ToString("D") })));
                 result = new(request.InvocationId, request.CallbackId, AdapterConfigurationCallbackState.Pending,
-                    InteractionUri: new(request.CallbackId == "insecure-page" ? "http://example.test/authorize" : "https://example.test/authorize"));
+                    InteractionUri: request.CallbackId == "desktop-authorize" ? null :
+                        new(request.CallbackId == "insecure-page" ? "http://example.test/authorize" : "https://example.test/authorize"));
                 break;
             case AdapterConfigurationCallbackContract.PollMessage when request.InvocationId == activeInvocation:
                 result = new(request.CallbackId == "other-invocation" ? Guid.NewGuid() : request.InvocationId, request.CallbackId,

@@ -2,6 +2,26 @@ using CfSharp;
 using MirrorPulse.CfSharp.CrashProbe;
 using MirrorPulse.CloudFiles.CfSharp;
 using MirrorPulse.Core.Configuration;
+using MirrorPulse.Core.Contracts;
+
+if (args is [var authorizationAction, var authorizationSync, var authorizationData, var first, var second] &&
+    authorizationAction is "--desktop-authorization-seed" or "--desktop-authorization-finish")
+{
+    try
+    {
+        var authorizationPaths = new MirrorPulseStoragePaths(authorizationSync, authorizationData);
+        if (authorizationAction == "--desktop-authorization-seed")
+            await DesktopAuthorizationProbe.SeedAsync(authorizationPaths, first, second);
+        else
+            await DesktopAuthorizationProbe.FinishAsync(authorizationPaths, InstallId.Parse(first), second);
+        return 0;
+    }
+    catch (Exception error)
+    {
+        Console.Error.WriteLine($"Desktop authorization fixture failed: {error.GetType().Name}, HRESULT {error.HResult:X8}.");
+        return 1;
+    }
+}
 
 if (args is ["--edition-shell-registration", var edition, var action])
 {

@@ -5,7 +5,11 @@ on:
   workflow_dispatch:
     inputs:
       direct_edition_acceptance_only:
-        description: Verify the installed ARM64 direct edition with the published signed Local package
+        description: Run only ARM64 installed edition acceptance
+        type: boolean
+        default: false
+      verify_installed_authorization:
+        description: Use a signed authorization fixture for the installed edition acceptance
         type: boolean
         default: false
       file_transfer_acceptance_only:
@@ -57,7 +61,8 @@ jobs:
     if: github.event_name == 'workflow_dispatch' && inputs.direct_edition_acceptance_only
     uses: ./.github/workflows/edition-coexistence.yml
     with:
-      verify_signed_direct_local: true
+      verify_signed_direct_local: ${{ !inputs.verify_installed_authorization }}
+      verify_installed_authorization: ${{ inputs.verify_installed_authorization }}
 
   signed-atomic-directory:
     if: github.event_name == 'workflow_dispatch' && !inputs.direct_edition_acceptance_only && !inputs.s06_recovery_only && !inputs.file_transfer_acceptance_only && (inputs.directory_acceptance_only || inputs.verify_atomic_directory || inputs.verify_directory_move || inputs.verify_directory_transfer || inputs.verify_prepared_directory_copy)
