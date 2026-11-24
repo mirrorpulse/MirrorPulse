@@ -1,6 +1,11 @@
 name: Installed edition coexistence
 
 on:
+  workflow_call:
+    inputs:
+      verify_signed_direct_local:
+        type: boolean
+        default: false
   workflow_dispatch:
     inputs:
       verify_signed_direct_local:
@@ -12,9 +17,12 @@ on:
     paths:
       - .github/workflows/edition-coexistence.yml
       - eng/verify-edition-coexistence.ps1
+      - eng/verify-direct-edition-ui.ps1
       - Directory.Build.props
       - src/MirrorPulse.App/MirrorPulse.App.csproj
       - src/MirrorPulse.App/MirrorPulse.EditionPackaging.targets
+      - src/MirrorPulse.App/InstanceConfigurationPage*
+      - src/MirrorPulse.App/SyncStatusPage.xaml
       - src/MirrorPulse.App/Package.appxmanifest
       - src/MirrorPulse.Core/Host/MirrorPulseAppStatusPipe.cs
       - src/MirrorPulse.Core/MirrorPulseEdition.cs

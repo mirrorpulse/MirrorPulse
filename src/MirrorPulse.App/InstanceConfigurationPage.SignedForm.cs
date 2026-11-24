@@ -53,6 +53,8 @@ public sealed partial class InstanceConfigurationPage
                     break;
             }
 
+            if (control.Key is { } key)
+                AutomationProperties.SetAutomationId(element, $"AdapterField.{key}");
             ConfigurationFieldsPanel.Children.Add(element);
             if (control.Key is { } field && control.Kind != AdapterPackageFormKind.Callback &&
                 _instance?.HealthIssues?.Where(issue => issue.FieldKey == field).ToArray() is { Length: > 0 } issues)

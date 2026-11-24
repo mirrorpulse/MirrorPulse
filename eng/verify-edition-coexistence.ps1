@@ -281,15 +281,21 @@ $directProfile
         $directInstallId = $installations[0].installId
         $source = Join-Path $scratch 'direct-source'
         New-Item -ItemType Directory -Path $source | Out-Null
-        $created = Invoke-EditionCli $custom @('--no-start', 'instance', 'create', '--install-id', $directInstallId,
-            '--name', 'Direct Local', '--config', "sourceDirectory=$source")
-        $directInstanceId = $created.createdInstanceId
+        $custom.WindowId = Start-EditionWindow $custom
+        $directName = 'Direct Local'
+        $directLabel = 'Direct Local folder'
+        $uiProbe = Join-Path $PSScriptRoot 'verify-direct-edition-ui.ps1'
+        & powershell.exe -NoLogo -NoProfile -NonInteractive -File $uiProbe -ProcessId $custom.WindowId `
+            -SourcePath $source -RootKey ($directManifest.rootDefinitions[0].key) -RootLabel $directLabel -InstanceName $directName
+        if ($LASTEXITCODE -ne 0) { throw 'The installed WinUI direct setup did not complete.' }
         $customTopology = Invoke-EditionCli $custom @('--no-start', 'adapter', 'list')
         $standardTopology = Invoke-EditionCli $standard @('--no-start', 'adapter', 'list')
+        $directInstanceId = @($customTopology.instances)[0].instanceId
         if (!$directInstanceId -or @($customTopology.instances).Count -ne 1 -or @($customTopology.roots).Count -ne 1 -or
-            $customTopology.instances[0].instanceId -cne $directInstanceId -or $customTopology.instances[0].installId -cne $directInstallId -or
+            $customTopology.instances[0].displayName -cne $directName -or $customTopology.instances[0].installId -cne $directInstallId -or
             $customTopology.roots[0].instanceId -cne $directInstanceId -or
             $customTopology.roots[0].uniquenessKey -cne $directManifest.rootDefinitions[0].key -or
+            $customTopology.roots[0].label -cne $directLabel -or
             $standardTopology.installations.installId -contains $directInstallId -or
             $standardTopology.instances.instanceId -contains $directInstanceId) {
             throw 'The signed single-root deployment was not saved independently in the custom edition.'
@@ -325,15 +331,17 @@ $directProfile
         if (@($customTopology.installations).Count -ne 1 -or $customTopology.installations[0].installId -cne $directInstallId -or
             @($customTopology.instances).Count -ne 1 -or $customTopology.instances[0].instanceId -cne $directInstanceId -or
             $customTopology.instances[0].configuration.sourceDirectory -ine $source -or
-            @($customTopology.roots).Count -ne 1 -or $customTopology.roots[0].rootId -cne $directRootId) {
+            @($customTopology.roots).Count -ne 1 -or $customTopology.roots[0].rootId -cne $directRootId -or
+            $customTopology.roots[0].label -cne $directLabel) {
             throw 'Restart did not preserve the signed direct Local deployment and root.'
         }
-        $evidence.directLocal = @{ version=$directManifest.version; packageSha256=$DirectLocalPackageSha256.ToLowerInvariant(); persisted=$true }
+        $evidence.directLocal = @{ version=$directManifest.version; packageSha256=$DirectLocalPackageSha256.ToLowerInvariant(); winUiConfigured=$true; persisted=$true }
     }
 
     $evidence.phase = 'Concurrent application activation'
     $standard.WindowId = Start-EditionWindow $standard
-    $custom.WindowId = Start-EditionWindow $custom
+    if (!$custom.WindowId) { $custom.WindowId = Start-EditionWindow $custom }
+    Assert-EditionProcess $custom $custom.WindowId 'MirrorPulse.App.exe'
     Assert-EditionProcess $standard $standard.WindowId 'MirrorPulse.App.exe'
     if ($standard.WindowId -eq $custom.WindowId) { throw 'Both application activations returned the same process.' }
     $evidence.concurrentApps = $true

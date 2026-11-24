@@ -4,6 +4,10 @@ on:
   pull_request:
   workflow_dispatch:
     inputs:
+      direct_edition_acceptance_only:
+        description: Verify the installed ARM64 direct edition with the published signed Local package
+        type: boolean
+        default: false
       file_transfer_acceptance_only:
         description: Run the signed ARM64 Local and Local/WebDAV CLI file transfers only
         type: boolean
@@ -49,8 +53,14 @@ permissions:
   contents: read
 
 jobs:
+  signed-direct-edition:
+    if: github.event_name == 'workflow_dispatch' && inputs.direct_edition_acceptance_only
+    uses: ./.github/workflows/edition-coexistence.yml
+    with:
+      verify_signed_direct_local: true
+
   signed-atomic-directory:
-    if: github.event_name == 'workflow_dispatch' && !inputs.s06_recovery_only && !inputs.file_transfer_acceptance_only && (inputs.directory_acceptance_only || inputs.verify_atomic_directory || inputs.verify_directory_move || inputs.verify_directory_transfer || inputs.verify_prepared_directory_copy)
+    if: github.event_name == 'workflow_dispatch' && !inputs.direct_edition_acceptance_only && !inputs.s06_recovery_only && !inputs.file_transfer_acceptance_only && (inputs.directory_acceptance_only || inputs.verify_atomic_directory || inputs.verify_directory_move || inputs.verify_directory_transfer || inputs.verify_prepared_directory_copy)
     uses: ./.github/workflows/signed-atomic-directory.yml
     with:
       local_preview: ${{ inputs.local_atomic_preview }}
@@ -60,7 +70,9 @@ jobs:
       verify_prepared_directory_copy: ${{ inputs.verify_prepared_directory_copy }}
 
   official-adapter-candidate:
-    if: github.event_name != 'workflow_dispatch' || inputs.s06_recovery_only || inputs.file_transfer_acceptance_only || !(inputs.directory_acceptance_only || inputs.verify_prepared_directory_copy) || inputs.verify_shell
+    if: >-
+      github.event_name != 'workflow_dispatch' || (!inputs.direct_edition_acceptance_only &&
+        (inputs.s06_recovery_only || inputs.file_transfer_acceptance_only || !(inputs.directory_acceptance_only || inputs.verify_prepared_directory_copy) || inputs.verify_shell))
     runs-on: windows-latest
     steps:
       - name: Check out the candidate product source

@@ -12,7 +12,7 @@
             <TextBlock Text="Configure Adapter instance" Style="{StaticResource TitleTextBlockStyle}" />
             <StackPanel x:Name="AdapterPresentationPanel" Spacing="8" Visibility="Collapsed" />
             <TextBlock x:Name="AdapterNameText" TextWrapping="Wrap" />
-            <TextBox x:Name="AdapterLabelTextBox" Header="Instance name" />
+            <TextBox x:Name="AdapterLabelTextBox" Header="Instance name" AutomationProperties.AutomationId="AdapterInstanceName" />
             <StackPanel x:Name="RootLabelsPanel" Spacing="12" />
             <TextBox x:Name="SourcePathTextBox" Header="Source" />
             <TextBox x:Name="UsernameTextBox" Header="Username" Visibility="Collapsed" />
@@ -25,8 +25,9 @@
             <ToggleSwitch x:Name="StartWithMirrorPulseToggle" Header="Start this instance with MirrorPulse" IsOn="True" />
             <TextBlock Text="Restart MirrorPulse to apply saved configuration." TextWrapping="Wrap" Opacity="0.75" />
             <StackPanel Orientation="Horizontal" Spacing="12">
-                <Button x:Name="CreateButton" Content="Create instance" Click="CreateButton_Click" />
-                <Button Content="Cancel" Click="CancelButton_Click" />
+                <Button x:Name="CreateButton" Content="Create instance" Click="CreateButton_Click"
+                        AutomationProperties.AutomationId="AdapterInstanceSave" />
+                <Button Content="Cancel" Click="CancelButton_Click" AutomationProperties.AutomationId="AdapterInstanceCancel" />
             </StackPanel>
             <InfoBar x:Name="ConfigurationStatusBar" IsOpen="False" Severity="Informational" />
         </StackPanel>

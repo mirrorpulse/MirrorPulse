@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Microsoft.UI.Xaml;
+using Microsoft.UI.Xaml.Automation;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Navigation;
 using MirrorPulse.Control.Contracts;
@@ -119,6 +120,7 @@ public sealed partial class InstanceConfigurationPage : Page
 
                 usedLabels.Add(suggested);
                 var box = new TextBox { Header = $"MirrorPulse folder · {definition.Label}", Text = suggested };
+                AutomationProperties.SetAutomationId(box, $"AdapterRoot.{definition.Key}");
                 _rootLabels.Add(definition.Key, box);
                 RootLabelsPanel.Children.Add(box);
             }
