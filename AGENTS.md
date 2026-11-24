@@ -1,9 +1,9 @@
 # MirrorPulse repository guidance
 
-MirrorPulse is a Windows Cloud Files product for personal storage. It exposes one
-current-user sync root and keeps configuration, catalog, caches, and diagnostics
-in a separate private data root. The repository uses English for code, public
-documentation, commit messages, and GitHub metadata.
+MirrorPulse is a Windows Cloud Files product for personal storage. Each edition
+exposes one current-user sync root and keeps configuration, catalog, caches,
+and diagnostics in its own private data root. The repository uses English for
+code, public documentation, commit messages, and GitHub metadata.
 
 ## Ownership boundaries
 
@@ -15,9 +15,14 @@ documentation, commit messages, and GitHub metadata.
   APIs and SQLite provider; retain the anti-corruption layer for product policy.
 - Each enabled Adapter instance has its own Worker process and current-user
   Named Pipe. Installed `.mpadapter` packages contain the Worker executable and
-  dependencies; the Host owns persistent settings and credential references.
-- Multiple instances and multiple first-level roots per instance are supported.
-  Preserve stable IDs, isolated state, and explicit disabled-root behavior.
+  dependencies. The Host owns settings, credential references, and saved
+  authorization results. Use the shared control contract for CLI and WinUI.
+- The first release supports one declared root per Adapter package and deployment.
+  A package can be deployed multiple times. Preserve stable IDs, isolated state,
+  explicit disabled-root behavior, and recoverable legacy multi-root data.
+- Standard and custom editions can run under the same Windows user. Preserve
+  independent package identity, CLI alias, Host session, credentials, and
+  Explorer registration through install, upgrade, and uninstall.
 
 ## Changes and verification
 
@@ -25,8 +30,8 @@ documentation, commit messages, and GitHub metadata.
 - Prefer focused tests that exercise a real boundary. Use a clean Windows test
   user for Cloud Files registration or installed MSIX checks.
 - Run the relevant locked restore, Release build, tests, and formatting gate.
-  The CI workflow covers x64 and ARM64 CLI/Host publishing and a signed Local
-  Adapter end-to-end path on ARM64.
+  R1 desktop acceptance uses a clean Windows 11 ARM64 environment. Verify
+  x64 builds, signed packages, publication, and actual Worker execution.
 - Treat CfSharp preview behavior as version-specific. Report reproducible
   library defects with the package version and native error before adding a
   long-term workaround.
