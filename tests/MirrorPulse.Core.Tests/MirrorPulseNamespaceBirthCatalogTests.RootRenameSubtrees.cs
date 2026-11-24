@@ -1,5 +1,6 @@
 using Microsoft.Data.Sqlite;
 using MirrorPulse.Core.Contracts;
+using MirrorPulse.Core.Host;
 using MirrorPulse.Core.State;
 
 namespace MirrorPulse.Core.Tests;
@@ -7,6 +8,47 @@ namespace MirrorPulse.Core.Tests;
 public sealed partial class MirrorPulseNamespaceBirthCatalogTests
 {
     private static readonly string[] RootSubtreeFirstHistoricalNames = ["Docs", "Renamed"];
+
+    [TestMethod]
+    public async Task SignedFormCannotRenameFirstRegisteredRootOrPartiallySaveOtherChanges()
+    {
+        using var fixture = new Fixture();
+        await using var catalog = await MirrorPulseProductCatalog.OpenAsync(fixture.Paths);
+        InstalledAdapter installation = AdapterConfigurationWorkerSessionTests.NewFixture("authorize");
+        await catalog.AddInstallationAsync(installation);
+        var credentials = new MirrorPulseAdapterInstanceProvisionerTests.MemoryCredentialStore();
+        var provisioner = new MirrorPulseAdapterInstanceProvisioner(catalog, credentials, fixture.Paths.DataRootPath);
+        var values = new Dictionary<string, string> { ["endpoint"] = "https://example.test/" };
+        AdapterInstance created = await provisioner.CreateAsync(new(installation.InstallId.ToString(), "Original",
+            values, new Dictionary<string, string>(), null, true,
+            new Dictionary<string, string?> { ["token"] = "initial" }));
+
+        AdapterInstance beforeRegistration = await provisioner.ConfigureAsync(created.InstanceId, "Original", values,
+            new Dictionary<string, string> { ["files"] = "Before registration" },
+            expectedRevision: created.ConfigurationRevision);
+        RootRegistration root = (await catalog.ReadAdapterTopologyAsync()).Roots.Single();
+        Assert.AreEqual("Before registration", root.DirectoryName);
+        var original = Baseline() with { RootId = root.RootId, RelativePath = root.DirectoryName };
+        var proof = Protection(original);
+        await ProtectAsync(catalog, original, proof);
+        await RegisterOriginalParentMembersAsync(catalog, original, proof);
+        Assert.IsEmpty(await catalog.ReadManagedRootNamesAsync());
+
+        var rejected = await Assert.ThrowsExactlyAsync<AdapterConfigurationValidationException>(() =>
+            provisioner.ConfigureAsync(created.InstanceId, "Replacement", new Dictionary<string, string> { ["endpoint"] = "https://example.test/other" },
+                new Dictionary<string, string> { ["files"] = "After registration" },
+                secretFields: new Dictionary<string, string?> { ["token"] = "replacement" },
+                expectedRevision: beforeRegistration.ConfigurationRevision));
+        StringAssert.Contains(rejected.Message, "protected root rename command");
+        MirrorPulseAdapterTopology retained = await catalog.ReadAdapterTopologyAsync();
+        Assert.AreEqual(root, retained.Roots.Single());
+        AdapterInstance instance = retained.Instances.Single();
+        Assert.AreEqual(beforeRegistration.ConfigurationRevision, instance.ConfigurationRevision);
+        Assert.AreEqual("Original", instance.DisplayName);
+        Assert.AreEqual(values["endpoint"], instance.Configuration["endpoint"]);
+        Assert.AreEqual("initial", credentials.Read(instance.CredentialBindings!["token"]));
+        Assert.AreEqual(1, credentials.Count);
+    }
 
     [TestMethod]
     [TestCategory("RootLabelSubtreeCatalog")]

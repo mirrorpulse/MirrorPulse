@@ -44,7 +44,9 @@ public sealed partial class MirrorPulseProductCatalog
         try
         {
             ThrowIfDisposed();
+            using SqliteTransaction? transaction = formUpdate is null ? null : _connection.BeginTransaction();
             await using SqliteCommand query = _connection.CreateCommand();
+            query.Transaction = transaction;
             query.CommandText = "SELECT payload FROM adapter_topology WHERE id = 1;";
             string? payload = (string?)await query.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
             MirrorPulseAdapterTopology current = payload is null ? new([], [], []) : DeserializeTopology(payload);
@@ -123,37 +125,56 @@ public sealed partial class MirrorPulseProductCatalog
                 return new RootRegistration(root.AdapterId, root.InstanceId, root.RootId,
                     root.UniquenessKey, value, value, root.CustomEntry, root.State, root.RegisteredAt, root.IdentityScope);
             }).ToArray();
-            if (formUpdate is not null)
+            if (transaction is not null)
             {
-                var changedRootIds = current.Roots.Zip(roots)
-                    .Where(pair => pair.First.DirectoryName != pair.Second.DirectoryName)
-                    .Select(pair => pair.First.RootId).ToHashSet();
-                if (changedRootIds.Count > 0)
+                foreach (var pair in current.Roots.Zip(roots))
                 {
-                    await using var managedRoots = _connection.CreateCommand();
-                    managedRoots.CommandText = "SELECT root_id FROM managed_root_names;";
-                    await using var names = await managedRoots.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
-                    while (await names.ReadAsync(cancellationToken).ConfigureAwait(false))
-                    {
-                        if (changedRootIds.Contains(RootId.Parse(names.GetString(0))))
-                            throw new AdapterConfigurationValidationException("Rename an existing MirrorPulse folder with the protected root rename command.");
-                    }
+                    if (pair.First.DirectoryName != pair.Second.DirectoryName &&
+                        await RequiresProtectedRootRenameAsync(pair.First, transaction, cancellationToken).ConfigureAwait(false))
+                        throw new AdapterConfigurationValidationException("Rename an existing MirrorPulse folder with the protected root rename command.");
                 }
             }
 
             var next = new MirrorPulseAdapterTopology(current.Installations, instances, roots);
             ValidateTopology(next);
-            await ValidateManagedRootNamesAsync(next, cancellationToken).ConfigureAwait(false);
+            await ValidateManagedRootNamesAsync(next, cancellationToken, transaction).ConfigureAwait(false);
             await using SqliteCommand update = _connection.CreateCommand();
+            update.Transaction = transaction;
             update.CommandText = "UPDATE adapter_topology SET payload = $payload WHERE id = 1;";
             update.Parameters.AddWithValue("$payload", JsonSerializer.Serialize(next, TopologyJsonOptions));
             await update.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+            transaction?.Commit();
             return updated;
         }
         finally
         {
             _gate.Release();
         }
+    }
+
+    private async Task<bool> RequiresProtectedRootRenameAsync(RootRegistration root, SqliteTransaction transaction,
+        CancellationToken cancellationToken)
+    {
+        await using var query = _connection.CreateCommand();
+        query.Transaction = transaction;
+        query.CommandText = """
+            SELECT EXISTS(
+                SELECT 1 FROM managed_root_names WHERE root_id=$root
+                UNION ALL
+                SELECT 1 FROM namespace_member_names names
+                JOIN namespace_members anchor ON anchor.member_id=names.parent_member_id
+                WHERE anchor.parent_member_id IS NULL AND names.child_name_key=$name
+                UNION ALL
+                SELECT 1 FROM namespace_birth_reservations reservations
+                JOIN namespace_members anchor
+                    ON anchor.origin_kind=reservations.parent_kind
+                    AND COALESCE(anchor.original_evidence_id, anchor.birth_operation_id)=reservations.parent_id
+                WHERE anchor.parent_member_id IS NULL AND reservations.child_name_key=$name
+            );
+            """;
+        query.Parameters.AddWithValue("$root", root.RootId.ToString());
+        query.Parameters.AddWithValue("$name", NamespaceMemberNameKey(root.DirectoryName));
+        return (long)(await query.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false))! != 0;
     }
 
     /// <summary>
