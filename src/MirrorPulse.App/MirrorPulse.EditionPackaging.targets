@@ -26,6 +26,8 @@
     <Copy SourceFiles="Package.appxmanifest" DestinationFiles="$(_EditionAppxManifest)" />
     <XmlPoke XmlInputPath="$(_EditionAppxManifest)" Namespaces="$(_EditionAppxNamespaces)" Query="/f:Package/f:Identity/@Name" Value="$(MirrorPulseEditionPackageName)" />
     <XmlPoke XmlInputPath="$(_EditionAppxManifest)" Namespaces="$(_EditionAppxNamespaces)" Query="/f:Package/f:Identity/@Publisher" Value="$(MirrorPulseEditionPublisher)" />
+    <XmlPoke Condition="'$(MirrorPulseEditionPackageVersion)' != ''" XmlInputPath="$(_EditionAppxManifest)" Namespaces="$(_EditionAppxNamespaces)"
+             Query="/f:Package/f:Identity/@Version" Value="$(MirrorPulseEditionPackageVersion)" />
     <XmlPoke XmlInputPath="$(_EditionAppxManifest)" Namespaces="$(_EditionAppxNamespaces)" Query="/f:Package/mp:PhoneIdentity/@PhoneProductId" Value="$(MirrorPulseEditionProviderId)" />
     <XmlPoke XmlInputPath="$(_EditionAppxManifest)" Namespaces="$(_EditionAppxNamespaces)" Query="/f:Package/f:Properties/f:DisplayName" Value="$(MirrorPulseEditionName)" />
     <XmlPoke XmlInputPath="$(_EditionAppxManifest)" Namespaces="$(_EditionAppxNamespaces)" Query="/f:Package/f:Properties/f:PublisherDisplayName" Value="$(MirrorPulseEditionPublisherName)" />

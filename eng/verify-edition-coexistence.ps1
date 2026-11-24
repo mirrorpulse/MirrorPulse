@@ -134,6 +134,28 @@ function Start-EditionWindow($Edition) {
     } finally { $process.Dispose() }
 }
 
+function Build-EditionPackage([string]$PackageDirectory, [string[]]$Overrides) {
+    & dotnet build $appProject --configuration Release --runtime $runtime --no-restore `
+        -p:GenerateAppxPackageOnBuild=true -p:AppxPackageSigningEnabled=true `
+        "-p:PackageCertificateThumbprint=$($certificate.Thumbprint)" "-p:AppxPackageDir=$PackageDirectory/" @Overrides | Out-Host
+    if ($LASTEXITCODE -ne 0) { throw 'An edition MSIX build failed.' }
+    $packages = @(Get-ChildItem -LiteralPath $PackageDirectory -Directory | ForEach-Object {
+        Get-ChildItem -LiteralPath $_.FullName -Filter '*.msix' -File
+    })
+    if ($packages.Count -ne 1) { throw 'Expected one product MSIX for an edition.' }
+    $packages[0]
+}
+
+function Assert-DirectDeployment($Edition, [string]$InstallId, [string]$InstanceId, [string]$RootId, [string]$Source, [string]$Label) {
+    $topology = Invoke-EditionCli $Edition @('--no-start', 'adapter', 'list')
+    if (@($topology.installations).Count -ne 1 -or $topology.installations[0].installId -cne $InstallId -or
+        @($topology.instances).Count -ne 1 -or $topology.instances[0].instanceId -cne $InstanceId -or
+        $topology.instances[0].configuration.sourceDirectory -ine $Source -or @($topology.roots).Count -ne 1 -or
+        $topology.roots[0].rootId -cne $RootId -or $topology.roots[0].label -cne $Label) {
+        throw 'The signed direct Local deployment and root did not survive the lifecycle change.'
+    }
+}
+
 $certificate = $null
 $cleanupFailed = $false
 try {
@@ -228,19 +250,11 @@ $directProfile
             & dotnet restore $solution --locked-mode @overrides
             if ($LASTEXITCODE -ne 0) { throw 'Locked restore failed for the custom edition.' }
         }
-        $packageDirectory = Join-Path $scratch $edition.Prefix
-        & dotnet build $appProject --configuration Release --runtime $runtime --no-restore `
-            -p:GenerateAppxPackageOnBuild=true -p:AppxPackageSigningEnabled=true `
-            "-p:PackageCertificateThumbprint=$($certificate.Thumbprint)" "-p:AppxPackageDir=$packageDirectory/" @overrides
-        if ($LASTEXITCODE -ne 0) { throw 'An edition MSIX build failed.' }
-        $packages = @(Get-ChildItem -LiteralPath $packageDirectory -Directory | ForEach-Object {
-            Get-ChildItem -LiteralPath $_.FullName -Filter '*.msix' -File
-        })
-        if ($packages.Count -ne 1) { throw 'Expected one product MSIX for an edition.' }
-        $edition.Sha256 = (Get-FileHash -LiteralPath $packages[0].FullName).Hash
+        $package = Build-EditionPackage (Join-Path $scratch $edition.Prefix) $overrides
+        $edition.Sha256 = (Get-FileHash -LiteralPath $package.FullName).Hash
         $evidence.phase = "Install $($edition.Name)"
         $edition.InstallAttempted = $true
-        Add-AppxPackage -Path $packages[0].FullName
+        Add-AppxPackage -Path $package.FullName
         $edition.Installed = Get-AppxPackage -Name $edition.PackageName
         if (-not $edition.Installed -or $edition.Installed.Architecture.ToString() -ine $architecture -or
             -not (Test-Path -LiteralPath $edition.AliasPath)) {
@@ -327,14 +341,7 @@ $directProfile
     }
     $evidence.customRestartIsolated = $true
     if ($directPackage) {
-        $customTopology = Invoke-EditionCli $custom @('--no-start', 'adapter', 'list')
-        if (@($customTopology.installations).Count -ne 1 -or $customTopology.installations[0].installId -cne $directInstallId -or
-            @($customTopology.instances).Count -ne 1 -or $customTopology.instances[0].instanceId -cne $directInstanceId -or
-            $customTopology.instances[0].configuration.sourceDirectory -ine $source -or
-            @($customTopology.roots).Count -ne 1 -or $customTopology.roots[0].rootId -cne $directRootId -or
-            $customTopology.roots[0].label -cne $directLabel) {
-            throw 'Restart did not preserve the signed direct Local deployment and root.'
-        }
+        Assert-DirectDeployment $custom $directInstallId $directInstanceId $directRootId $source $directLabel
         $evidence.directLocal = @{ version=$directManifest.version; packageSha256=$DirectLocalPackageSha256.ToLowerInvariant(); winUiConfigured=$true; persisted=$true }
     }
 
@@ -345,6 +352,40 @@ $directProfile
     Assert-EditionProcess $standard $standard.WindowId 'MirrorPulse.App.exe'
     if ($standard.WindowId -eq $custom.WindowId) { throw 'Both application activations returned the same process.' }
     $evidence.concurrentApps = $true
+
+    if ($directPackage) {
+        $evidence.phase = 'Upgrade the running custom edition'
+        $previousPackage = $custom.Installed
+        $previousVersion = [version]$previousPackage.Version
+        $nextVersion = [version]::new($previousVersion.Major, $previousVersion.Minor, ($previousVersion.Build + 1), 0)
+        $upgrade = Build-EditionPackage (Join-Path $scratch 'upgrade') ($customBuild + "-p:MirrorPulseEditionPackageVersion=$nextVersion")
+        $upgradeHash = (Get-FileHash -LiteralPath $upgrade.FullName).Hash
+        $windowProcess = [Diagnostics.Process]::GetProcessById($custom.WindowId)
+        try {
+            if (!$windowProcess.CloseMainWindow() -or !$windowProcess.WaitForExit(20000)) {
+                throw 'The original custom WinUI process did not close before upgrade.'
+            }
+        } finally { $windowProcess.Dispose() }
+        $null = Invoke-EditionCli $custom @('--no-start', 'host', 'stop')
+        if (Get-Process -Id $custom.HostId -ErrorAction SilentlyContinue) { throw 'The original custom Host did not stop before upgrade.' }
+
+        Add-AppxPackage -Path $upgrade.FullName
+        $custom.Installed = Get-AppxPackage -Name $custom.PackageName
+        if (!$custom.Installed -or [version]$custom.Installed.Version -ne $nextVersion -or
+            $custom.Installed.PackageFamilyName -cne $previousPackage.PackageFamilyName -or
+            $custom.Installed.Architecture.ToString() -ine $architecture) { throw 'The same custom family did not upgrade to the new version.' }
+        $null = Invoke-EditionCli $custom @('status')
+        $custom.HostId = Get-EditionHost $custom
+        $custom.WindowId = Start-EditionWindow $custom
+        Assert-DirectDeployment $custom $directInstallId $directInstanceId $directRootId $source $directLabel
+        if ((Invoke-EditionCli $custom @('config')).locale -cne $updated -or (Invoke-ShellCheck $custom) -cne 'Present' -or
+            (Get-EditionHost $standard) -ne $standard.HostId -or (Invoke-ShellCheck $standard) -cne 'Present') {
+            throw 'The edition upgrade failed to preserve independent configuration and Shell registrations.'
+        }
+        Assert-EditionProcess $standard $standard.WindowId 'MirrorPulse.App.exe'
+        $evidence.directLocal.upgrade = @{ previousVersion=$previousVersion.ToString(); installedVersion=$nextVersion.ToString()
+            packageSha256=$upgradeHash; retainedDeployment=$true; standardStillRunning=$true }
+    }
 
     $evidence.phase = 'Custom edition uninstall'
     $null = Invoke-EditionCli $custom @('--no-start', 'host', 'stop')
