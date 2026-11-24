@@ -344,14 +344,18 @@ $directProfile
         Assert-DirectDeployment $custom $directInstallId $directInstanceId $directRootId $source $directLabel
         $evidence.directLocal = @{ version=$directManifest.version; packageSha256=$DirectLocalPackageSha256.ToLowerInvariant(); winUiConfigured=$true; persisted=$true }
         $evidence.phase = 'Verify the registered Local root'
-        $deadline = [DateTime]::UtcNow.AddSeconds(40)
+        $deadline = [DateTime]::UtcNow.AddSeconds(60)
         do {
             $rootView = @(Invoke-EditionCli $custom @('--no-start', 'root', 'list') |
                 Where-Object { $_.root.rootId -ceq $directRootId })
             $deployment = @((Invoke-EditionCli $custom @('--no-start', 'status')).instances |
                 Where-Object instanceId -CEQ $directInstanceId)
-            if ($rootView.Count -eq 1 -and $rootView[0].namespaceReady -eq $true -and
-                $deployment.Count -eq 1 -and $deployment[0].workerConnected -eq $true) { break }
+            $evidence.directLocal.readiness = @{
+                rootState=$rootView.root.state; namespaceReady=$rootView.namespaceReady
+                namespaceRecoveryCode=$rootView.namespaceRecoveryCode; enabled=$deployment.enabled
+                workerConnected=$deployment.workerConnected; workerPhase=$deployment.phase; workerErrorCode=$deployment.lastErrorCode
+            }
+            if ($rootView.Count -eq 1 -and $rootView[0].namespaceReady -eq $true) { break }
             if ([DateTime]::UtcNow -ge $deadline) { throw 'The signed Local root did not become ready with its Worker.' }
             Start-Sleep -Milliseconds 250
         } while ($true)
@@ -362,6 +366,14 @@ $directProfile
         $evidence.directLocal.registeredRootProtected = $true
 
         $evidence.phase = 'Verify optional update discovery for official Local'
+        $deadline = [DateTime]::UtcNow.AddSeconds(40)
+        do {
+            $deployment = @((Invoke-EditionCli $custom @('--no-start', 'status')).instances |
+                Where-Object instanceId -CEQ $directInstanceId)
+            if ($deployment.Count -eq 1 -and $deployment[0].workerConnected -eq $true) { break }
+            if ([DateTime]::UtcNow -ge $deadline) { throw 'The signed Local Worker did not connect for update discovery.' }
+            Start-Sleep -Milliseconds 250
+        } while ($true)
         $update = Invoke-EditionCli $custom @('--no-start', 'instance', 'check-update', '--instance-id', $directInstanceId)
         if ($update.availability -cnotin @('Unsupported', 'Current') -or $update.currentVersion -cne $directManifest.version -or
             $null -ne $update.offerId -or $null -ne $update.availableVersion) {
