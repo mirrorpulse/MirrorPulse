@@ -1,5 +1,4 @@
 using System.Collections.Concurrent;
-using System.Collections.ObjectModel;
 using System.Runtime.Versioning;
 using System.Security.Cryptography;
 using System.Text;
@@ -199,8 +198,8 @@ public sealed partial class MirrorPulseActiveRemotePoller : IAsyncDisposable
         }
 
         reportStage(MirrorPulseRemotePollStage.WorkerEnumeration);
-        IReadOnlyDictionary<string, SnapshotEntry> current = await ReadSnapshotAsync(
-            instanceId, root.UniquenessKey, cancellationToken).ConfigureAwait(false);
+        IReadOnlyDictionary<string, SnapshotEntry> current = await ReadVerifiedSnapshotAsync(
+            root, previous, cancellationToken).ConfigureAwait(false);
         reportStage(MirrorPulseRemotePollStage.IdentitySelection);
         if (_identityResolver is not null)
         {
@@ -326,61 +325,6 @@ public sealed partial class MirrorPulseActiveRemotePoller : IAsyncDisposable
                 return;
             }
         }
-    }
-
-    private async Task<IReadOnlyDictionary<string, SnapshotEntry>> ReadSnapshotAsync(
-        InstanceId instanceId,
-        string rootKey,
-        CancellationToken cancellationToken)
-    {
-        var entries = new Dictionary<string, SnapshotEntry>(StringComparer.Ordinal);
-        var directories = new Queue<string>([string.Empty]);
-        var visitedDirectories = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        var pages = 0;
-        while (directories.Count > 0)
-        {
-            string directory = directories.Dequeue();
-            if (!visitedDirectories.Add(directory)) continue;
-            ReadOnlyMemory<byte> cursor = ReadOnlyMemory<byte>.Empty;
-            var seenCursors = new HashSet<string>(StringComparer.Ordinal);
-            while (true)
-            {
-                if (++pages > _maximumPages)
-                    throw new InvalidDataException("The active remote poll exceeded its page limit.");
-                CloudRemoteDirectoryPage page = await _source.ReadPageAsync(
-                    instanceId, rootKey, directory, cursor, _pageSize, cancellationToken).ConfigureAwait(false);
-                foreach (CloudRemoteDirectoryEntry entry in page.Entries)
-                {
-                    string relativePath = NormalizeRemotePath(entry.RelativePath);
-                    string key = entry.RemoteId;
-                    CloudPlaceholderMetadata metadata = entry.Metadata ?? (entry.ItemKind == CloudItemKind.Directory
-                        ? CloudPlaceholderMetadata.CreateDirectoryBuilder().Build()
-                        : CloudPlaceholderMetadata.CreateFileBuilder().Build());
-                    var candidate = new SnapshotEntry(entry.RemoteId, entry.RemoteRevision,
-                            entry.ItemKind, relativePath, entry.Length, metadata);
-                    if (!entries.TryAdd(key, candidate) &&
-                        !entries[key].Equals(new SnapshotEntry(entry.RemoteId, entry.RemoteRevision,
-                            entry.ItemKind, relativePath, entry.Length, metadata)))
-                    {
-                        throw new InvalidDataException("The remote poll returned duplicate object identifiers.");
-                    }
-
-                    if (entry.ItemKind == CloudItemKind.Directory && !entry.IsDeleted)
-                        directories.Enqueue(relativePath);
-                }
-
-                if (page.IsComplete) break;
-                if (page.ContinuationCursor.IsEmpty ||
-                    !seenCursors.Add(Convert.ToBase64String(page.ContinuationCursor.Span)))
-                {
-                    throw new InvalidDataException("The remote poll returned an invalid continuation cursor.");
-                }
-
-                cursor = page.ContinuationCursor;
-            }
-        }
-
-        return new ReadOnlyDictionary<string, SnapshotEntry>(entries);
     }
 
     internal static CloudRemoteChangeBatch RestoreOriginalBatch(InstanceId instance, RootRegistration root, MirrorPulsePendingRemotePoll pending)
@@ -528,16 +472,6 @@ public sealed partial class MirrorPulseActiveRemotePoller : IAsyncDisposable
         }
 
         return SHA256.HashData(Encoding.UTF8.GetBytes(builder.ToString()));
-    }
-
-    private static string NormalizeRemotePath(string path)
-    {
-        if (string.IsNullOrWhiteSpace(path) || Path.IsPathRooted(path))
-            throw new InvalidDataException("The remote poll returned an invalid path.");
-        string normalized = path.Replace('\\', '/').Trim('/');
-        if (normalized.Length == 0 || normalized.Split('/').Any(segment => segment is "" or "." or ".."))
-            throw new InvalidDataException("The remote poll returned an unsafe path.");
-        return normalized;
     }
 
     public async ValueTask DisposeAsync()
