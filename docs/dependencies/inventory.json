@@ -405,17 +405,17 @@
     },
     {
       "id": "MirrorPulse.Adapter.Sdk",
-      "version": "1.0.0-preview.5",
+      "version": "1.0.0",
       "kind": "restored",
-      "sha512": "EFFZoKjmKRaqJE4jdnUAxGqzSxTq4Dg/j0AA5VrCJi7vDydHpJQQokQIU2fyNMo5o/w5sr4hTs+9eMyQxP4+Eg==",
-      "nugetContentHash": "EFFZoKjmKRaqJE4jdnUAxGqzSxTq4Dg/j0AA5VrCJi7vDydHpJQQokQIU2fyNMo5o/w5sr4hTs+9eMyQxP4+Eg==",
+      "sha512": "dImLOgZbcljos7ejP8dwWGdVqvckNJC6u98A3nKj15IRZF9aL6OYJFvuo4CEIxIo11MMHw9yVytetpSUuZQ/9Q==",
+      "nugetContentHash": "dImLOgZbcljos7ejP8dwWGdVqvckNJC6u98A3nKj15IRZF9aL6OYJFvuo4CEIxIo11MMHw9yVytetpSUuZQ/9Q==",
       "licenseType": "expression",
       "license": "Apache-2.0",
       "licenseTextSource": null,
       "noticeFiles": [
-        "MirrorPulse.Adapter.Sdk.1.0.0-preview.5.LICENSE"
+        "MirrorPulse.Adapter.Sdk.1.0.0.LICENSE"
       ],
-      "source": "https://github.com/MirrorPulse/adapter-sdk/releases/tag/sdk-v1.0.0-preview.5"
+      "source": "https://github.com/MirrorPulse/adapter-sdk/releases/tag/sdk-v1.0.0"
     },
     {
       "id": "SQLitePCLRaw.bundle_e_sqlite3",
