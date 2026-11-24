@@ -34,8 +34,12 @@ public static partial class CliTransferFixtureLayout
             var installed = topology.Installations.SingleOrDefault(value => value.AdapterId.Value == adapter);
             var actual = topology.Roots.SingleOrDefault(value => value.RootId.Value == rootId);
             var instance = topology.Instances.SingleOrDefault(value => value.InstanceId.Value == instanceId);
-            string configurationKey = "root." + key + (key == "local" ? ".sourceDirectory" : ".endpoint");
-            string configurationValue = key == "local" ? Path.Combine(directory, "source", "left") : endpoint.AbsoluteUri;
+            bool signedForm = installed?.Manifest.Presentation is not null;
+            bool local = key == "local";
+            string field = local ? "sourceDirectory" : "endpoint";
+            string configurationKey = signedForm ? field : "root." + key + "." + field;
+            string configurationValue = local ? Path.Combine(directory, "source", "left") : endpoint.AbsoluteUri;
+            bool requiresAuthenticationMode = signedForm && !local;
             if (installed is null || !installed.IsSigned || !installations.Add(installed.InstallId) ||
                 installed.Manifest.Protocol.Minimum != 2 || installed.Manifest.Protocol.Maximum != 2 ||
                 installed.Manifest.RootDefinitions is not { Count: 1 } || installed.Manifest.RootDefinitions[0].Key != key ||
@@ -44,8 +48,10 @@ public static partial class CliTransferFixtureLayout
                 actual.AdapterId != installed.AdapterId || actual.IdentityScope != RootIdentityScope.InstanceRoot ||
                 actual.State != RootRegistrationState.Active || instance.AdapterId != installed.AdapterId ||
                 instance.InstallId != installed.InstallId || !instance.Enabled || instance.CredentialReferences.Count != 0 ||
-                instance.Configuration.Count != 1 || !instance.Configuration.TryGetValue(configurationKey, out string? configured) ||
-                !string.Equals(configured, configurationValue, key == "local" ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal) ||
+                instance.Configuration.Count != (requiresAuthenticationMode ? 2 : 1) ||
+                requiresAuthenticationMode && (!instance.Configuration.TryGetValue("authentication", out string? mode) || mode != "None") ||
+                !instance.Configuration.TryGetValue(configurationKey, out string? configured) ||
+                !string.Equals(configured, configurationValue, local ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal) ||
                 !sides.TryAdd(expected.FixtureSide, actual))
                 throw new InvalidDataException("The cross-package topology lost its signed declared roots, original instances or private backend configuration.");
         }

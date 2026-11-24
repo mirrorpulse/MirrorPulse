@@ -382,7 +382,11 @@ try {
     $phase = 'SignedTopology'
     $installation = Invoke-TransferCli @('--json', 'adapter', 'install', '--package', (Resolve-Path $PackagePath).Path)
     $installId = $installation.data.installedAdapterId
-    $sourceKey=if($legacySource){'sourceDirectory'}else{'root.local.sourceDirectory'}
+    $localDefinition = @((Invoke-TransferCli @('--json', '--no-start', 'adapter', 'list')).data.installations |
+        Where-Object installId -CEQ $installId)
+    if ($localDefinition.Count -ne 1) { throw 'The installed Local package did not expose its configuration contract.' }
+    $localKey = if ($localDefinition[0].form.presentation) { 'sourceDirectory' } else { 'root.local.sourceDirectory' }
+    $sourceKey = if ($legacySource) { 'sourceDirectory' } else { $localKey }
     $sourceInstance = Invoke-TransferCli @('--json', 'instance', 'create', '--install-id', $installId, '--name', 'Transfer source',
         '--root', 'local=Transfer Left', '--config', ($sourceKey+'='+[IO.Path]::Combine($fixture, 'source', 'left')))
     $targetKey = if ($crossPackage) { 'webdav' } else { 'local' }
@@ -390,8 +394,12 @@ try {
     if ($crossPackage) {
         $webDavInstallation = Invoke-TransferCli @('--json', 'adapter', 'install', '--package', (Resolve-Path $WebDavPackagePath).Path)
         $targetInstallId = $webDavInstallation.data.installedAdapterId
+        $webDavDefinition = @((Invoke-TransferCli @('--json', '--no-start', 'adapter', 'list')).data.installations |
+            Where-Object installId -CEQ $targetInstallId)
+        if ($webDavDefinition.Count -ne 1) { throw 'The installed WebDAV package did not expose its configuration contract.' }
+        $endpointKey = if ($webDavDefinition[0].form.presentation) { 'endpoint' } else { 'root.webdav.endpoint' }
     }
-    $targetConfiguration = if ($crossPackage) { 'root.webdav.endpoint=' + $endpoint.AbsoluteUri } else { 'root.local.sourceDirectory=' + [IO.Path]::Combine($fixture, 'source', 'right') }
+    $targetConfiguration = if ($crossPackage) { $endpointKey + '=' + $endpoint.AbsoluteUri } else { $localKey + '=' + [IO.Path]::Combine($fixture, 'source', 'right') }
     $targetInstance = Invoke-TransferCli @('--json', 'instance', 'create', '--install-id', $targetInstallId, '--name', 'Transfer target',
         '--root', ($targetKey + '=Transfer Right'), '--config', $targetConfiguration)
     $topology = (Invoke-TransferCli @('--json', '--no-start', 'adapter', 'list')).data

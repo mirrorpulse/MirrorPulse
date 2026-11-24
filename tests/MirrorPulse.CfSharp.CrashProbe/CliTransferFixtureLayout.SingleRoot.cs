@@ -46,7 +46,8 @@ public static partial class CliTransferFixtureLayout
             var actual = topology.Roots.SingleOrDefault(candidate => candidate.RootId.Value == rootId);
             var instance = topology.Instances.SingleOrDefault(candidate => candidate.InstanceId.Value == instanceId);
             string sourceDirectory = Path.Combine(directory, "source", expected.FixtureSide);
-            string configurationKey = marker.LegacySourceConfiguration && expected.FixtureSide == "left"
+            string configurationKey = installed.Manifest.Presentation is not null ||
+                marker.LegacySourceConfiguration && expected.FixtureSide == "left"
                 ? "sourceDirectory"
                 : "root.local.sourceDirectory";
             if (actual is null || instance is null || actual.InstanceId != instance.InstanceId ||
