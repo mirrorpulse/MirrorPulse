@@ -271,9 +271,11 @@ public sealed class MirrorPulseProductCatalogTests
     }
 
     [TestMethod]
-    [DataRow(false)]
-    [DataRow(true)]
-    public async Task SelectingASignedSingleRootVersionPreservesTheEffectiveSettingsOrRejectsMultipleRoots(bool twoRoots)
+    [DataRow(false, false)]
+    [DataRow(true, false)]
+    [DataRow(false, true)]
+    public async Task SelectingASignedSingleRootVersionPreservesTheEffectiveSettingsOrRejectsAnIncompatibleRoot(
+        bool twoRoots, bool changedKey)
     {
         string root = Directory.CreateTempSubdirectory("MirrorPulse-form-migration-").FullName;
         try
@@ -281,9 +283,10 @@ public sealed class MirrorPulseProductCatalogTests
             var paths = new MirrorPulseStoragePaths(Path.Combine(root, "sync"), Path.Combine(root, "state"));
             InstalledAdapter newer = AdapterConfigurationWorkerSessionTests.NewFixture("authorize");
             AdapterManifest latest = newer.Manifest;
+            AdapterRootDefinition previousRoot = changedKey ? new("legacy", "Files", "Files", false) : latest.RootDefinitions.Single();
             var previous = new AdapterManifest(1, latest.AdapterId, latest.Publisher, "0.9.0", latest.Protocol,
                 latest.Entrypoints, new(null), new(null, null), latest.Capabilities, latest.Locales,
-                latest.MinimumMirrorPulseVersion, latest.RootDefinitions);
+                latest.MinimumMirrorPulseVersion, [previousRoot]);
             var older = new InstalledAdapter(previous, InstallId.New(), Path.Combine(root, "older"),
                 new(new string('B', 64)), AdapterInstallSource.LocalFile, null, true, DateTimeOffset.UtcNow,
                 AdapterLifecycleState.Installed);
@@ -295,8 +298,7 @@ public sealed class MirrorPulseProductCatalogTests
                 ["root.files.extra"] = "preserved",
             }, [], Path.Combine(root, "files"), Path.Combine(root, "transfers"), true, AdapterLifecycleState.Enabled,
                 null, DateTimeOffset.UtcNow);
-            RootRegistration files = AdapterRootRegistrationMapper.Map(older.AdapterId, id, latest.RootDefinitions.Single(),
-                RootRegistrationState.Active);
+            RootRegistration files = AdapterRootRegistrationMapper.Map(older.AdapterId, id, previousRoot, RootRegistrationState.Active);
             RootRegistration extra = AdapterRootRegistrationMapper.Map(older.AdapterId, id, new("extra", "Extra", "Extra", false),
                 RootRegistrationState.Disabled);
             var intent = new MirrorPulseMutationIntent(Guid.NewGuid(), id, files.UniquenessKey,
@@ -311,10 +313,11 @@ public sealed class MirrorPulseProductCatalogTests
                 await initial.TransitionMutationAsync(intent.OperationId, MirrorPulseMutationState.Executing, MirrorPulseMutationState.RemoteAccepted, "after");
                 accepted = (await initial.ReadIncompleteMutationsAsync()).Single();
 
-                if (twoRoots)
+                if (twoRoots || changedKey)
                 {
-                    await Assert.ThrowsExactlyAsync<AdapterConfigurationValidationException>(() =>
+                    var error = await Assert.ThrowsExactlyAsync<AdapterConfigurationValidationException>(() =>
                         initial.SelectInstanceInstallationAsync(id, newer.InstallId));
+                    StringAssert.Contains(error.Message, changedKey ? "different folder key" : "requires one folder");
                 }
                 else
                 {
@@ -325,10 +328,13 @@ public sealed class MirrorPulseProductCatalogTests
             await using var catalog = await MirrorPulseProductCatalog.OpenAsync(paths);
             Assert.AreEqual(accepted, (await catalog.ReadIncompleteMutationsAsync()).Single());
             var migrated = await catalog.ReadAdapterTopologyAsync();
-            if (twoRoots)
+            if (twoRoots || changedKey)
             {
-                Assert.AreEqual(older.InstallId, migrated.Instances.Single().InstallId);
-                CollectionAssert.AreEqual(new[] { files.RootId, extra.RootId }, migrated.Roots.Select(item => item.RootId).ToArray());
+                AdapterInstance retained = migrated.Instances.Single();
+                Assert.AreEqual(older.InstallId, retained.InstallId);
+                Assert.AreEqual(instance.Configuration["root.files.endpoint"], retained.Configuration["root.files.endpoint"]);
+                CollectionAssert.AreEqual(twoRoots ? new[] { files.RootId, extra.RootId } : [files.RootId],
+                    migrated.Roots.Select(item => item.RootId).ToArray());
                 return;
             }
 

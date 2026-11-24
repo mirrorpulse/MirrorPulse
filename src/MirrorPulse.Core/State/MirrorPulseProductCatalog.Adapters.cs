@@ -308,7 +308,11 @@ public sealed partial class MirrorPulseProductCatalog : IInstalledAdapterCatalog
         RootRegistration[] roots = topology.Roots.Where(root => root.InstanceId == instance.InstanceId &&
             root.State != RootRegistrationState.Removed).ToArray();
         if (roots.Length > 1)
-            throw new AdapterConfigurationValidationException("This Adapter version requires a deployment with one folder.");
+            throw new AdapterConfigurationValidationException(
+                "This Adapter version requires one folder. Keep the current deployment on its installed version and create a separate deployment for each folder you migrate.");
+        if (roots.Length == 1 && !selected.Manifest.RootDefinitions.Any(definition => definition.Key == roots[0].UniquenessKey))
+            throw new AdapterConfigurationValidationException(
+                "This Adapter version uses a different folder key. Keep the current deployment on its installed version and create a separate deployment for the new version.");
 
         var configuration = new Dictionary<string, string>(instance.Configuration, StringComparer.Ordinal);
         string? prefix = roots.Length == 1 ? $"root.{roots[0].UniquenessKey}." : null;
