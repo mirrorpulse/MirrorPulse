@@ -343,6 +343,32 @@ $directProfile
     if ($directPackage) {
         Assert-DirectDeployment $custom $directInstallId $directInstanceId $directRootId $source $directLabel
         $evidence.directLocal = @{ version=$directManifest.version; packageSha256=$DirectLocalPackageSha256.ToLowerInvariant(); winUiConfigured=$true; persisted=$true }
+        $evidence.phase = 'Verify the registered Local root'
+        $deadline = [DateTime]::UtcNow.AddSeconds(40)
+        do {
+            $rootView = @(Invoke-EditionCli $custom @('--no-start', 'root', 'list') |
+                Where-Object { $_.root.rootId -ceq $directRootId })
+            $deployment = @((Invoke-EditionCli $custom @('--no-start', 'status')).instances |
+                Where-Object instanceId -CEQ $directInstanceId)
+            if ($rootView.Count -eq 1 -and $rootView[0].namespaceReady -eq $true -and
+                $deployment.Count -eq 1 -and $deployment[0].workerConnected -eq $true) { break }
+            if ([DateTime]::UtcNow -ge $deadline) { throw 'The signed Local root did not become ready with its Worker.' }
+            Start-Sleep -Milliseconds 250
+        } while ($true)
+        & powershell.exe -NoLogo -NoProfile -NonInteractive -File $uiProbe -ProcessId $custom.WindowId -VerifyRegisteredRoot `
+            -SourcePath $source -RootKey ($directManifest.rootDefinitions[0].key) -RootLabel $directLabel -InstanceName $directName
+        if ($LASTEXITCODE -ne 0) { throw 'The installed WinUI form did not protect the registered root.' }
+        Assert-DirectDeployment $custom $directInstallId $directInstanceId $directRootId $source $directLabel
+        $evidence.directLocal.registeredRootProtected = $true
+
+        $evidence.phase = 'Verify optional update discovery for official Local'
+        $update = Invoke-EditionCli $custom @('--no-start', 'instance', 'check-update', '--instance-id', $directInstanceId)
+        if ($update.availability -cnotin @('Unsupported', 'Current') -or $update.currentVersion -cne $directManifest.version -or
+            $null -ne $update.offerId -or $null -ne $update.availableVersion) {
+            throw 'The optional update check did not return an accurate no-offer result for the official Local Worker.'
+        }
+        Assert-DirectDeployment $custom $directInstallId $directInstanceId $directRootId $source $directLabel
+        $evidence.directLocal.optionalUpdate = @{ availability=$update.availability; currentVersion=$update.currentVersion }
     }
 
     $evidence.phase = 'Concurrent application activation'

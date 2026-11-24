@@ -29,7 +29,8 @@
                         AutomationProperties.AutomationId="AdapterInstanceSave" />
                 <Button Content="Cancel" Click="CancelButton_Click" AutomationProperties.AutomationId="AdapterInstanceCancel" />
             </StackPanel>
-            <InfoBar x:Name="ConfigurationStatusBar" IsOpen="False" Severity="Informational" />
+            <InfoBar x:Name="ConfigurationStatusBar" IsOpen="False" Severity="Informational"
+                     AutomationProperties.AutomationId="AdapterInstanceStatus" />
         </StackPanel>
     </ScrollViewer>
 </Page>
