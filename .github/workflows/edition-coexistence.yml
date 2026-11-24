@@ -36,7 +36,7 @@ jobs:
         run: pwsh ./eng/restore-adapter-sdk.ps1
       - name: Build, install and verify both editions in one account
         shell: pwsh
-        run: pwsh ./eng/verify-edition-coexistence.ps1 -EvidencePath artifacts/edition-coexistence.json
+        run: pwsh ./eng/verify-edition-coexistence.ps1 -ExpectedArchitecture Arm64 -EvidencePath artifacts/edition-coexistence.json
       - name: Retain edition coexistence observations
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7

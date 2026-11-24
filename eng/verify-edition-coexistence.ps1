@@ -1,14 +1,19 @@
 [CmdletBinding()]
-param([Parameter(Mandatory)][string]$EvidencePath)
+param(
+    [Parameter(Mandatory)][string]$EvidencePath,
+    [ValidateSet('X64', 'Arm64')][string]$ExpectedArchitecture = [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString()
+)
 
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'installed-process-images.ps1')
 . (Join-Path $PSScriptRoot 'installed-startup-diagnostics.ps1')
 $os = Get-CimInstance Win32_OperatingSystem
+$architecture = [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString()
 if ($os.ProductType -ne 1 -or [version]$os.Version -lt [version]'10.0.26100.0' -or
-    [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture -ne 'Arm64') {
-    throw 'Edition coexistence verification requires a clean Windows 11 ARM64 desktop test account.'
+    $architecture -ine $ExpectedArchitecture -or $architecture -notin @('X64', 'Arm64')) {
+    throw "Edition coexistence verification requires a clean Windows 11 $ExpectedArchitecture desktop test account."
 }
+$runtime = 'win-' + $architecture.ToLowerInvariant()
 $workspace = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $sourceSha = git -C $workspace rev-parse HEAD
 if ($LASTEXITCODE -ne 0 -or $sourceSha -cnotmatch '^[a-f0-9]{40}$' -or
@@ -35,7 +40,7 @@ $custom = @{
     ProviderId='7e2494ee-f27a-44cd-a564-15dc2eee476e'; Name='Sample Drive'; EnvironmentPrefix='MIRRORPULSE_EDITION_SAMPLE_DRIVE_'; Fixture='custom'
 }
 $editions = @($standard, $custom)
-$evidence = [ordered]@{ schemaVersion=1; sourceSha=$sourceSha; runtime='win-arm64'; phase='Preflight'; verified=$false; hosts=@() }
+$evidence = [ordered]@{ schemaVersion=1; sourceSha=$sourceSha; runtime=$runtime; phase='Preflight'; verified=$false; hosts=@() }
 $hostAttempt = $null
 
 function Invoke-ShellCheck($Edition, [switch]$Unregister) {
@@ -172,7 +177,7 @@ namespace MirrorPulse {
             if ($LASTEXITCODE -ne 0) { throw 'Locked restore failed for the custom edition.' }
         }
         $packageDirectory = Join-Path $scratch $edition.Prefix
-        & dotnet build $appProject --configuration Release --runtime win-arm64 --no-restore `
+        & dotnet build $appProject --configuration Release --runtime $runtime --no-restore `
             -p:GenerateAppxPackageOnBuild=true -p:AppxPackageSigningEnabled=true `
             "-p:PackageCertificateThumbprint=$($certificate.Thumbprint)" "-p:AppxPackageDir=$packageDirectory/" @overrides
         if ($LASTEXITCODE -ne 0) { throw 'An edition MSIX build failed.' }
@@ -185,8 +190,9 @@ namespace MirrorPulse {
         $edition.InstallAttempted = $true
         Add-AppxPackage -Path $packages[0].FullName
         $edition.Installed = Get-AppxPackage -Name $edition.PackageName
-        if (-not $edition.Installed -or -not (Test-Path -LiteralPath $edition.AliasPath)) {
-            throw 'The installed edition or its CLI alias was not registered.'
+        if (-not $edition.Installed -or $edition.Installed.Architecture.ToString() -ine $architecture -or
+            -not (Test-Path -LiteralPath $edition.AliasPath)) {
+            throw 'The edition did not register its CLI alias and expected package architecture.'
         }
         $version = & $edition.AliasPath --version
         $expectedBanner = "$($edition.Name) $([IO.Path]::GetFileNameWithoutExtension($edition.Alias)) "
