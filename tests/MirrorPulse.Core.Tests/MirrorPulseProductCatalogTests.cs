@@ -299,21 +299,39 @@ public sealed class MirrorPulseProductCatalogTests
                 RootRegistrationState.Active);
             RootRegistration extra = AdapterRootRegistrationMapper.Map(older.AdapterId, id, new("extra", "Extra", "Extra", false),
                 RootRegistrationState.Disabled);
-            await using var catalog = await MirrorPulseProductCatalog.OpenAsync(paths);
-            await catalog.SaveAdapterTopologyAsync(new([older, newer], [instance], twoRoots ? [files, extra] : [files]));
+            var intent = new MirrorPulseMutationIntent(Guid.NewGuid(), id, files.UniquenessKey,
+                MirrorPulseWorkerChangeKind.Move, "renamed.txt", "original.txt", false, "before", null, null,
+                MirrorPulseMutationOrigin.Journal, PreviousRootKey: files.UniquenessKey);
+            MirrorPulseMutationRecord accepted;
+            await using (var initial = await MirrorPulseProductCatalog.OpenAsync(paths))
+            {
+                await initial.SaveAdapterTopologyAsync(new([older, newer], [instance], twoRoots ? [files, extra] : [files]));
+                await initial.PrepareMutationAsync(intent);
+                await initial.TransitionMutationAsync(intent.OperationId, MirrorPulseMutationState.Prepared, MirrorPulseMutationState.Executing);
+                await initial.TransitionMutationAsync(intent.OperationId, MirrorPulseMutationState.Executing, MirrorPulseMutationState.RemoteAccepted, "after");
+                accepted = (await initial.ReadIncompleteMutationsAsync()).Single();
 
+                if (twoRoots)
+                {
+                    await Assert.ThrowsExactlyAsync<AdapterConfigurationValidationException>(() =>
+                        initial.SelectInstanceInstallationAsync(id, newer.InstallId));
+                }
+                else
+                {
+                    await initial.SelectInstanceInstallationAsync(id, newer.InstallId);
+                }
+            }
+
+            await using var catalog = await MirrorPulseProductCatalog.OpenAsync(paths);
+            Assert.AreEqual(accepted, (await catalog.ReadIncompleteMutationsAsync()).Single());
+            var migrated = await catalog.ReadAdapterTopologyAsync();
             if (twoRoots)
             {
-                await Assert.ThrowsExactlyAsync<AdapterConfigurationValidationException>(() =>
-                    catalog.SelectInstanceInstallationAsync(id, newer.InstallId));
-                var retained = await catalog.ReadAdapterTopologyAsync();
-                Assert.AreEqual(older.InstallId, retained.Instances.Single().InstallId);
-                CollectionAssert.AreEqual(new[] { files.RootId, extra.RootId }, retained.Roots.Select(item => item.RootId).ToArray());
+                Assert.AreEqual(older.InstallId, migrated.Instances.Single().InstallId);
+                CollectionAssert.AreEqual(new[] { files.RootId, extra.RootId }, migrated.Roots.Select(item => item.RootId).ToArray());
                 return;
             }
 
-            await catalog.SelectInstanceInstallationAsync(id, newer.InstallId);
-            var migrated = await catalog.ReadAdapterTopologyAsync();
             Assert.AreEqual(files.RootId, migrated.Roots.Single().RootId);
             AdapterInstance current = migrated.Instances.Single();
             Assert.AreEqual(newer.InstallId, current.InstallId);
@@ -324,6 +342,7 @@ public sealed class MirrorPulseProductCatalogTests
             var reverted = await catalog.SelectInstanceInstallationAsync(id, older.InstallId);
             Assert.AreEqual(files.RootId, reverted.Roots.Single().RootId);
             Assert.AreEqual("https://selected.example.test/", reverted.Instances.Single().Configuration["endpoint"]);
+            Assert.AreEqual(accepted, (await catalog.ReadIncompleteMutationsAsync()).Single());
         }
         finally { Directory.Delete(root, recursive: true); }
     }
