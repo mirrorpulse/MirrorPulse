@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using MirrorPulse.Core.Contracts;
@@ -34,7 +35,8 @@ public sealed partial class MirrorPulseFileRemotePollSnapshotStore
 {
     private sealed record RootSnapshot(int Version, string InstanceId, string RootId, string RootKey,
         IReadOnlyDictionary<string, MirrorPulseRemoteSnapshotEntry> Entries,
-        [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] byte[]? Cursor = null);
+        [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] byte[]? Cursor = null,
+        [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Sha256 = null);
 
     public async ValueTask<IReadOnlyDictionary<string, MirrorPulseRemoteSnapshotEntry>?> LoadAsync(RootRegistration root, CancellationToken token = default) =>
         (await LoadBaselineAsync(root, token).ConfigureAwait(false))?.Entries;
@@ -42,18 +44,55 @@ public sealed partial class MirrorPulseFileRemotePollSnapshotStore
     public async ValueTask<MirrorPulseRemotePollBaseline?> LoadBaselineAsync(RootRegistration root, CancellationToken token = default)
     {
         string path = RootPath(root);
-        if (!File.Exists(path)) return null;
-        if (new FileInfo(path).Length > MaximumSnapshotBytes) throw new InvalidDataException("The root polling snapshot is too large.");
-        await using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 64 * 1024, FileOptions.Asynchronous);
-        var snapshot = await JsonSerializer.DeserializeAsync<RootSnapshot>(stream, JsonOptions, token).ConfigureAwait(false)
-            ?? throw new InvalidDataException("The root polling snapshot is empty.");
-        if (snapshot.Version is not (1 or 2) || (snapshot.Version == 1 ? snapshot.Cursor is not null : snapshot.Cursor is not { Length: 32 }) ||
-            snapshot.InstanceId != root.InstanceId.ToString() || snapshot.RootId != root.RootId.ToString() ||
-            snapshot.RootKey != root.UniquenessKey || snapshot.Entries is null)
-            throw new InvalidDataException("The snapshot belongs to another stable root mapping.");
-        Validate(snapshot.Entries);
+        RootSnapshot? snapshot;
+        try
+        {
+            snapshot = await ReadRootSnapshotAsync(root, path, token).ConfigureAwait(false);
+        }
+        catch (MirrorPulsePollBaselineCorruptException)
+        {
+            var recovery = await ReadRootSnapshotAsync(root, path + ".recovery", token).ConfigureAwait(false);
+            if (recovery is not { Version: 3 }) throw;
+            File.Move(path, path + ".corrupt-" + Guid.NewGuid().ToString("N"));
+            await ReplaceSnapshotFileAsync(path, JsonSerializer.SerializeToUtf8Bytes(recovery, JsonOptions), token).ConfigureAwait(false);
+            snapshot = recovery;
+        }
+        if (snapshot is null)
+        {
+            // The original can be absent if recovery was interrupted after preserving it.
+            snapshot = await ReadRootSnapshotAsync(root, path + ".recovery", token).ConfigureAwait(false);
+            if (snapshot is not { Version: 3 }) return null;
+            await ReplaceSnapshotFileAsync(path, JsonSerializer.SerializeToUtf8Bytes(snapshot, JsonOptions), token).ConfigureAwait(false);
+        }
         return new(new ReadOnlyDictionary<string, MirrorPulseRemoteSnapshotEntry>(new Dictionary<string, MirrorPulseRemoteSnapshotEntry>(snapshot.Entries, StringComparer.Ordinal)),
             snapshot.Cursor ?? Array.Empty<byte>());
+    }
+
+    private static async ValueTask<RootSnapshot?> ReadRootSnapshotAsync(RootRegistration root, string path, CancellationToken token)
+    {
+        if (!File.Exists(path)) return null;
+        if (new FileInfo(path).Length > MaximumSnapshotBytes) throw new MirrorPulsePollBaselineCorruptException();
+        await using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 64 * 1024, FileOptions.Asynchronous);
+        RootSnapshot snapshot;
+        try
+        {
+            snapshot = await JsonSerializer.DeserializeAsync<RootSnapshot>(stream, JsonOptions, token).ConfigureAwait(false)
+                ?? throw new MirrorPulsePollBaselineCorruptException();
+        }
+        catch (JsonException error) { throw new MirrorPulsePollBaselineCorruptException(error); }
+
+        if (snapshot.Version is not (1 or 2 or 3)) throw new InvalidDataException("The root polling snapshot format is unsupported.");
+        if (snapshot.Entries is null || (snapshot.Version switch
+        {
+            1 => snapshot.Cursor is not null || snapshot.Sha256 is not null,
+            2 => snapshot.Cursor is not { Length: 32 } || snapshot.Sha256 is not null,
+            _ => snapshot.Cursor is { Length: not 32 } || snapshot.Sha256 != ComputeIntegrity(snapshot),
+        })) throw new MirrorPulsePollBaselineCorruptException();
+        if (snapshot.InstanceId != root.InstanceId.ToString() || snapshot.RootId != root.RootId.ToString() || snapshot.RootKey != root.UniquenessKey)
+            throw new InvalidDataException("The snapshot belongs to another stable root mapping.");
+        try { Validate(snapshot.Entries); }
+        catch (InvalidDataException error) { throw new MirrorPulsePollBaselineCorruptException(error); }
+        return snapshot;
     }
 
     public ValueTask SaveAsync(RootRegistration root, IReadOnlyDictionary<string, MirrorPulseRemoteSnapshotEntry> snapshot, CancellationToken token = default) =>
@@ -65,11 +104,23 @@ public sealed partial class MirrorPulseFileRemotePollSnapshotStore
         ArgumentNullException.ThrowIfNull(baseline.Entries);
         Validate(baseline.Entries);
         if (baseline.Cursor.Length is not (0 or 32)) throw new InvalidDataException("The polling baseline cursor has an invalid length.");
-        byte[] bytes = JsonSerializer.SerializeToUtf8Bytes(new RootSnapshot(baseline.Cursor.IsEmpty ? 1 : 2,
+        var snapshot = new RootSnapshot(3,
             root.InstanceId.ToString(), root.RootId.ToString(), root.UniquenessKey, baseline.Entries,
-            baseline.Cursor.IsEmpty ? null : baseline.Cursor.ToArray()), JsonOptions);
+            baseline.Cursor.IsEmpty ? null : baseline.Cursor.ToArray());
+        byte[] bytes = JsonSerializer.SerializeToUtf8Bytes(snapshot with { Sha256 = ComputeIntegrity(snapshot) }, JsonOptions);
         if (bytes.Length > MaximumSnapshotBytes) throw new InvalidDataException("The root polling snapshot is too large.");
         string path = RootPath(root); Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        // A durable pending intent precedes both writes and remains authoritative until both commit.
+        await ReplaceSnapshotFileAsync(path + ".recovery", bytes, token).ConfigureAwait(false);
+        await ReplaceSnapshotFileAsync(path, bytes, token).ConfigureAwait(false);
+    }
+
+    private static string ComputeIntegrity(RootSnapshot snapshot) => Convert.ToHexString(SHA256.HashData(
+        JsonSerializer.SerializeToUtf8Bytes(snapshot with { Sha256 = null }, JsonOptions)));
+
+    private static async Task ReplaceSnapshotFileAsync(string path, byte[] bytes, CancellationToken token)
+    {
+        token.ThrowIfCancellationRequested();
         string temporary = path + ".tmp-" + Guid.NewGuid().ToString("N");
         try
         {
@@ -89,6 +140,9 @@ public sealed partial class MirrorPulseFileRemotePollSnapshotStore
 
     private string RootPath(RootRegistration root) => Path.Combine(_rootPath, root.InstanceId.ToString(), root.RootId + ".json");
 }
+
+internal sealed class MirrorPulsePollBaselineCorruptException(Exception? inner = null)
+    : IOException("The retained remote polling baseline could not be validated.", inner);
 
 public sealed partial class MirrorPulseCatalogRemotePollPendingStore
 {

@@ -228,7 +228,8 @@ public sealed partial class MirrorPulseActiveRemotePoller : IAsyncDisposable
         using var retainedAdmission = admission;
 
         reportStage(MirrorPulseRemotePollStage.SnapshotRead);
-        if (!_snapshots.TryGetValue(key, out SnapshotBaseline? baseline))
+        bool cached = _snapshots.TryGetValue(key, out SnapshotBaseline? baseline);
+        if (!cached)
         {
             var persistedBaseline = scoped && _snapshotStore is IMirrorPulseRootRemotePollBaselineStore baselines
                 ? await baselines.LoadBaselineAsync(root, cancellationToken).ConfigureAwait(false) : null;
@@ -273,10 +274,13 @@ public sealed partial class MirrorPulseActiveRemotePoller : IAsyncDisposable
 
         if (SnapshotsEqual(root, previous!, current))
         {
-            // Re-saving a loaded snapshot repairs a stale temporary file without changing the
-            // CfSharp cursor or creating another remote batch.
             reportStage(MirrorPulseRemotePollStage.SnapshotCommit);
-            await SaveSnapshotAsync(root, new(current, baseline!.Cursor), scoped, cancellationToken).ConfigureAwait(false);
+            if (!cached || legacySnapshot is not null || !ObservationsEqual(previous, current))
+            {
+                var refreshed = new SnapshotBaseline(current, baseline!.Cursor);
+                await SaveSnapshotAsync(root, refreshed, scoped, cancellationToken).ConfigureAwait(false);
+                _snapshots[key] = refreshed;
+            }
             return false;
         }
 

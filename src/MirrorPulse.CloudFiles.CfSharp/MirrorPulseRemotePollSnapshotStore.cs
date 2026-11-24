@@ -128,7 +128,7 @@ public sealed partial class MirrorPulseFileRemotePollSnapshotStore : IMirrorPuls
             throw new InvalidDataException("The remote poll snapshot contains too many entries.");
         foreach ((string key, MirrorPulseRemoteSnapshotEntry entry) in entries)
         {
-            if (string.IsNullOrWhiteSpace(key) || string.IsNullOrWhiteSpace(entry.RemoteId) ||
+            if (string.IsNullOrWhiteSpace(key) || entry is null || string.IsNullOrWhiteSpace(entry.RemoteId) ||
                 !string.Equals(key, entry.RemoteId, StringComparison.Ordinal))
                 throw new InvalidDataException("The remote poll snapshot contains an invalid object identifier.");
             if (string.IsNullOrWhiteSpace(entry.RemoteRevision) || string.IsNullOrWhiteSpace(entry.RelativePath) ||

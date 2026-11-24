@@ -55,10 +55,16 @@ public sealed partial class MirrorPulseActiveRemotePoller
         trigger == PollTrigger.Forced || !_pollSchedules.TryGetValue(root, out var schedule) ||
         now >= schedule.DueAt || (trigger == PollTrigger.Manual && schedule.Failures == 0);
 
-    private static string PollFailureReason(Exception failure) => failure is AdapterWorkerOperationException worker &&
-        worker.FailureCode is "RootOffline" or "CredentialRejected" or "AccessDenied" or "SourceUnavailable" or
-            "InvalidCursor" or "DirectoryEnumerationIncomplete"
-        ? worker.FailureCode : SafeDiagnosticPolicy.ClassifyFailure(failure);
+    private static string PollFailureReason(Exception failure) => failure switch
+    {
+        MirrorPulsePollBaselineCorruptException => "PollBaselineCorrupt",
+        AdapterWorkerOperationException
+        {
+            FailureCode: "RootOffline" or "CredentialRejected" or "AccessDenied" or
+                "SourceUnavailable" or "InvalidCursor" or "DirectoryEnumerationIncomplete"
+        } worker => worker.FailureCode,
+        _ => SafeDiagnosticPolicy.ClassifyFailure(failure),
+    };
 
     private void RememberAttempt(RootId root, MirrorPulseRemotePollStage stage, string? failure)
     {

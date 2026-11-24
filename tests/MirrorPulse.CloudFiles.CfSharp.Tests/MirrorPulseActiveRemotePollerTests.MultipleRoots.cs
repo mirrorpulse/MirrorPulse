@@ -280,6 +280,48 @@ public sealed partial class MirrorPulseActiveRemotePollerTests
     }
 
     [TestMethod]
+    [DataRow(true)]
+    [DataRow(false)]
+    public async Task CorruptRootBaselineUsesOnlyVerifiedRecoveryAndKeepsTheOldEvidence(bool validCopy)
+    {
+        await using var fixture = await RootPollFixture.CreateAsync();
+        fixture.Roots = [fixture.First];
+        await using (var original = fixture.Poller())
+        {
+            Assert.IsFalse(await original.PollOnceAsync(fixture.Instance));
+            fixture.Source.Set(fixture.First, "v2");
+            Assert.IsTrue(await original.PollOnceAsync(fixture.Instance));
+        }
+        var confirmed = fixture.Applied.Single();
+        string primary = Path.Combine(fixture.Paths.DataRootPath, "remote-poll", fixture.Instance.ToString(), fixture.First.RootId + ".json");
+        string altered = (await File.ReadAllTextAsync(primary)).Replace("\"v2\"", "\"v9\"", StringComparison.Ordinal);
+        await File.WriteAllTextAsync(primary, altered);
+        if (!validCopy) await File.WriteAllTextAsync(primary + ".recovery", altered);
+        fixture.Source.Set(fixture.First, "v3");
+        int reads = fixture.Source.Calls.Count;
+
+        await fixture.ReopenCatalogAsync();
+        await using var reopened = fixture.Poller();
+        if (!validCopy)
+        {
+            await Assert.ThrowsExactlyAsync<MirrorPulsePollBaselineCorruptException>(() => reopened.PollOnceAsync(fixture.Instance).AsTask());
+            Assert.HasCount(reads, fixture.Source.Calls);
+            Assert.HasCount(1, fixture.Applied);
+            Assert.AreEqual("PollBaselineCorrupt", reopened.ReadRootStatus(fixture.First).Reason);
+            Assert.AreEqual(altered, await File.ReadAllTextAsync(primary));
+            return;
+        }
+
+        Assert.IsTrue(await reopened.PollOnceAsync(fixture.Instance));
+        var next = fixture.Applied[1];
+        Assert.AreEqual("v2", next.Changes.Single().PreviousRemoteRevision);
+        CollectionAssert.AreEqual(confirmed.FinalCursor.ToArray(), next.InitialCursor.ToArray());
+        string preserved = Directory.GetFiles(Path.GetDirectoryName(primary)!, Path.GetFileName(primary) + ".corrupt-*").Single();
+        Assert.AreEqual(altered, await File.ReadAllTextAsync(preserved));
+        Assert.AreEqual("v3", (await fixture.Snapshots.LoadAsync(fixture.First))!["same"].RemoteRevision);
+    }
+
+    [TestMethod]
     [DataRow("before-apply")]
     [DataRow("after-apply")]
     [DataRow("snapshot-commit")]
