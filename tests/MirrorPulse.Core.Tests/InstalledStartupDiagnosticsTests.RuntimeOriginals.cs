@@ -14,6 +14,7 @@ public sealed partial class InstalledStartupDiagnosticsTests
     [DataRow("complete")]
     [DataRow("foreign-source")]
     [DataRow("foreign-library")]
+    [DataRow("foreign-sdk")]
     [DataRow("renamed")]
     [DataRow("missing-version")]
     [DataRow("duplicate-version")]
@@ -26,6 +27,7 @@ public sealed partial class InstalledStartupDiagnosticsTests
     [DataRow("changed-after")]
     [DataRow("changed-retained")]
     [DataRow("changed-package")]
+    [DataRow("changed-sdk-pin")]
     [DataRow("changed-prepared")]
     [DataRow("linked-package")]
     [DataRow("reused-output")]
@@ -41,7 +43,13 @@ public sealed partial class InstalledStartupDiagnosticsTests
             Directory.CreateDirectory(install); Directory.CreateDirectory(packageDirectory);
             string collector = Path.Combine(directory, "eng", "installed-runtime-originals.ps1");
             Directory.CreateDirectory(Path.GetDirectoryName(collector)!);
-            File.Copy(Path.Combine(Path.GetDirectoryName(Policy())!, "installed-runtime-originals.ps1"), collector);
+            string toolsDirectory = Path.GetDirectoryName(Policy())!;
+            File.Copy(Path.Combine(toolsDirectory, "installed-runtime-originals.ps1"), collector);
+            string sdkPinPath = Path.Combine(directory, "eng", "adapter-sdk.lock.json");
+            File.Copy(Path.Combine(toolsDirectory, "adapter-sdk.lock.json"), sdkPinPath);
+            using JsonDocument sdkPin = JsonDocument.Parse(await File.ReadAllBytesAsync(sdkPinPath));
+            string sdkVersion = sdkPin.RootElement.GetProperty("version").GetString()!;
+            string sdkInformationalVersion = sdkVersion + "+" + sdkPin.RootElement.GetProperty("sourceSha").GetString();
             string[] paths = ["MirrorPulse.App.exe", "MirrorPulse.App.dll", "MirrorPulse.App.deps.json", "MirrorPulse.App.runtimeconfig.json",
                 "mp.exe", "mp.dll", "mp.deps.json", "mp.runtimeconfig.json", "MirrorPulse.Control.Client.dll",
                 "host/MirrorPulse.Host.exe", "host/MirrorPulse.Host.dll", "host/MirrorPulse.Host.deps.json", "host/MirrorPulse.Host.runtimeconfig.json",
@@ -65,10 +73,11 @@ public sealed partial class InstalledStartupDiagnosticsTests
                 else if (name.EndsWith(".dll", StringComparison.Ordinal))
                 {
                     string assemblyName = Path.GetFileNameWithoutExtension(name);
-                    string version = assemblyName == "MirrorPulse.Adapter.Sdk" ? "0.3.1+ed0153809e96ef80d80d303aefa45b30914f8e50" :
+                    string version = assemblyName == "MirrorPulse.Adapter.Sdk" ? sdkInformationalVersion :
                         assemblyName.StartsWith("CfSharp", StringComparison.Ordinal) ? "0.1.0-preview.16+e0d5d32a7c24b2812d16315897524afd4b54e050" : "1.0.0+" + source;
                     if (relative == "MirrorPulse.Core.dll" && scenario == "foreign-source") version = "1.0.0+" + new string('a', 40);
                     if (relative == "CfSharp.dll" && scenario == "foreign-library") version = "0.1.0-preview.7+" + new string('a', 40);
+                    if (relative == "MirrorPulse.Adapter.Sdk.dll" && scenario == "foreign-sdk") version = sdkVersion + "+" + new string('a', 40);
                     if (relative == "MirrorPulse.Core.dll" && scenario == "renamed") assemblyName = "Other.Core";
                     var builder = new PersistedAssemblyBuilder(new AssemblyName(assemblyName), typeof(object).Assembly);
                     builder.DefineDynamicModule(assemblyName).DefineType("Fixture", TypeAttributes.Public).CreateType();
@@ -128,6 +137,7 @@ public sealed partial class InstalledStartupDiagnosticsTests
                             'changed-after' {[IO.File]::AppendAllText((Join-Path $data.install 'MirrorPulse.Core.dll'),'changed')}
                             'changed-retained' {[IO.File]::AppendAllText((Join-Path $output 'inputs/MirrorPulse.Core.dll'),'changed')}
                             'changed-package' {[IO.File]::AppendAllText($data.package,'changed')}
+                            'changed-sdk-pin' {[IO.File]::AppendAllText((Join-Path $Directory 'eng/adapter-sdk.lock.json'),' ')}
                             'changed-prepared' {[IO.File]::AppendAllText((Join-Path $output 'prepared.json'),' ')}
                             'reused-output' {$null=Start-InstalledRuntimeOriginals -Workspace $Directory -PackagePath $package -InstallLocation $data.install -OutputDirectory $output -Runtime $data.runtime -SourceSha $data.source}
                         }
@@ -141,15 +151,16 @@ public sealed partial class InstalledStartupDiagnosticsTests
                             $collected.fullP085Accepted -or $collected.fullS06Accepted -or -not $collected.actualProcessImageBindingSeparatelyRequired -or
                             -not $collected.actualInputBytesBeforeAndAfterUnchanged -or -not $collected.installedInputsMatchOriginalMsixMembers -or
                             $collected.preparedSha256 -cne $before.preparedSha256) {throw 'Complete source/input receipts or separate execution authority were lost.'}
-                        foreach($binding in @($prepared.package,$prepared.collector)+@($prepared.inputs)) {
+                        foreach($binding in @($prepared.package,$prepared.collector,$prepared.sdkPin)+@($prepared.inputs)) {
                             if((Get-FileHash -LiteralPath (Join-Path $output $binding.archivePath)).Hash -cne $binding.sha256) {throw 'An original byte binding changed.'}
                         }
                     } else {
-                        $expected=@{'foreign-source'='another source revision';'foreign-library'='another source revision';'renamed'='renamed from another assembly';
+                        $expected=@{'foreign-source'='another source revision';'foreign-library'='another source revision';'foreign-sdk'='another source revision';'renamed'='renamed from another assembly';
                             'missing-version'='one unambiguous source version';'duplicate-version'='one unambiguous source version';'missing-member'='exact required';
                             'duplicate-member'='ambiguous or unsafe';'unsafe-member'='ambiguous or unsafe';'private-key-entry'='ambiguous or unsafe';
                             'different-installed-bytes'='differs from its exact MSIX member';'wrong-native-architecture'='wrong native architecture';
                             'changed-after'='changed during execution';'changed-retained'='changed during execution';'changed-package'='changed during execution';
+                            'changed-sdk-pin'='changed during execution';
                             'changed-prepared'='original prepared input receipt';'linked-package'='reparse point';'reused-output'='fresh exact MSIX'}
                         if($null -eq $failure -or -not $failure.Contains($expected[$Scenario]) -or (Test-Path -LiteralPath (Join-Path $output 'collected.json'))) {
                             throw ('The specific original boundary did not refuse: '+$Scenario+'; '+$failure)

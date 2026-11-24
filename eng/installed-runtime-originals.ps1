@@ -47,7 +47,7 @@ function Get-InstalledRuntimeEntries([IO.Compression.ZipArchive]$Archive) {
 }
 
 # Read PE metadata without loading or executing any installed assembly.
-function Get-InstalledInputMetadata([string]$Path, [string]$Runtime, [string]$SourceSha) {
+function Get-InstalledInputMetadata([string]$Path, [string]$Runtime, [string]$SourceSha, [string]$SdkVersion) {
     $stream = [IO.File]::OpenRead($Path)
     try {
         $reader = [Reflection.PortableExecutable.PEReader]::new($stream)
@@ -86,7 +86,7 @@ function Get-InstalledInputMetadata([string]$Path, [string]$Runtime, [string]$So
             if ($versions.Count -ne 1 -or [string]::IsNullOrEmpty($versions[0])) { throw 'An installed input lacks one unambiguous source version.' }
             $version = $versions[0]
             if ($assemblyName -ceq 'MirrorPulse.Adapter.Sdk') {
-                $valid = $version -ceq '0.3.1+ed0153809e96ef80d80d303aefa45b30914f8e50'
+                $valid = $version -ceq $SdkVersion
             } elseif ($assemblyName -clike 'CfSharp*') {
                 $valid = $version -ceq '0.1.0-preview.16+e0d5d32a7c24b2812d16315897524afd4b54e050'
             } else {
@@ -132,6 +132,12 @@ function Start-InstalledRuntimeOriginals {
     try {
         $runtimeEntries = @(Get-InstalledRuntimeEntries $archive)
         New-Item -ItemType Directory -Path $output | Out-Null
+        $sdkPin = Copy-InstalledRuntimeOriginal 'eng/adapter-sdk.lock.json' $Workspace (Join-Path $output 'policy/adapter-sdk.lock.json') $Workspace $output 4KB
+        $sdk = Get-Content -LiteralPath (Join-Path $output $sdkPin.archivePath) -Raw | ConvertFrom-Json
+        if ($sdk.schemaVersion -ne 1 -or $sdk.packageId -cne 'MirrorPulse.Adapter.Sdk' -or
+            $sdk.version -cnotmatch '\A[0-9]+\.[0-9]+\.[0-9]+(?:-preview\.[1-9][0-9]*)?\z' -or
+            $sdk.sourceSha -cnotmatch '\A[0-9a-f]{40}\z') { throw 'Installed inputs require the checked-out Adapter SDK version and source pin.' }
+        $sdkVersion = "$($sdk.version)+$($sdk.sourceSha)"
         $package = Copy-InstalledRuntimeOriginal $PackagePath $packageSourceRoot (Join-Path $output 'package.msix') $Workspace $output 512MB
         $inputs = @(foreach ($entry in $runtimeEntries) {
             if ($entry.Length -gt 128MB) { throw 'A packaged runtime input exceeds its bound.' }
@@ -141,7 +147,7 @@ function Start-InstalledRuntimeOriginals {
             if ($record.sha256 -cne $packedHash -or $record.length -ne $entry.Length) { throw 'An actual installed input differs from its exact MSIX member.' }
             $record.relativePath = $entry.FullName
             if ([IO.Path]::GetExtension($entry.FullName) -cin @('.dll', '.exe')) {
-                $record.metadata = Get-InstalledInputMetadata (Join-Path $output $record.archivePath) $Runtime $SourceSha
+                $record.metadata = Get-InstalledInputMetadata (Join-Path $output $record.archivePath) $Runtime $SourceSha $sdkVersion
             }
             $record
         })
@@ -149,7 +155,7 @@ function Start-InstalledRuntimeOriginals {
     $collector = Copy-InstalledRuntimeOriginal $script:InstalledRuntimeOriginalsCollectorPath $Workspace (Join-Path $output 'policy/installed-runtime-originals.ps1') $Workspace $output
     $prepared = Join-Path $output 'prepared.json'
     [ordered]@{ schemaVersion = 1; sourceSha = $SourceSha; runtime = $Runtime; installLocation = [IO.Path]::GetFullPath($InstallLocation)
-        outputDirectory = $output; package = $package; inputs = $inputs; collector = $collector
+        outputDirectory = $output; package = $package; inputs = $inputs; collector = $collector; sdkPin = $sdkPin
         preparedUtc = [DateTimeOffset]::UtcNow.ToString('o'); productExecutionRequestedByCollector = $false } |
         ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $prepared -Encoding utf8
     return [pscustomobject]@{ outputDirectory = $output; preparedSha256 = (Get-FileHash -LiteralPath $prepared).Hash }
@@ -164,9 +170,12 @@ function Complete-InstalledRuntimeOriginals {
     if ((Get-FileHash -LiteralPath $path).Hash -cne $PreparedSha256 -or (Test-Path -LiteralPath (Join-Path $output 'collected.json'))) { throw 'Require the original prepared input receipt and a fresh completion.' }
     $prepared = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json -DateKind String
     if ($prepared.schemaVersion -ne 1 -or $prepared.sourceSha -cne $SourceSha -or $prepared.outputDirectory -ine $output -or
-        $prepared.installLocation -ine [IO.Path]::GetFullPath($InstallLocation) -or $prepared.productExecutionRequestedByCollector -ne $false) { throw 'The installed source, root or original preparation was substituted.' }
-    foreach ($binding in @($prepared.package, $prepared.collector) + @($prepared.inputs)) {
-        $sourceRoot = if ($binding -eq $prepared.package) { [IO.Path]::GetDirectoryName($prepared.package.path) } elseif ($binding -eq $prepared.collector) { $Workspace } else { $InstallLocation }
+        $prepared.installLocation -ine [IO.Path]::GetFullPath($InstallLocation) -or $prepared.productExecutionRequestedByCollector -ne $false -or
+        $prepared.sdkPin.path -ine (Join-Path $Workspace 'eng/adapter-sdk.lock.json') -or
+        $prepared.sdkPin.archivePath -cne 'policy/adapter-sdk.lock.json') { throw 'The installed source, root or original preparation was substituted.' }
+    foreach ($binding in @($prepared.package, $prepared.collector, $prepared.sdkPin) + @($prepared.inputs)) {
+        $sourceRoot = if ($binding -eq $prepared.package) { [IO.Path]::GetDirectoryName($prepared.package.path) }
+            elseif ($binding -in @($prepared.collector, $prepared.sdkPin)) { $Workspace } else { $InstallLocation }
         $source = Get-InstalledOriginalPath $binding.path $sourceRoot
         $retained = Get-InstalledOriginalPath (Join-Path $output $binding.archivePath) $Workspace
         if ((Get-FileHash -LiteralPath $source).Hash -cne $binding.sha256 -or (Get-FileHash -LiteralPath $retained).Hash -cne $binding.sha256 -or

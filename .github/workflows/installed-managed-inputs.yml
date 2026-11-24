@@ -2,34 +2,38 @@ name: Installed managed input origins
 
 on:
   workflow_dispatch:
+    inputs:
+      include_preview13:
+        description: Also run the historical CfSharp preview.13 comparison
+        type: boolean
+        default: false
   push:
     branches:
       - develop
     paths:
       - .github/workflows/installed-managed-inputs.yml
+      - eng/adapter-sdk.lock.json
       - eng/installed-managed-modules.ps1
       - eng/installed-process-images.ps1
+      - eng/installed-runtime-originals.ps1
       - eng/installed-startup-diagnostics.ps1
       - eng/prepare-installed-cfsharp-comparison.ps1
       - eng/verify-msix-cloudfiles.ps1
       - tests/MirrorPulse.Core.Tests/InstalledStartupDiagnosticsTests.ManagedModules.cs
+      - tests/MirrorPulse.Core.Tests/InstalledStartupDiagnosticsTests.RuntimeOriginals.cs
 
 permissions:
   contents: read
 
 jobs:
   installed-arm64:
-    name: installed-arm64${{ matrix.artifact_suffix }}
+    name: installed-arm64${{ matrix.target.artifact_suffix }}
     runs-on: windows-11-arm
     timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - profile: locked
-            artifact_suffix: ''
-          - profile: preview13-reference
-            artifact_suffix: '-preview13-reference'
+        target: ${{ fromJSON(inputs.include_preview13 && '[{"profile":"locked","artifact_suffix":""},{"profile":"preview13-reference","artifact_suffix":"-preview13-reference"}]' || '[{"profile":"locked","artifact_suffix":""}]') }}
     steps:
       - name: Check out the exact selected source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -44,7 +48,7 @@ jobs:
       - name: Bind the official CfSharp inputs for the selected installation
         shell: pwsh
         env:
-          MP_INSTALLED_COMPARISON_PROFILE: ${{ matrix.profile }}
+          MP_INSTALLED_COMPARISON_PROFILE: ${{ matrix.target.profile }}
         run: |
           pwsh ./eng/prepare-installed-cfsharp-comparison.ps1 -Profile $env:MP_INSTALLED_COMPARISON_PROFILE -EvidencePath artifacts/evidence/cfsharp-inputs.json
           if ($LASTEXITCODE -ne 0) { throw 'The selected installed comparison inputs could not be verified.' }
@@ -73,7 +77,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: installed-managed-arm64-results${{ matrix.artifact_suffix }}
+          name: installed-managed-arm64-results${{ matrix.target.artifact_suffix }}
           path: artifacts/evidence/**
           if-no-files-found: error
 
@@ -81,6 +85,6 @@ jobs:
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: installed-managed-arm64-originals${{ matrix.artifact_suffix }}
+          name: installed-managed-arm64-originals${{ matrix.target.artifact_suffix }}
           path: artifacts/test-results/installed-msix-originals/**
           if-no-files-found: ignore
