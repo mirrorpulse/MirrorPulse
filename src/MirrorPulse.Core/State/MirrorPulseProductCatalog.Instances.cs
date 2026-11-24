@@ -203,6 +203,8 @@ public sealed partial class MirrorPulseProductCatalog
             MirrorPulseAdapterTopology current = payload is null ? new([], [], []) : DeserializeTopology(payload);
             InstalledAdapter installation = current.Installations.SingleOrDefault(item => item.InstallId == installId)
                 ?? throw new FileNotFoundException("The selected Adapter installation is not registered.");
+            if (_edition.DirectAdapterId is not null && current.Instances.Count != 0)
+                throw new InvalidOperationException("This edition supports one Adapter deployment.");
             if (installation.Manifest.Presentation is { } presentation && credentialBindings is null)
             {
                 if (credentialReferences.Count != 0)
@@ -271,6 +273,7 @@ public sealed partial class MirrorPulseProductCatalog
                 [.. current.Instances, instance],
                 [.. current.Roots, .. roots]);
             ValidateTopology(next);
+            ValidateEditionTopology(next);
             await ValidateManagedRootNamesAsync(next, cancellationToken).ConfigureAwait(false);
 
             cancellationToken.ThrowIfCancellationRequested();

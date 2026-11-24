@@ -34,6 +34,7 @@ public sealed partial class MirrorPulseProductCatalog : IInstalledAdapterCatalog
         CancellationToken cancellationToken = default)
     {
         ValidateTopology(topology);
+        ValidateEditionTopology(topology);
         string payload = JsonSerializer.Serialize(topology, TopologyJsonOptions);
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try

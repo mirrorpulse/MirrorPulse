@@ -10,6 +10,8 @@
     <AssemblyMetadata Include="MirrorPulse.EditionId" Value="$(MirrorPulseEditionId)" />
     <AssemblyMetadata Include="MirrorPulse.EditionName" Value="$(MirrorPulseEditionName)" />
     <AssemblyMetadata Include="MirrorPulse.EditionProviderId" Value="$(MirrorPulseEditionProviderId)" />
+    <AssemblyMetadata Include="MirrorPulse.EditionDirectAdapter" Value="$(MirrorPulseEditionDirectAdapter)" />
+    <AssemblyMetadata Include="MirrorPulse.EditionDefaultAdapters" Value="@(MirrorPulseEditionDefaultAdapter->'%(AdapterId)', ',')" />
     <PackageReference Include="Microsoft.Data.Sqlite" />
     <PackageReference Include="MirrorPulse.Adapter.Sdk" />
     <EmbeddedResource Include="State/CatalogSchema118.sql" LogicalName="MirrorPulse.Core.State.CatalogSchema118.sql" />
@@ -22,6 +24,19 @@
            Text="The edition profile must supply MirrorPulseEditionName and MirrorPulseEditionProviderId." />
     <Error Condition="!$([System.Text.RegularExpressions.Regex]::IsMatch('$(MirrorPulseEditionProviderId)', '^[0-9a-fA-F]{8}(-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}$'))"
            Text="MirrorPulseEditionProviderId must be a Cloud Files provider GUID." />
+    <Error Condition="'$(MirrorPulseEditionDirectAdapter)' != 'true' and '$(MirrorPulseEditionDirectAdapter)' != 'false'"
+           Text="MirrorPulseEditionDirectAdapter must be true or false." />
+    <Error Condition="'$(MirrorPulseEditionId)' == 'standard' and ('@(MirrorPulseEditionDefaultAdapter)' != '' or '$(MirrorPulseEditionDirectAdapter)' == 'true')"
+           Text="Bundled Adapters and direct presentation require a custom edition." />
+    <Error Condition="'$(MirrorPulseEditionDirectAdapter)' == 'true' and @(MirrorPulseEditionDefaultAdapter->Count()) != 1"
+           Text="Direct Adapter presentation requires exactly one bundled Adapter." />
+    <Error Condition="'@(MirrorPulseEditionDefaultAdapter)' != '' and !$([System.Text.RegularExpressions.Regex]::IsMatch('%(MirrorPulseEditionDefaultAdapter.AdapterId)', '\A[a-z0-9](?:[a-z0-9.-]{0,126}[a-z0-9])?\z'))"
+           Text="Each bundled Adapter requires a canonical AdapterId." />
+    <ItemGroup>
+      <_EditionAdapterId Include="@(MirrorPulseEditionDefaultAdapter->'%(AdapterId)')" />
+    </ItemGroup>
+    <Error Condition="@(_EditionAdapterId->Distinct()->Count()) != @(MirrorPulseEditionDefaultAdapter->Count())"
+           Text="Bundled Adapter IDs must be unique." />
   </Target>
 
 </Project>

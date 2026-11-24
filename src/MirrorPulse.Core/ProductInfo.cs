@@ -19,7 +19,9 @@ public static class ProductInfo
         return new MirrorPulseEdition(
             ReadValue("MirrorPulse.EditionId"),
             ReadValue("MirrorPulse.EditionName"),
-            Guid.Parse(ReadValue("MirrorPulse.EditionProviderId")));
+            Guid.Parse(ReadValue("MirrorPulse.EditionProviderId")),
+            ReadValue("MirrorPulse.EditionDefaultAdapters"),
+            bool.Parse(ReadValue("MirrorPulse.EditionDirectAdapter")));
 
         string ReadValue(string key) => metadata.SingleOrDefault(attribute => attribute.Key == key)?.Value is { } value
             ? value

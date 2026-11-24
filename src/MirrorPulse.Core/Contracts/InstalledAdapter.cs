@@ -7,7 +7,8 @@ public enum AdapterInstallSource
 {
     LocalFile,
     OfficialRelease,
-    Market
+    Market,
+    EditionBundle
 }
 
 /// <summary>

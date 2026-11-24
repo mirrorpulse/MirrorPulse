@@ -45,22 +45,28 @@ public sealed partial class MirrorPulseProductCatalog : IAsyncDisposable
     public const long CurrentSchemaVersion = 121;
     private readonly FileStream _owner;
     private readonly SqliteConnection _connection;
+    private readonly MirrorPulseEdition _edition;
     internal string WorkerStateRootPath { get; }
     private readonly SemaphoreSlim _gate = new(1, 1);
     internal SemaphoreSlim CredentialGate { get; } = new(1, 1);
     internal MirrorPulseInstanceScheduler CoalescingScheduler { get; } = new();
     private bool _disposed;
 
-    private MirrorPulseProductCatalog(FileStream owner, SqliteConnection connection, MirrorPulseStoragePaths paths)
+    private MirrorPulseProductCatalog(FileStream owner, SqliteConnection connection, MirrorPulseStoragePaths paths,
+        MirrorPulseEdition edition)
     {
         _owner = owner;
         _connection = connection;
+        _edition = edition;
         WorkerStateRootPath = Path.Combine(paths.DataRootPath, "state", "workers");
     }
 
-    public static async Task<MirrorPulseProductCatalog> OpenAsync(
+    public static Task<MirrorPulseProductCatalog> OpenAsync(
         MirrorPulseStoragePaths paths,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default) => OpenAsync(paths, ProductInfo.Edition, cancellationToken);
+
+    internal static async Task<MirrorPulseProductCatalog> OpenAsync(
+        MirrorPulseStoragePaths paths, MirrorPulseEdition edition, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(paths);
         var openObservation = MirrorPulseCatalogOpenObservation.Begin();
@@ -508,7 +514,7 @@ public sealed partial class MirrorPulseProductCatalog : IAsyncDisposable
             await EnsureUnsealedRootLabelCancellationSchemaAsync(connection, currentVersion, stampVersion: false, cancellationToken).ConfigureAwait(false);
             openObservation.Mark(MirrorPulseCatalogOpenPhase.TransferSchemaPrepared);
             openObservation.Mark(MirrorPulseCatalogOpenPhase.RecoverySchemaPreparing);
-            var catalog = new MirrorPulseProductCatalog(owner, connection, paths);
+            var catalog = new MirrorPulseProductCatalog(owner, connection, paths, edition);
             await EnsureNamespaceRemoteUpdateSchemaAsync(connection, cancellationToken).ConfigureAwait(false);
             await EnsureRemoteDeleteResolutionSchemaAsync(connection, cancellationToken, stampVersion: false).ConfigureAwait(false);
             await catalog.UpgradeRemoteTreeSettlementOwnersAsync(currentVersion, cancellationToken).ConfigureAwait(false);

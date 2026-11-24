@@ -142,6 +142,9 @@ public sealed partial class MirrorPulseHostApplication : IAsyncDisposable
                     "en-US", false, false, [], ProductInfo.Name);
             catalog = await MirrorPulseProductCatalog.OpenAsync(paths, cancellationToken)
                 .ConfigureAwait(false);
+            await catalog.InstallEditionAdaptersAsync(AppContext.BaseDirectory,
+                Path.Combine(paths.DataRootPath, "adapters", "installed"), GetAdapterRuntimeIdentifier(), cancellationToken)
+                .ConfigureAwait(false);
             MirrorPulseAdapterTopology topology = await catalog.ReadAdapterTopologyAsync(cancellationToken)
                 .ConfigureAwait(false);
             var identityResolver = new MirrorPulseRemoteIdentityResolver(catalog);
@@ -1234,6 +1237,7 @@ public sealed partial class MirrorPulseHostApplication : IAsyncDisposable
             ?? throw new FileNotFoundException("The selected Adapter installation is not registered.");
         if (topology.Instances.Any(instance => instance.InstallId == installId))
             throw new InvalidOperationException("The Adapter installation is still referenced by an instance.");
+        _catalog.EnsureEditionCanRemoveInstallation(topology, installId);
         var pathProvider = new CurrentUserAdapterPathProvider(
             Path.Combine(_paths.DataRootPath, "adapters", "installed"));
         var uninstall = new AdapterUninstallService(pathProvider,

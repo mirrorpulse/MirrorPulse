@@ -24,6 +24,7 @@ public sealed partial class MirrorPulseProductCatalog
             MirrorPulseAdapterTopology current = payload is null ? new([], [], []) : DeserializeTopology(payload);
             InstalledAdapter installation = current.Installations.SingleOrDefault(item => item.InstallId == installId)
                 ?? throw new FileNotFoundException("The selected Adapter installation is not registered.");
+            EnsureEditionCanRemoveInstallation(current, installId);
             if (current.Instances.Any(instance => instance.InstallId == installId))
                 throw new InvalidOperationException("The Adapter installation is still referenced by an instance.");
 
@@ -109,20 +110,44 @@ public sealed partial class MirrorPulseProductCatalog
         InstalledAdapter installation,
         CancellationToken cancellationToken = default) => AddInstallationAsync(installation, updateBinding: null, cancellationToken);
 
-    private async Task AddInstallationAsync(InstalledAdapter installation, AdapterUpdateBinding? updateBinding,
-        CancellationToken cancellationToken)
+    private async Task<bool> AddInstallationAsync(InstalledAdapter installation, AdapterUpdateBinding? updateBinding,
+        CancellationToken cancellationToken, bool recordEditionReceipt = false)
     {
         ArgumentNullException.ThrowIfNull(installation);
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
             ThrowIfDisposed();
+            using SqliteTransaction? receipt = recordEditionReceipt
+                ? _connection.BeginTransaction()
+                : null;
             await using SqliteCommand query = _connection.CreateCommand();
+            query.Transaction = receipt;
             query.CommandText = "SELECT payload FROM adapter_topology WHERE id = 1;";
             string? payload = (string?)await query.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
             MirrorPulseAdapterTopology current = payload is null ? new([], [], []) : DeserializeTopology(payload);
             InstalledAdapter[] existing = current.Installations
                 .Where(item => item.AdapterId == installation.AdapterId).ToArray();
+            if (receipt is not null)
+            {
+                await using SqliteCommand applied = _connection.CreateCommand();
+                applied.Transaction = receipt;
+                applied.CommandText = """
+                    INSERT INTO edition_adapter_receipts (package_sha256) VALUES ($digest)
+                    ON CONFLICT(package_sha256) DO NOTHING;
+                    """;
+                applied.Parameters.AddWithValue("$digest", installation.PackageSha256.Hexadecimal);
+                if (await applied.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false) == 0)
+                    return false;
+                if (existing.Any(item => item.IsSigned && item.PackageSha256 == installation.PackageSha256))
+                {
+                    receipt.Commit();
+                    return false;
+                }
+                if (existing.Any(item => item.Version == installation.Version))
+                    throw new InvalidDataException("The bundled Adapter version is already installed with different package bytes.");
+            }
+
             if (updateBinding is not null && (!current.Instances.Any(instance => instance.InstanceId == updateBinding.InstanceId &&
                     instance.InstallId == updateBinding.CurrentInstallId && instance.Enabled) ||
                 existing.Any(item => item.Version == installation.Version)))
@@ -140,14 +165,18 @@ public sealed partial class MirrorPulseProductCatalog
             var next = new MirrorPulseAdapterTopology(
                 [.. current.Installations, installation], current.Instances, current.Roots);
             ValidateTopology(next);
-            await ValidateManagedRootNamesAsync(next, cancellationToken).ConfigureAwait(false);
+            ValidateEditionTopology(next);
+            await ValidateManagedRootNamesAsync(next, cancellationToken, receipt).ConfigureAwait(false);
             await using SqliteCommand update = _connection.CreateCommand();
+            update.Transaction = receipt;
             update.CommandText = """
                 INSERT INTO adapter_topology (id, payload) VALUES (1, $payload)
                 ON CONFLICT(id) DO UPDATE SET payload = excluded.payload;
                 """;
             update.Parameters.AddWithValue("$payload", JsonSerializer.Serialize(next, TopologyJsonOptions));
             await update.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+            receipt?.Commit();
+            return true;
         }
         finally
         {

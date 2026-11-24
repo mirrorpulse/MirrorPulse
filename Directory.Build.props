@@ -9,6 +9,7 @@
     <MirrorPulseEditionName Condition="'$(MirrorPulseEditionId)' == 'standard' and '$(MirrorPulseEditionName)' == ''">MirrorPulse</MirrorPulseEditionName>
     <MirrorPulseEditionProviderId Condition="'$(MirrorPulseEditionId)' == 'standard' and '$(MirrorPulseEditionProviderId)' == ''">d194eacd-c38c-49df-a238-49871f9c8d1b</MirrorPulseEditionProviderId>
     <MirrorPulseEditionCommand Condition="'$(MirrorPulseEditionId)' == 'standard' and '$(MirrorPulseEditionCommand)' == ''">mp</MirrorPulseEditionCommand>
+    <MirrorPulseEditionDirectAdapter Condition="'$(MirrorPulseEditionDirectAdapter)' == ''">false</MirrorPulseEditionDirectAdapter>
     <LangVersion>latest</LangVersion>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>

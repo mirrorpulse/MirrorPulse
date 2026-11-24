@@ -17,4 +17,19 @@
     <ProjectReference Include="..\MirrorPulse.Core\MirrorPulse.Core.csproj" />
   </ItemGroup>
 
+  <Target Name="IncludeMirrorPulseEditionAdapters" BeforeTargets="AssignTargetPaths"
+          Condition="'@(MirrorPulseEditionDefaultAdapter)' != ''">
+    <Error Condition="'%(MirrorPulseEditionDefaultAdapter.Extension)' != '.mpadapter' or !Exists('%(MirrorPulseEditionDefaultAdapter.FullPath)')"
+           Text="Each bundled Adapter must reference an existing .mpadapter file." />
+    <ItemGroup>
+      <Content Include="%(MirrorPulseEditionDefaultAdapter.FullPath)"
+               TargetPath="edition-adapters\adapter.%(MirrorPulseEditionDefaultAdapter.AdapterId).mpadapter"
+               CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+      <Content Include="%(MirrorPulseEditionDefaultAdapter.FullPath).signature.json"
+               Condition="Exists('%(MirrorPulseEditionDefaultAdapter.FullPath).signature.json')"
+               TargetPath="edition-adapters\adapter.%(MirrorPulseEditionDefaultAdapter.AdapterId).mpadapter.signature.json"
+               CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    </ItemGroup>
+  </Target>
+
 </Project>
