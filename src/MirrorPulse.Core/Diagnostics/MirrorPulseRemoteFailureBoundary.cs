@@ -3,7 +3,7 @@ namespace MirrorPulse.Core.Diagnostics;
 public enum MirrorPulseRemotePollStage
 {
     RootSelection, RetainedIntent, SnapshotRead, WorkerEnumeration, IdentitySelection,
-    Projection, RetainIntent, ApplyAndCommit, CheckpointValidation, SnapshotCommit, IntentCompletion
+    Projection, RetainIntent, ApplyAndCommit, CheckpointValidation, SnapshotCommit, IntentCompletion, BatchProgress
 }
 
 public enum MirrorPulseRemoteFailureBoundary

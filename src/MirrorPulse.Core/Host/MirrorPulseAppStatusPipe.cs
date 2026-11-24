@@ -25,7 +25,13 @@ public sealed record MirrorPulseAppInstanceStatus(
 
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public IReadOnlyList<MirrorPulseAdapterHealthIssue>? HealthIssues { get; init; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public IReadOnlyList<MirrorPulseRootPollingStatus>? RemotePolling { get; init; }
 }
+
+public sealed record MirrorPulseRootPollingStatus(
+    string RootId, string Phase, string? Reason, DateTimeOffset? NextAttemptAt, DateTimeOffset? LastSuccessfulScan);
 
 public sealed record MirrorPulseAppNotification(
     string ConflictId,

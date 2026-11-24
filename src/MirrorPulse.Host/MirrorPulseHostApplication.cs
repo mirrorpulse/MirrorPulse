@@ -150,7 +150,7 @@ public sealed partial class MirrorPulseHostApplication : IAsyncDisposable
             var identityResolver = new MirrorPulseRemoteIdentityResolver(catalog);
             var rootRouter = new MirrorPulseRootRouter(paths.SyncRootPath, topology.Roots,
                 await catalog.ReadManagedRootNamesAsync(cancellationToken).ConfigureAwait(false), identityResolver);
-            var namespaceFence = new MirrorPulseRemoteNamespaceFence(rootRouter, catalog);
+            var namespaceFence = new MirrorPulseRemoteNamespaceFence(rootRouter, catalog, allowOriginalMoveRecovery: true);
             var conflictCenter = new MirrorPulseConflictCenter();
             systemNotifications = new MirrorPulseSystemNotificationPublisher();
             var conflictNotifications = new MirrorPulseConflictNotificationBridge(
@@ -208,7 +208,7 @@ public sealed partial class MirrorPulseHostApplication : IAsyncDisposable
             }
 
             workers = new AdapterInstanceProcessSupervisor(catalog, credentialStore, ApplyRemoteBatchAsync,
-                Path.Combine(paths.DataRootPath, "logs", "workers"));
+                Path.Combine(paths.DataRootPath, "logs", "workers"), instance => remotePoller?.NotifyWorkerConnected(instance));
             // Capture the normal Host user before local namespace work can impersonate its role.
             // All source RPC and lazy range bodies share this boundary, including polling and rescan.
             namespaceExecution = new MirrorPulseNamespaceExecutionSession();
@@ -232,6 +232,7 @@ public sealed partial class MirrorPulseHostApplication : IAsyncDisposable
                 snapshotStore: remoteSnapshotStore,
                 pendingStore: new MirrorPulseCatalogRemotePollPendingStore(catalog), scheduler: remoteScheduler,
                 mayPoll: namespaceFence.CanPollAsync, currentRoots: () => rootRouter.Registrations, namespaceWork: namespaceWork,
+                mayReplay: namespaceFence.CanReplayAsync,
                 diagnosticsDirectory: Path.Combine(paths.DataRootPath, "logs", "remote-poll"), identityResolver: identityResolver,
                 applyAdmitted: ApplyAdmittedCloudRemoteBatchAsync);
 
@@ -376,6 +377,8 @@ public sealed partial class MirrorPulseHostApplication : IAsyncDisposable
             {
                 WorkerConnected = instance.Enabled && _workers.IsConnected(instance.InstanceId),
                 HealthIssues = ReadAdapterHealth(installations[instance.InstallId], instance),
+                RemotePolling = current.Roots.Where(root => root.InstanceId == instance.InstanceId)
+                    .Select(_remotePoller.ReadRootStatus).ToArray(),
             });
         }
 
@@ -1142,11 +1145,8 @@ public sealed partial class MirrorPulseHostApplication : IAsyncDisposable
     {
         MirrorPulseAdapterTopology topology = await _catalog.ReadAdapterTopologyAsync(cancellationToken)
             .ConfigureAwait(false);
-        foreach (AdapterInstance instance in topology.Instances.Where(item => item.Enabled))
-        {
-            await _remotePoller.PollOnceAsync(instance.InstanceId, cancellationToken)
-                .ConfigureAwait(false);
-        }
+        await Task.WhenAll(topology.Instances.Where(item => item.Enabled).Select(instance =>
+            _remotePoller.RefreshAsync(instance.InstanceId, arguments.Force, cancellationToken).AsTask())).ConfigureAwait(false);
 
         return await ReadStatusAsync(cancellationToken).ConfigureAwait(false);
     }

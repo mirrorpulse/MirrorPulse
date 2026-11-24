@@ -23,6 +23,7 @@ public sealed class AdapterInstanceProcessSupervisor :
     private readonly MirrorPulseProductCatalog _catalog;
     private readonly ISecureCredentialStore _credentials;
     private readonly Func<InstanceId, JsonElement, CancellationToken, ValueTask>? _remoteBatch;
+    private readonly Action<InstanceId>? _workerConnected;
     private readonly LocalRollingLogWriter? _log;
     private readonly CancellationTokenSource _shutdown = new();
     private readonly ConcurrentDictionary<InstanceId, AdapterWorkerReadRangeClient> _connected = new();
@@ -41,11 +42,13 @@ public sealed class AdapterInstanceProcessSupervisor :
         MirrorPulseProductCatalog catalog,
         ISecureCredentialStore credentials,
         Func<InstanceId, JsonElement, CancellationToken, ValueTask>? remoteBatch = null,
-        string? diagnosticsDirectory = null)
+        string? diagnosticsDirectory = null,
+        Action<InstanceId>? workerConnected = null)
     {
         _catalog = catalog ?? throw new ArgumentNullException(nameof(catalog));
         _credentials = credentials ?? throw new ArgumentNullException(nameof(credentials));
         _remoteBatch = remoteBatch;
+        _workerConnected = workerConnected;
         _log = diagnosticsDirectory is null ? null : new(diagnosticsDirectory);
     }
 
@@ -671,6 +674,7 @@ public sealed class AdapterInstanceProcessSupervisor :
                         protocol.RecordConnectedCapabilities(frame.Payload);
                         await SetPhaseAsync(instance.InstanceId, "Connected", cancellationToken).ConfigureAwait(false);
                         _ready[instance.InstanceId] = channel;
+                        _workerConnected?.Invoke(instance.InstanceId);
                         break;
                     case AdapterDeploymentHealth.ReportMessage when protocol.Capabilities.Contains(
                         AdapterDeploymentContract.StructuredHealthCapability, StringComparer.Ordinal):

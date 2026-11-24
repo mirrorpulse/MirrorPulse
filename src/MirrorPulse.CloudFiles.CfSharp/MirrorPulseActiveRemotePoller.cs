@@ -76,6 +76,7 @@ public sealed partial class MirrorPulseActiveRemotePoller : IAsyncDisposable
 
         _instances = instances.Where(instance => instance.Enabled)
             .Select(instance => instance.InstanceId).Distinct().ToArray();
+        _wakeSignals = _instances.ToDictionary(instance => instance, _ => new PollWakeSignal());
         _roots = roots.GroupBy(root => root.InstanceId)
             .ToDictionary(group => group.Key,
                 group => (IReadOnlyList<RootRegistration>)group
@@ -107,10 +108,26 @@ public sealed partial class MirrorPulseActiveRemotePoller : IAsyncDisposable
     }
 
     /// <summary>Runs one bounded root turn for an enabled instance, rotating even after a blocked or failed turn.</summary>
-    public async ValueTask<bool> PollOnceAsync(InstanceId instanceId, CancellationToken cancellationToken = default)
+    public ValueTask<bool> PollOnceAsync(InstanceId instanceId, CancellationToken cancellationToken = default) =>
+        RunTurnAsync(instanceId, PollTrigger.Forced, cancellationToken);
+
+    public async ValueTask<bool> RefreshAsync(InstanceId instanceId, bool force, CancellationToken cancellationToken = default)
+    {
+        try { return await RunTurnAsync(instanceId, force ? PollTrigger.Forced : PollTrigger.Manual, cancellationToken).ConfigureAwait(false); }
+        finally
+        {
+            if (_wakeSignals.TryGetValue(instanceId, out var wake)) wake.Notify(reconnected: false);
+        }
+    }
+
+    private async ValueTask<bool> RunTurnAsync(InstanceId instanceId, PollTrigger trigger, CancellationToken cancellationToken)
     {
         var stage = MirrorPulseRemotePollStage.RootSelection;
-        try { return await _scheduler.RunAsync(instanceId, token => PollCoreAsync(instanceId, value => stage = value, token), cancellationToken).ConfigureAwait(false); }
+        try
+        {
+            return await _scheduler.RunAsync(instanceId, token => PollCoreAsync(instanceId, trigger,
+                value => stage = value, token), cancellationToken).ConfigureAwait(false);
+        }
         catch (Exception error) when (error is not OperationCanceledException and not OutOfMemoryException)
         {
             if (_failureLog is not null)
@@ -133,33 +150,57 @@ public sealed partial class MirrorPulseActiveRemotePoller : IAsyncDisposable
         }
     }
 
-    private async ValueTask<bool> PollCoreAsync(InstanceId instanceId, Action<MirrorPulseRemotePollStage> reportStage, CancellationToken cancellationToken)
+    private async ValueTask<bool> PollCoreAsync(InstanceId instanceId, PollTrigger trigger,
+        Action<MirrorPulseRemotePollStage> reportStage, CancellationToken cancellationToken)
     {
         if (!_instances.Contains(instanceId)) return false;
         IReadOnlyList<RootRegistration>? configured = _currentRoots is null
             ? _roots.GetValueOrDefault(instanceId)
             : _currentRoots().Where(root => root.InstanceId == instanceId).ToArray();
-        var roots = configured?.Where(root => root.State == RootRegistrationState.Active)
+        var now = DateTimeOffset.UtcNow;
+        var roots = configured?.Where(root => root.State == RootRegistrationState.Active && CanAttempt(root.RootId, trigger, now))
             .OrderBy(root => root.RootId.ToString(), StringComparer.Ordinal).ToArray() ?? [];
         if (roots.Length == 0) return false;
         bool scoped = (_snapshotStore is null or IMirrorPulseRootRemotePollSnapshotStore) &&
             (_pendingStore is null or IMirrorPulseRootRemotePollPendingStore);
-        if (!scoped && configured!.Count != 1)
-            throw new NotSupportedException("Multiple roots require root-scoped polling stores.");
-        if (!scoped && _identityResolver is not null)
-            throw new NotSupportedException("Generation selection requires root-scoped polling stores.");
-        if (configured!.Count > 1 && configured.Any(value => value.IdentityScope != RootIdentityScope.InstanceRoot))
-            throw new InvalidDataException("Several roots require independent logical item identity scopes.");
         var root = _lastRoot.TryGetValue(instanceId, out var last)
             ? roots.FirstOrDefault(candidate => string.CompareOrdinal(candidate.RootId.ToString(), last.ToString()) > 0) ?? roots[0]
             : roots[0];
         _lastRoot[instanceId] = root.RootId;
+        var stage = MirrorPulseRemotePollStage.RootSelection;
+        try
+        {
+            if (!scoped && configured!.Count != 1)
+                throw new NotSupportedException("Multiple roots require root-scoped polling stores.");
+            if (!scoped && _identityResolver is not null)
+                throw new NotSupportedException("Generation selection requires root-scoped polling stores.");
+            if (configured!.Count > 1 && configured.Any(value => value.IdentityScope != RootIdentityScope.InstanceRoot))
+                throw new InvalidDataException("Several roots require independent logical item identity scopes.");
+            bool applied = await PollRootAsync(root, configured.Count, scoped, value =>
+            {
+                stage = value;
+                reportStage(value);
+            }, cancellationToken).ConfigureAwait(false);
+            RememberAttempt(root.RootId, stage, failure: null);
+            return applied;
+        }
+        catch (Exception error) when (error is not OperationCanceledException and not OutOfMemoryException)
+        {
+            RememberAttempt(root.RootId, stage, PollFailureReason(error));
+            throw;
+        }
+    }
+
+    private async ValueTask<bool> PollRootAsync(RootRegistration root, int configuredRootCount, bool scoped,
+        Action<MirrorPulseRemotePollStage> reportStage, CancellationToken cancellationToken)
+    {
+        InstanceId instanceId = root.InstanceId;
         var key = (instanceId, root.RootId, root.UniquenessKey);
         reportStage(MirrorPulseRemotePollStage.RetainedIntent);
         var legacy = _pendingStore is null ? null : await _pendingStore.LoadAsync(instanceId, cancellationToken).ConfigureAwait(false);
         var legacySnapshot = scoped && _snapshotStore is not null
             ? await _snapshotStore.LoadAsync(instanceId, cancellationToken).ConfigureAwait(false) : null;
-        if (scoped && configured!.Count != 1 && (legacy is not null || legacySnapshot is not null))
+        if (scoped && configuredRootCount != 1 && (legacy is not null || legacySnapshot is not null))
             throw new InvalidDataException("An unscoped legacy poll cannot be attributed to several roots; retain the original mapping first.");
         MirrorPulsePendingRemotePoll? pending = legacy ?? (scoped && _pendingStore is IMirrorPulseRootRemotePollPendingStore rootPending
             ? await rootPending.LoadAsync(root, cancellationToken).ConfigureAwait(false) : null);
@@ -212,6 +253,7 @@ public sealed partial class MirrorPulseActiveRemotePoller : IAsyncDisposable
         reportStage(MirrorPulseRemotePollStage.Projection);
         if (previous is null)
         {
+            reportStage(MirrorPulseRemotePollStage.SnapshotCommit);
             await SaveSnapshotAsync(root, current, scoped, cancellationToken).ConfigureAwait(false);
             _snapshots[key] = current;
             return false;
@@ -221,6 +263,7 @@ public sealed partial class MirrorPulseActiveRemotePoller : IAsyncDisposable
         {
             // Re-saving a loaded snapshot repairs a stale temporary file without changing the
             // CfSharp cursor or creating another remote batch.
+            reportStage(MirrorPulseRemotePollStage.SnapshotCommit);
             await SaveSnapshotAsync(root, current, scoped, cancellationToken).ConfigureAwait(false);
             return false;
         }
@@ -248,7 +291,11 @@ public sealed partial class MirrorPulseActiveRemotePoller : IAsyncDisposable
             ? await _apply(root.InstanceId, batch, cancellationToken).ConfigureAwait(false)
             : await _applyAdmitted(root.InstanceId, batch, admission ??
                 throw new InvalidOperationException("The current poll lost its root-work admission."), cancellationToken).ConfigureAwait(false);
-        if (!outcome.Completed) return false;
+        if (!outcome.Completed)
+        {
+            if (outcome.MadeProgress) reportStage(MirrorPulseRemotePollStage.BatchProgress);
+            return false;
+        }
         reportStage(MirrorPulseRemotePollStage.CheckpointValidation);
         if (!outcome.SafeCursor.Span.SequenceEqual(batch.FinalCursor.Span))
             throw new InvalidDataException("A completed remote poll batch must have its final safe cursor.");
@@ -296,35 +343,7 @@ public sealed partial class MirrorPulseActiveRemotePoller : IAsyncDisposable
     private async Task RunAsync(CancellationToken cancellationToken)
     {
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _shutdown.Token);
-        while (!linked.Token.IsCancellationRequested)
-        {
-            foreach (InstanceId instanceId in _instances)
-            {
-                try
-                {
-                    await PollOnceAsync(instanceId, linked.Token).ConfigureAwait(false);
-                }
-                catch (OperationCanceledException) when (linked.Token.IsCancellationRequested)
-                {
-                    return;
-                }
-                catch
-                {
-                    // A transient remote failure leaves the previous snapshot intact. The next
-                    // interval retries the same comparison and lets the normal status surfaces
-                    // report any Worker-side error.
-                }
-            }
-
-            try
-            {
-                await Task.Delay(_interval, linked.Token).ConfigureAwait(false);
-            }
-            catch (OperationCanceledException) when (linked.Token.IsCancellationRequested)
-            {
-                return;
-            }
-        }
+        await Task.WhenAll(_instances.Select(instance => RunInstanceAsync(instance, linked.Token))).ConfigureAwait(false);
     }
 
     internal static CloudRemoteChangeBatch RestoreOriginalBatch(InstanceId instance, RootRegistration root, MirrorPulsePendingRemotePoll pending)

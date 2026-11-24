@@ -8,7 +8,8 @@ public sealed class AdapterWorkerOperationException : IOException
     public AdapterWorkerOperationException(string? code) : base("The Adapter Worker operation failed.")
     {
         FailureCode = code is "Offline" or "Disconnected" or "InvalidRequest" or "AccessDenied" or
-            "SourceUnavailable" or "CapabilityUnavailable" or "LocalIoFailure" or "RetryableTransferFailure" or "RemoteConflict" or "DirectoryNotEmpty" or "UncorrelatedResponse" or "InvalidConfiguration" or "WorkerFailure"
+            "SourceUnavailable" or "CapabilityUnavailable" or "LocalIoFailure" or "RetryableTransferFailure" or "RemoteConflict" or "DirectoryNotEmpty" or "UncorrelatedResponse" or "InvalidConfiguration" or "WorkerFailure" or
+            "RootOffline" or "CredentialRejected" or "InvalidCursor" or "DirectoryEnumerationIncomplete"
             ? code : "Unknown";
     }
 

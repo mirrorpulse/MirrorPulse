@@ -18,7 +18,7 @@ public sealed partial class SyncStatusPage : Page
 
     private async void SyncStatusPage_Loaded(object sender, RoutedEventArgs e) => await RefreshAsync();
 
-    private async void RefreshButton_Click(object sender, RoutedEventArgs e) => await RefreshAsync();
+    private async void RefreshButton_Click(object sender, RoutedEventArgs e) => await RefreshAsync(requestPoll: true);
 
     private void ConfigureStorageButton_Click(object sender, RoutedEventArgs e) =>
         Frame.Navigate(typeof(InstanceConfigurationPage));
@@ -26,11 +26,13 @@ public sealed partial class SyncStatusPage : Page
     private void NotificationsButton_Click(object sender, RoutedEventArgs e) =>
         Frame.Navigate(typeof(NotificationsPage));
 
-    private async Task RefreshAsync()
+    private async Task RefreshAsync(bool requestPoll = false)
     {
         try
         {
-            MirrorPulseAppStatusResponse status = await AppControl.Client.GetStatusAsync();
+            MirrorPulseAppStatusResponse status = requestPoll
+                ? await AppControl.Client.RefreshAsync()
+                : await AppControl.Client.GetStatusAsync();
             PendingUploadsText.Text = $"Pending uploads: {status.PendingUploads}";
             PendingConflictsText.Text =
                 $"Pending conflicts: {status.PendingRemoteConflicts} remote, " +
@@ -55,7 +57,10 @@ public sealed partial class SyncStatusPage : Page
                           : $"{instance.TransferProgress.BytesTransferred}/{instance.TransferProgress.TotalBytes} bytes");
                 string health = instance.HealthIssues is { Count: > 0 }
                     ? "  ·  " + string.Join(" ", instance.HealthIssues.Select(AdapterHealthText.Describe)) : string.Empty;
-                return $"{instance.DisplayName}  ·  {instance.Phase}  ·  {checkpoint}{progress}{error}{health}";
+                string polling = string.Concat((instance.RemotePolling ?? []).Select(poll =>
+                    $"  ·  Remote scan: {poll.Phase}" + (poll.Reason is null ? string.Empty : $" ({poll.Reason})") +
+                    (poll.NextAttemptAt is { } retry ? $"  ·  Next attempt: {retry.ToLocalTime():g}" : string.Empty)));
+                return $"{instance.DisplayName}  ·  {instance.Phase}  ·  {checkpoint}{progress}{error}{health}{polling}";
             }).ToArray();
             StatusMessageText.Text = status.Instances.Count == 0
                 ? "No Adapter instances are configured."

@@ -827,7 +827,11 @@ public sealed partial class MirrorPulseCliHostOperations : IMirrorPulseCliHostOp
 
     private static string FormatStatus(MirrorPulse.Core.Host.MirrorPulseAppStatusResponse status) =>
         $"Pending uploads: {status.PendingUploads}; remote conflicts: {status.PendingRemoteConflicts}; " +
-        $"instances: {status.Instances.Count}" + FormatHealth(status.Instances.Select(item => (item.DisplayName, item.InstanceId, item.HealthIssues)));
+        $"instances: {status.Instances.Count}" + FormatHealth(status.Instances.Select(item => (item.DisplayName, item.InstanceId, item.HealthIssues))) +
+        string.Concat(status.Instances.SelectMany(instance => (instance.RemotePolling ?? []).Select(poll =>
+            Environment.NewLine + $"{instance.DisplayName} ({poll.RootId}) · Remote scan: {poll.Phase}" +
+            (poll.Reason is null ? string.Empty : $" ({poll.Reason})") +
+            (poll.NextAttemptAt is { } retry ? $" · Next attempt: {retry:O}" : string.Empty))));
 
     private static string FormatTopology(MirrorPulseControlTopology topology) =>
         $"Installations: {topology.Installations.Count}; instances: {topology.Instances.Count}; " +

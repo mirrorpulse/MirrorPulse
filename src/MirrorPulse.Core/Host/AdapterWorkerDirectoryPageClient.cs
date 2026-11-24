@@ -119,8 +119,7 @@ public sealed class AdapterWorkerDirectoryPageClient
             _channel.ValidateResponse(frame, _rootKey);
             if (frame.MessageType == "OperationError")
             {
-                string code = frame.Payload.GetProperty("code").GetString() ?? "Unknown";
-                completion.TrySetException(new IOException($"The Adapter directory read failed: {code}."));
+                completion.TrySetException(new AdapterWorkerOperationException(frame.Payload.GetProperty("code").GetString()));
                 return ValueTask.CompletedTask;
             }
 

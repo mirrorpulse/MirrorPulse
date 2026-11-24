@@ -70,7 +70,10 @@ public sealed class AdapterWorkerDirectoryPageClientTests
     }
 
     [TestMethod]
-    public async Task DirectoryOperationErrorFailsPendingRequest()
+    [DataRow("Offline", "Offline")]
+    [DataRow("AccessDenied", "AccessDenied")]
+    [DataRow("fixture-adapter-supplied-text", "Unknown")]
+    public async Task DirectoryOperationErrorFailsPendingRequest(string workerCode, string expectedCode)
     {
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
         string pipeName = $"mirrorpulse-directory-error-{Guid.NewGuid():N}";
@@ -90,10 +93,12 @@ public sealed class AdapterWorkerDirectoryPageClientTests
             timeout.Token).AsTask();
         AdapterControlFrame command = await worker.ReadAsync(timeout.Token);
         Task<byte[]> responseBytes = LengthPrefixedFrameReader.ReadAsync(server, timeout.Token).AsTask();
-        await worker.SendAsync("OperationError", command.RequestId, true, new { code = "Offline" }, timeout.Token);
+        await worker.SendAsync("OperationError", command.RequestId, true, new { code = workerCode }, timeout.Token);
         ControlFrameEnvelope response = ControlFrameJsonCodec.Decode(await responseBytes);
         await pages.HandleResponseAsync(response);
-        await Assert.ThrowsExactlyAsync<IOException>(async () => await pending);
+        var failure = await Assert.ThrowsExactlyAsync<AdapterWorkerOperationException>(async () => await pending);
+        Assert.AreEqual(expectedCode, failure.FailureCode);
+        Assert.AreEqual("The Adapter Worker operation failed.", failure.Message);
         pages.Close();
         channel.Close();
     }
