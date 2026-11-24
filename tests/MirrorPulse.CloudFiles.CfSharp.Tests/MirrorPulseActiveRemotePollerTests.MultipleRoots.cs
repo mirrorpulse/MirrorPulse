@@ -231,6 +231,55 @@ public sealed partial class MirrorPulseActiveRemotePollerTests
     }
 
     [TestMethod]
+    public async Task RepeatedSnapshotTransitionsGetNewBatchesAfterRestartAndKeepPartialCursorsPrivate()
+    {
+        await using var fixture = await RootPollFixture.CreateAsync();
+        fixture.Roots = [fixture.First];
+        await using (var original = fixture.Poller())
+        {
+            Assert.IsFalse(await original.PollOnceAsync(fixture.Instance));
+            fixture.Source.Set(fixture.First, "v2", "replacement");
+            Assert.IsTrue(await original.PollOnceAsync(fixture.Instance));
+            fixture.Source.Set(fixture.First, "v1");
+            Assert.IsTrue(await original.PollOnceAsync(fixture.Instance));
+        }
+
+        var originalTransition = fixture.Applied[0];
+        var returnTransition = fixture.Applied[1];
+        var durable = (await fixture.Snapshots.LoadBaselineAsync(fixture.First))!;
+        CollectionAssert.AreEqual(returnTransition.FinalCursor.ToArray(), durable.Cursor.ToArray());
+        fixture.Source.Set(fixture.First, "v2", "replacement");
+
+        await fixture.ReopenCatalogAsync();
+        await using (var partial = fixture.Poller((_, batch, _) =>
+        {
+            fixture.Applied.Add(batch);
+            Assert.HasCount(2, batch.Changes);
+            Assert.IsTrue(batch.Changes.All(change => change.CursorAfter.IsEmpty),
+                "A synthetic poll cursor advances only on full-batch completion.");
+            return ValueTask.FromResult(new MirrorPulseRemotePollApplyOutcome(false, batch.InitialCursor));
+        }))
+        {
+            Assert.IsFalse(await partial.PollOnceAsync(fixture.Instance));
+        }
+
+        var repeatedTransition = fixture.Applied[^1];
+        Assert.AreNotEqual(originalTransition.BatchId, repeatedTransition.BatchId);
+        CollectionAssert.AreEqual(returnTransition.FinalCursor.ToArray(), repeatedTransition.InitialCursor.ToArray());
+        CollectionAssert.AreEqual(durable.Cursor.ToArray(), (await fixture.Snapshots.LoadBaselineAsync(fixture.First))!.Cursor.ToArray());
+        Assert.IsNotNull(await fixture.Pending.LoadAsync(fixture.First, default));
+
+        int reads = fixture.Source.Calls.Count;
+        await fixture.ReopenCatalogAsync();
+        await using var replay = fixture.Poller();
+        Assert.IsTrue(await replay.PollOnceAsync(fixture.Instance));
+        Assert.HasCount(reads, fixture.Source.Calls);
+        CollectionAssert.AreEqual(repeatedTransition.Fingerprint.ToArray(), fixture.Applied[^1].Fingerprint.ToArray());
+        CollectionAssert.AreEqual(repeatedTransition.FinalCursor.ToArray(), (await fixture.Snapshots.LoadBaselineAsync(fixture.First))!.Cursor.ToArray());
+        Assert.IsNull(await fixture.Pending.LoadAsync(fixture.First, default));
+    }
+
+    [TestMethod]
     [DataRow("before-apply")]
     [DataRow("after-apply")]
     [DataRow("snapshot-commit")]

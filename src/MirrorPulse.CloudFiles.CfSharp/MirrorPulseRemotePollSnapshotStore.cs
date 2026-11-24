@@ -49,7 +49,7 @@ public sealed record MirrorPulseRemoteSnapshotMetadata(
     DateTimeOffset? ChangeTime);
 
 /// <summary>Stores each Adapter instance snapshot with replace-on-write semantics.</summary>
-public sealed partial class MirrorPulseFileRemotePollSnapshotStore : IMirrorPulseRootRemotePollSnapshotStore
+public sealed partial class MirrorPulseFileRemotePollSnapshotStore : IMirrorPulseRootRemotePollBaselineStore
 {
     private const int MaximumSnapshotBytes = 32 * 1024 * 1024;
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)

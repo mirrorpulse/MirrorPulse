@@ -70,7 +70,7 @@ public sealed partial class MirrorPulseCatalogRemotePollPendingStore : IMirrorPu
 
     private static void Validate(MirrorPulsePendingRemotePoll pending)
     {
-        if (pending.ProjectionVersion is not (1 or 2 or 3 or 4) || pending.Fingerprint is null || pending.Fingerprint.Length != 32 ||
+        if (pending.ProjectionVersion is not (1 or 2 or 3 or 4 or 5) || pending.Fingerprint is null || pending.Fingerprint.Length != 32 ||
             string.IsNullOrWhiteSpace(pending.RootDirectoryName) || pending.RootDirectoryName is "." or ".." ||
             pending.RootDirectoryName.IndexOfAny(['/', '\\', ':']) >= 0)
             throw new InvalidDataException("The pending poll fingerprint or root directory is invalid.");
