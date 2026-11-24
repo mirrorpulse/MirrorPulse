@@ -282,6 +282,7 @@ public sealed partial class InstanceConfigurationPage : Page
     {
         ConfigurationStatusBar.Severity = InfoBarSeverity.Error;
         ConfigurationStatusBar.Message = message;
+        AutomationProperties.SetName(ConfigurationStatusBar, message);
         ConfigurationStatusBar.IsOpen = true;
     }
 }

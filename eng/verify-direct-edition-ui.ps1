@@ -60,14 +60,20 @@ try {
     if ($VerifyRegisteredRoot) {
         (Read-ValuePattern "AdapterRoot.$RootKey").SetValue($RootLabel + ' changed')
         Invoke-Control 'AdapterInstanceSave'
-        $status = Find-Control 'AdapterInstanceStatus'
         $expected = 'Rename an existing MirrorPulse folder with the protected root rename command.'
         $message = [System.Windows.Automation.PropertyCondition]::new(
             [System.Windows.Automation.AutomationElement]::NameProperty, $expected)
-        if ($status.Current.Name -cne $expected -and
-            !$status.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $message)) {
-            throw 'The installed form did not show the protected root rename guidance.'
-        }
+        $statusPage = [System.Windows.Automation.PropertyCondition]::new(
+            [System.Windows.Automation.AutomationElement]::AutomationIdProperty, 'DirectConfigureStorage')
+        $deadline = [DateTime]::UtcNow.AddSeconds(30)
+        do {
+            if ($window.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $message)) { break }
+            if ($window.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $statusPage)) {
+                throw 'The installed form navigated away after trying to change the registered root.'
+            }
+            if ([DateTime]::UtcNow -ge $deadline) { throw 'The installed form did not show the protected root rename guidance.' }
+            Start-Sleep -Milliseconds 200
+        } while ($true)
     }
     Invoke-Control 'AdapterInstanceCancel'
     $null = Find-Control 'DirectConfigureStorage'
