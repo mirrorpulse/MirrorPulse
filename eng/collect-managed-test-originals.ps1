@@ -2,7 +2,8 @@
 param(
     [Parameter(Mandatory)][ValidateSet('Prepare', 'Collect')][string]$Phase,
     [string]$ResultsDirectory = 'artifacts/test-results/managed',
-    [string]$OutputDirectory = 'artifacts/test-results/managed-originals'
+    [string]$OutputDirectory = 'artifacts/test-results/managed-originals',
+    [switch]$Partitioned
 )
 
 $ErrorActionPreference = 'Stop'
@@ -80,6 +81,11 @@ $clean = $changes.Count -eq 0
 if ($env:GITHUB_ACTIONS -ceq 'true' -and -not $clean) { throw 'CI test originals require unchanged tracked source.' }
 $preparePath = Join-Path $output 'prepared.json'
 $completedPath = Join-Path $output 'collected.json'
+$expectedCommand = if ($Partitioned) {
+    './eng/test-managed-partition.ps1 -Partition <CatalogA|CatalogB|Core|Clients>'
+} else {
+    'dotnet test MirrorPulse.sln --configuration Release --no-build --logger trx --results-directory artifacts/test-results/managed'
+}
 
 if ($Phase -ceq 'Prepare') {
     if (Test-Path -LiteralPath $output) { throw 'Preserve the existing managed test originals.' }
@@ -110,7 +116,7 @@ if ($Phase -ceq 'Prepare') {
     $policy = Copy-Original (Join-Path $PSScriptRoot 'test-suites.json') (Join-Path $output 'policy/test-suites.json')
     [ordered]@{
         schemaVersion = 1; sourceSha = $source; trackedSourceClean = $clean
-        expectedCommand = 'dotnet test MirrorPulse.sln --configuration Release --no-build --logger trx --results-directory artifacts/test-results/managed'
+        expectedCommand = $expectedCommand
         preparedUtc = [DateTimeOffset]::UtcNow.ToString('o'); assemblies = $assemblies; policy = $policy
     } | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $preparePath -Encoding utf8
     Write-Output 'Retained the three original managed test assemblies and the same-source test policy before execution.'
@@ -121,7 +127,8 @@ if (-not (Test-Path -LiteralPath $preparePath) -or (Test-Path -LiteralPath $comp
     throw 'Collect requires an original preparation and an unused completion receipt.'
 }
 $prepared = Get-Content -LiteralPath $preparePath -Raw | ConvertFrom-Json
-if ($prepared.schemaVersion -ne 1 -or $prepared.sourceSha -cne $source -or $prepared.trackedSourceClean -ne $clean -or $prepared.assemblies.Count -ne 3) {
+if ($prepared.schemaVersion -ne 1 -or $prepared.sourceSha -cne $source -or $prepared.trackedSourceClean -ne $clean -or
+    $prepared.expectedCommand -cne $expectedCommand -or $prepared.assemblies.Count -ne 3) {
     throw 'The test preparation belongs to another source state.'
 }
 function Confirm-PreparedAssembly($assembly) {
