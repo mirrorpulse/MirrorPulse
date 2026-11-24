@@ -1,7 +1,9 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory)][string]$EvidencePath,
-    [ValidateSet('X64', 'Arm64')][string]$ExpectedArchitecture = [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString()
+    [ValidateSet('X64', 'Arm64')][string]$ExpectedArchitecture = [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString(),
+    [string]$DirectLocalPackagePath,
+    [ValidatePattern('\A[0-9A-Fa-f]{64}\z')][string]$DirectLocalPackageSha256
 )
 
 $ErrorActionPreference = 'Stop'
@@ -14,6 +16,31 @@ if ($os.ProductType -ne 1 -or [version]$os.Version -lt [version]'10.0.26100.0' -
     throw "Edition coexistence verification requires a clean Windows 11 $ExpectedArchitecture desktop test account."
 }
 $runtime = 'win-' + $architecture.ToLowerInvariant()
+$localAdapterId = 'com.mirrorpulse.adapter.local'
+if ([bool]$DirectLocalPackagePath -xor [bool]$DirectLocalPackageSha256) {
+    throw 'A direct Local edition requires both the published package path and its SHA256.'
+}
+$directPackage = $null
+$directManifest = $null
+if ($DirectLocalPackagePath) {
+    $directPackage = Get-Item -LiteralPath $DirectLocalPackagePath
+    if ($directPackage.PSIsContainer -or $directPackage.Extension -ine '.mpadapter' -or
+        (Get-FileHash -LiteralPath $directPackage.FullName).Hash -ine $DirectLocalPackageSha256) {
+        throw 'The direct Local package does not match its published SHA256.'
+    }
+    $archive = [IO.Compression.ZipFile]::OpenRead($directPackage.FullName)
+    try {
+        $entry = $archive.GetEntry('manifest.json')
+        if (!$entry -or $entry.Length -gt 32KB) { throw 'The direct Local package has no bounded manifest.' }
+        $reader = [IO.StreamReader]::new($entry.Open())
+        try { $directManifest = $reader.ReadToEnd() | ConvertFrom-Json } finally { $reader.Dispose() }
+    } finally { $archive.Dispose() }
+    if ($directManifest.adapterId -cne $localAdapterId -or $directManifest.schemaVersion -ne 2 -or
+        $directManifest.instancePolicy.maximumRootDefinitions -ne 1 -or @($directManifest.rootDefinitions).Count -ne 1 -or
+        !$directManifest.presentation -or !$directManifest.entrypoints.$runtime) {
+        throw 'The direct edition needs a published schema 2 Local package with one root, a signed form and a matching Worker.'
+    }
+}
 $workspace = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $sourceSha = git -C $workspace rev-parse HEAD
 if ($LASTEXITCODE -ne 0 -or $sourceSha -cnotmatch '^[a-f0-9]{40}$' -or
@@ -42,6 +69,9 @@ $custom = @{
 $editions = @($standard, $custom)
 $evidence = [ordered]@{ schemaVersion=1; sourceSha=$sourceSha; runtime=$runtime; phase='Preflight'; verified=$false; hosts=@() }
 $hostAttempt = $null
+$directInstallId = $null
+$directInstanceId = $null
+$directRootId = $null
 
 function Invoke-ShellCheck($Edition, [switch]$Unregister) {
     $action = if ($Unregister) { 'unregister' } else { 'read' }
@@ -154,6 +184,27 @@ namespace MirrorPulse {
     Export-Certificate -Cert $certificate -FilePath $cer | Out-Null
     Import-Certificate -FilePath $cer -CertStoreLocation 'Cert:\LocalMachine\TrustedPeople' | Out-Null
     $profile = Join-Path $scratch 'edition.props'
+    $directProfile = ''
+    if ($directPackage) {
+        $stagedPackage = Join-Path $scratch 'local.mpadapter'
+        Copy-Item -LiteralPath $directPackage.FullName -Destination $stagedPackage
+        if ((Get-FileHash -LiteralPath $stagedPackage).Hash -ine $DirectLocalPackageSha256) {
+            throw 'The direct Local package changed before staging the MSIX.'
+        }
+        $signature = $directPackage.FullName + '.signature.json'
+        if (Test-Path -LiteralPath $signature -PathType Leaf) {
+            Copy-Item -LiteralPath $signature -Destination ($stagedPackage + '.signature.json')
+        }
+        $escapedPackage = [Security.SecurityElement]::Escape($stagedPackage)
+        $directProfile = @"
+  <PropertyGroup>
+    <MirrorPulseEditionDirectAdapter>true</MirrorPulseEditionDirectAdapter>
+  </PropertyGroup>
+  <ItemGroup>
+    <MirrorPulseEditionDefaultAdapter Include="$escapedPackage" AdapterId="$localAdapterId" />
+  </ItemGroup>
+"@
+    }
     @"
 <Project>
   <PropertyGroup>
@@ -165,6 +216,7 @@ namespace MirrorPulse {
     <MirrorPulseEditionPublisher>CN=AppPublisher</MirrorPulseEditionPublisher>
     <MirrorPulseEditionPublisherName>MirrorPulse Team</MirrorPulseEditionPublisherName>
   </PropertyGroup>
+$directProfile
 </Project>
 "@ | Set-Content -LiteralPath $profile -Encoding utf8
     $customBuild = @("-p:MirrorPulseEditionProfile=$profile", "-p:ArtifactsPath=$(Join-Path $scratch 'ed')")
@@ -212,6 +264,38 @@ namespace MirrorPulse {
         $evidence.hosts += @{ identity=$edition.PackageName; packageBound=$true; shellRegistered=$true }
     }
     if ($standard.HostId -eq $custom.HostId) { throw 'Both CLI aliases route to the same Host.' }
+    if ($directPackage) {
+        $evidence.phase = 'Configure the signed direct Local bundle'
+        $embedded = Join-Path $custom.Installed.InstallLocation "host/edition-adapters/adapter.$localAdapterId.mpadapter"
+        if ((Get-FileHash -LiteralPath $embedded).Hash -ine $DirectLocalPackageSha256) {
+            throw 'The installed MSIX does not contain the frozen Local package.'
+        }
+        $customTopology = Invoke-EditionCli $custom @('--no-start', 'adapter', 'list')
+        $installations = @($customTopology.installations)
+        if ($installations.Count -ne 1 -or $installations[0].adapterId -cne $localAdapterId -or
+            $installations[0].version -cne $directManifest.version -or $installations[0].packageSha256 -ine $DirectLocalPackageSha256 -or
+            !$installations[0].isSigned -or !$installations[0].form.presentation -or $installations[0].source -cne 'EditionBundle' -or
+            @($customTopology.instances).Count -ne 0) {
+            throw 'The custom Host did not import the exact signed Local default for first configuration.'
+        }
+        $directInstallId = $installations[0].installId
+        $source = Join-Path $scratch 'direct-source'
+        New-Item -ItemType Directory -Path $source | Out-Null
+        $created = Invoke-EditionCli $custom @('--no-start', 'instance', 'create', '--install-id', $directInstallId,
+            '--name', 'Direct Local', '--config', "sourceDirectory=$source")
+        $directInstanceId = $created.createdInstanceId
+        $customTopology = Invoke-EditionCli $custom @('--no-start', 'adapter', 'list')
+        $standardTopology = Invoke-EditionCli $standard @('--no-start', 'adapter', 'list')
+        if (!$directInstanceId -or @($customTopology.instances).Count -ne 1 -or @($customTopology.roots).Count -ne 1 -or
+            $customTopology.instances[0].instanceId -cne $directInstanceId -or $customTopology.instances[0].installId -cne $directInstallId -or
+            $customTopology.roots[0].instanceId -cne $directInstanceId -or
+            $customTopology.roots[0].uniquenessKey -cne $directManifest.rootDefinitions[0].key -or
+            $standardTopology.installations.installId -contains $directInstallId -or
+            $standardTopology.instances.instanceId -contains $directInstanceId) {
+            throw 'The signed single-root deployment was not saved independently in the custom edition.'
+        }
+        $directRootId = $customTopology.roots[0].rootId
+    }
     $evidence.phase = 'Independent configuration'
     $standardBefore = (Invoke-EditionCli $standard @('config')).locale
     $customBefore = (Invoke-EditionCli $custom @('config')).locale
@@ -236,6 +320,16 @@ namespace MirrorPulse {
         throw 'Restart did not preserve the custom configuration independently of the standard Host.'
     }
     $evidence.customRestartIsolated = $true
+    if ($directPackage) {
+        $customTopology = Invoke-EditionCli $custom @('--no-start', 'adapter', 'list')
+        if (@($customTopology.installations).Count -ne 1 -or $customTopology.installations[0].installId -cne $directInstallId -or
+            @($customTopology.instances).Count -ne 1 -or $customTopology.instances[0].instanceId -cne $directInstanceId -or
+            $customTopology.instances[0].configuration.sourceDirectory -ine $source -or
+            @($customTopology.roots).Count -ne 1 -or $customTopology.roots[0].rootId -cne $directRootId) {
+            throw 'Restart did not preserve the signed direct Local deployment and root.'
+        }
+        $evidence.directLocal = @{ version=$directManifest.version; packageSha256=$DirectLocalPackageSha256.ToLowerInvariant(); persisted=$true }
+    }
 
     $evidence.phase = 'Concurrent application activation'
     $standard.WindowId = Start-EditionWindow $standard

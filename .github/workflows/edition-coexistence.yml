@@ -2,6 +2,11 @@ name: Installed edition coexistence
 
 on:
   workflow_dispatch:
+    inputs:
+      verify_signed_direct_local:
+        description: Verify the published single-root Local package in the direct custom edition
+        type: boolean
+        default: false
   push:
     branches: [develop]
     paths:
@@ -34,13 +39,35 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: pwsh ./eng/restore-adapter-sdk.ps1
+      - name: Verify and freeze the official Local bundle
+        if: inputs.verify_signed_direct_local
+        shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          ./eng/resolve-official-adapter-releases.ps1
+          ./eng/aggregate-official-adapters.ps1 -ReleaseLockPath artifacts/official-adapter-releases.json -AdapterIds com.mirrorpulse.adapter.local -OutputDirectory artifacts/edition-local
       - name: Build, install and verify both editions in one account
         shell: pwsh
-        run: pwsh ./eng/verify-edition-coexistence.ps1 -ExpectedArchitecture Arm64 -EvidencePath artifacts/edition-coexistence.json
+        env:
+          VERIFY_SIGNED_DIRECT_LOCAL: ${{ inputs.verify_signed_direct_local }}
+        run: |
+          $arguments = @{ ExpectedArchitecture = 'Arm64'; EvidencePath = 'artifacts/edition-coexistence.json' }
+          if ($env:VERIFY_SIGNED_DIRECT_LOCAL -ceq 'true') {
+            $entries = @(Get-Content -LiteralPath artifacts/edition-local/official-adapters.manifest.json -Raw | ConvertFrom-Json)
+            if ($entries.Count -ne 1 -or $entries[0].adapterId -cne 'com.mirrorpulse.adapter.local') {
+              throw 'The direct edition requires exactly one verified Local release.'
+            }
+            $arguments.DirectLocalPackagePath = Join-Path 'artifacts/edition-local/com.mirrorpulse.adapter.local' $entries[0].package
+            $arguments.DirectLocalPackageSha256 = $entries[0].packageSha256
+          }
+          ./eng/verify-edition-coexistence.ps1 @arguments
       - name: Retain edition coexistence observations
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: edition-coexistence-arm64
-          path: artifacts/edition-coexistence.json
+          path: |
+            artifacts/edition-coexistence.json
+            artifacts/official-adapter-releases.json
           if-no-files-found: warn
