@@ -115,10 +115,10 @@ public sealed class AdapterConfigurationWorkerSessionTests
         finally { Directory.Delete(directory, recursive: true); }
     }
 
-    internal static InstalledAdapter NewFixture(string callback)
+    internal static InstalledAdapter NewFixture(string callback, string adapterId = "example.protocolfixture")
     {
         string executable = Path.ChangeExtension(typeof(ProtocolFixtureMarker).Assembly.Location, ".exe");
-        var manifest = new AdapterManifest(2, AdapterId.Parse("example.protocolfixture"), "Fixture", "1.0.0", new(2, 2),
+        var manifest = new AdapterManifest(2, AdapterId.Parse(adapterId), "Fixture", "1.0.0", new(2, 2),
             new Dictionary<string, string> { ["win-x64"] = Path.GetFileName(executable), ["win-arm64"] = Path.GetFileName(executable) },
             new(null), new(null, 1), new(true, false, true, true), ["en-US"], "1.0.0", [new("files", "Files", "Files", false)])
         {

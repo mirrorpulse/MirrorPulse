@@ -257,6 +257,7 @@
     "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseSqliteCrashRecoveryTests.NativeOfficialStoreRecoversCommittedRepositoriesAndRollsBackInterruptedWrite",
     "MirrorPulse.Core.Tests.OfficialAdapterAggregateProcessTests.LatestOfficialReleasesInstallWithoutDetachedSignatureFiles",
     "MirrorPulse.Core.Tests.OfficialAdapterAggregateProcessTests.SignedLocalReleaseListsHydratesAndUploadsThroughHostAndCfSharp",
+    "MirrorPulse.Core.Tests.AdapterUpdateTests.AcceptedWorkerOfferAcquiresOfficialPackageWithoutSwitchingDeployment",
     "MirrorPulse.Core.Tests.SignedLocalVersionSwitchProcessTests.PinnedInstanceRunsEachSignedVersionAndStaysOfflineWhenDisabled",
     "MirrorPulse.Core.Tests.SignedSmbHostProcessTests.SignedSmbReleaseListsReadsAndConditionallyUploadsThroughHostAndCfSharp",
     "MirrorPulse.Core.Tests.SignedWebDavWorkerProcessTests.SignedWorkerPreservesEtagAndRejectsStaleUploadWithoutOverwritingRemote",
@@ -924,6 +925,7 @@
     "official": [
       "MirrorPulse.Core.Tests.OfficialAdapterAggregateProcessTests.LatestOfficialReleasesInstallWithoutDetachedSignatureFiles",
       "MirrorPulse.Core.Tests.OfficialAdapterAggregateProcessTests.SignedLocalReleaseListsHydratesAndUploadsThroughHostAndCfSharp",
+      "MirrorPulse.Core.Tests.AdapterUpdateTests.AcceptedWorkerOfferAcquiresOfficialPackageWithoutSwitchingDeployment",
       "MirrorPulse.Core.Tests.SignedLocalVersionSwitchProcessTests.PinnedInstanceRunsEachSignedVersionAndStaysOfflineWhenDisabled",
       "MirrorPulse.Core.Tests.SignedSmbHostProcessTests.SignedSmbReleaseListsReadsAndConditionallyUploadsThroughHostAndCfSharp",
       "MirrorPulse.Core.Tests.SignedWebDavWorkerProcessTests.SignedWorkerPreservesEtagAndRejectsStaleUploadWithoutOverwritingRemote"

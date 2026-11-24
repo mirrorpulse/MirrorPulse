@@ -1126,7 +1126,7 @@ jobs:
           MIRRORPULSE_OFFICIAL_AGGREGATE: ${{ github.workspace }}/artifacts/official-adapters
           MIRRORPULSE_LOCAL_PREVIOUS_RELEASE: ${{ github.workspace }}/artifacts/local-previous
         run: |
-          dotnet test tests/MirrorPulse.Core.Tests/MirrorPulse.Core.Tests.csproj --configuration Release --no-restore --filter "FullyQualifiedName~OfficialAdapterAggregateProcessTests|FullyQualifiedName~SignedWebDavWorkerProcessTests|FullyQualifiedName~SignedLocalVersionSwitchProcessTests|FullyQualifiedName~SignedSmbHostProcessTests" --logger trx --results-directory artifacts/test-results/official
+          dotnet test tests/MirrorPulse.Core.Tests/MirrorPulse.Core.Tests.csproj --configuration Release --no-restore --filter "TestCategory=OfficialPackages" --logger trx --results-directory artifacts/test-results/official
           if ($LASTEXITCODE -ne 0) { throw 'Official Adapter tests failed.' }
           pwsh ./eng/verify-test-results.ps1 -Suite official -ResultsDirectory artifacts/test-results/official
 

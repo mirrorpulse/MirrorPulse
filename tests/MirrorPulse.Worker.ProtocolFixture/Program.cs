@@ -105,14 +105,16 @@ if (mode.StartsWith("Update", StringComparison.Ordinal))
             if (!File.Exists(marker)) await File.WriteAllTextAsync(marker, "received");
             while (!File.Exists(Path.Combine(cache!, ".mp-update-reply"))) await Task.Delay(20);
         }
-        var offer = mode == "UpdateCurrent" ? null : new
+        var fixtureOffer = mode == "UpdateCurrent" ? null : new
         {
             adapterId = mode == "UpdateOtherAdapter" ? "example.other" : "example.protocolfixture",
             version = "1.0.1",
             location = mode == "UpdateLocal" ? Path.Combine(cache!, "next.mpadapter") : "https://example.invalid/next.mpadapter?access=fixture",
         };
-        await SendAsync(new(2, AdapterDeploymentContract.UpdateOfferMessage, check.RequestId, instance, session, true,
-            JsonSerializer.SerializeToElement(new { offer })));
+        JsonElement response = mode == "UpdateOfficialLocal"
+            ? JsonSerializer.Deserialize<JsonElement>(await File.ReadAllTextAsync(Path.Combine(cache!, ".mp-update-offer.json")))
+            : JsonSerializer.SerializeToElement(new { offer = fixtureOffer });
+        await SendAsync(new(2, AdapterDeploymentContract.UpdateOfferMessage, check.RequestId, instance, session, true, response));
     }
 }
 if (mode is "HealthAtStartup" or "HealthRecovers" or "HealthInvalidField" or "HealthWithoutCapability")
