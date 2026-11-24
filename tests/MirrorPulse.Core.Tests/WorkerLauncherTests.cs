@@ -9,6 +9,25 @@ public sealed class WorkerLauncherTests
     private static readonly string[] ExitArguments = ["/c", "exit 0"];
 
     [TestMethod]
+    public void PackagedWorkerLaunchPathsRequireTheOpenedFileInItsOwnInstallation()
+    {
+        string root = Directory.CreateTempSubdirectory("MirrorPulse-launch-").FullName;
+        try
+        {
+            string installation = Directory.CreateDirectory(Path.Combine(root, "install")).FullName;
+            string worker = Path.Combine(Directory.CreateDirectory(Path.Combine(installation, "worker")).FullName, "worker.exe");
+            File.WriteAllText(worker, "fixture");
+            var request = new WorkerLaunchRequest(InstanceId.New(), WorkerSessionId.New(), worker, installation);
+            var (executable, workingDirectory) = PackagedWorkerPaths.ResolvePackageFiles(request);
+            Assert.AreEqual(worker, executable, ignoreCase: true);
+            Assert.AreEqual(installation, workingDirectory, ignoreCase: true);
+            var outside = new WorkerLaunchRequest(request.InstanceId, request.WorkerSessionId, Path.Combine(root, "outside.exe"), installation);
+            Assert.ThrowsExactly<InvalidDataException>(() => PackagedWorkerPaths.ResolvePackageFiles(outside));
+        }
+        finally { Directory.Delete(root, recursive: true); }
+    }
+
+    [TestMethod]
     public async Task LauncherStartsProcessWithInstanceMetadata()
     {
         var request = new WorkerLaunchRequest(

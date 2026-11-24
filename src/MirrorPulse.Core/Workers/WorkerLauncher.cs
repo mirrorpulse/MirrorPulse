@@ -81,10 +81,11 @@ public static class WorkerProcessLauncher
     public static WorkerProcessHandle Start(WorkerLaunchRequest request)
     {
         ArgumentNullException.ThrowIfNull(request);
+        var (executable, workingDirectory) = PackagedWorkerPaths.Resolve(request);
         var startInfo = new ProcessStartInfo
         {
-            FileName = request.ExecutablePath,
-            WorkingDirectory = request.WorkingDirectory,
+            FileName = executable,
+            WorkingDirectory = workingDirectory,
             UseShellExecute = false,
             CreateNoWindow = true,
         };
