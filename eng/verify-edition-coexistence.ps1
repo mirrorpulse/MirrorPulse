@@ -407,12 +407,16 @@ $directProfile
             Start-Sleep -Milliseconds 250
         } while ($true)
         $update = Invoke-EditionCli $custom @('--no-start', 'instance', 'check-update', '--instance-id', $directInstanceId)
-        if ($update.availability -cnotin @('Unsupported', 'Current') -or $update.currentVersion -cne $directManifest.version -or
+        # The CLI JSON contract serializes AdapterUpdateAvailability as an integer.
+        $availability = switch ($update.availability) { 0 { 'Unsupported' } 2 { 'Current' } }
+        $evidence.directLocal.optionalUpdate = @{
+            availability=$availability; cliAvailability=$update.availability; currentVersion=$update.currentVersion
+        }
+        if ($null -eq $availability -or $update.currentVersion -cne $directManifest.version -or
             $null -ne $update.offerId -or $null -ne $update.availableVersion) {
             throw 'The optional update check did not return an accurate no-offer result for the official Local Worker.'
         }
         Assert-DirectDeployment $custom $directInstallId $directInstanceId $directRootId $source $directLabel
-        $evidence.directLocal.optionalUpdate = @{ availability=$update.availability; currentVersion=$update.currentVersion }
     }
 
     $evidence.phase = 'Concurrent application activation'

@@ -15,6 +15,9 @@ try {
     if ($window.Current.ProcessId -ne $ProcessId) { throw 'The authorization window belongs to another process.' }
     $descendants = [System.Windows.Automation.TreeScope]::Descendants
     $elementType = [System.Windows.Automation.AutomationElement]
+    $authorizationErrors = @('The operation is not authorized for the current user.', 'The control request is invalid.',
+        'The Host could not complete the operation.', 'The Host or one of its storage dependencies is unavailable.',
+        'The operation was cancelled.', 'The operation timed out.', 'The requested operation is not supported.')
 
     function Wait-Control($Property, $Value, $Within = $window) {
         $condition = [System.Windows.Automation.PropertyCondition]::new($Property, $Value)
@@ -24,6 +27,11 @@ try {
             if ($control -and $control.Current.IsEnabled) { return $control }
             Start-Sleep -Milliseconds 200
         } while ([DateTime]::UtcNow -lt $deadline)
+        $shownError = foreach ($message in $authorizationErrors) {
+            $messageCondition = [System.Windows.Automation.PropertyCondition]::new($elementType::NameProperty, $message)
+            if ($window.FindFirst($descendants, $messageCondition)) { $message }
+        }
+        if ($shownError) { throw "The installed authorization form reported: $($shownError -join ' ')" }
         throw "The installed authorization form did not expose $Value."
     }
 

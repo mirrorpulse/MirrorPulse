@@ -1,4 +1,5 @@
 function Invoke-InstalledAuthorization($Edition) {
+    $PSNativeCommandUseErrorActionPreference = $false
     $evidence.authorization = @{ fixtureSigner='ephemeral'; phase='Build Workers'; verified=$false }
     $workspaceFixture = Join-Path $scratch 'authorization'
     $worker = Join-Path $workspace 'tests/MirrorPulse.Worker.ProtocolFixture/MirrorPulse.Worker.ProtocolFixture.csproj'
@@ -53,6 +54,24 @@ function Invoke-InstalledAuthorization($Edition) {
     try {
         $null = Invoke-EditionCli $Edition @('status')
         $Edition.HostId = Get-EditionHost $Edition
+        $evidence.authorization.phase = 'Verify packaged callback through the CLI'
+        $startArguments = @('--json', '--no-start', 'instance', 'auth-start', '--install-id', $receipt.installId,
+            '--callback', 'desktop-authorize', '--config', 'account=Synthetic desktop account')
+        $raw = & $Edition.AliasPath @startArguments 2>&1
+        $exitCode = $LASTEXITCODE
+        $response = $raw | Out-String | ConvertFrom-Json
+        $evidence.authorization.cliStart = @{ exitCode=$exitCode; kind=$response.kind; code=$response.code; phase=$response.data.phase }
+        if ($exitCode -ne 11 -or $response.kind -cne 'result' -or $response.data.phase -ne 0 -or
+            $response.data.authorizationId -cnotmatch '^[0-9a-f-]{36}$') {
+            throw 'The packaged Host did not start the authorization Worker through its control pipe.'
+        }
+        $raw = & $Edition.AliasPath --json --no-start instance auth-cancel $response.data.authorizationId 2>&1
+        $exitCode = $LASTEXITCODE
+        $response = $raw | Out-String | ConvertFrom-Json
+        if ($exitCode -ne 10 -or $response.kind -cne 'result' -or $response.data.phase -ne 2) {
+            throw 'The packaged Host did not cancel the authorization started by the CLI.'
+        }
+        $evidence.authorization.cliCancelled = $true
         $ui = Join-Path $PSScriptRoot 'verify-installed-authorization-ui.ps1'
         $evidence.authorization.phase = 'First configuration'
         & powershell.exe -NoLogo -NoProfile -NonInteractive -File $ui -ProcessId $Edition.WindowId -Action Create | Out-Host
