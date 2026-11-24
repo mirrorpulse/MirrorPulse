@@ -1,6 +1,7 @@
 using System.Text.Json;
 using MirrorPulse.Adapter.Sdk;
 using MirrorPulse.Core.Contracts;
+using MirrorPulse.Core.Diagnostics;
 using MirrorPulse.Core.State;
 
 namespace MirrorPulse.Core.Host;
@@ -22,6 +23,7 @@ public sealed class AdapterAuthorizationCoordinator : IAsyncDisposable
     private readonly ISecureCredentialStore _credentials;
     private readonly MirrorPulseAdapterInstanceProvisioner _provisioner;
     private readonly string _authorizationRoot;
+    private readonly string _diagnosticsDirectory;
     private readonly SemaphoreSlim _gate = new(1, 1);
     private readonly Dictionary<Guid, Authorization> _authorizations = [];
     private readonly CancellationTokenSource _shutdown = new();
@@ -34,6 +36,7 @@ public sealed class AdapterAuthorizationCoordinator : IAsyncDisposable
         _credentials = credentials;
         _provisioner = provisioner;
         _authorizationRoot = Path.Combine(dataRoot, "adapters", "authorization");
+        _diagnosticsDirectory = Path.Combine(dataRoot, "logs", "authorization-workers");
         _expiry = ExpireAsync();
     }
 
@@ -221,7 +224,7 @@ public sealed class AdapterAuthorizationCoordinator : IAsyncDisposable
         foreach (Authorization entry in entries) entry.SetPhase(AdapterAuthorizationPhase.Saved);
     }
 
-    private static async Task ExchangeAsync(Authorization entry, string message, CancellationToken cancellationToken)
+    private async Task ExchangeAsync(Authorization entry, string message, CancellationToken cancellationToken)
     {
         bool cancel = message == AdapterConfigurationCallbackContract.CancelMessage;
         try
@@ -247,6 +250,8 @@ public sealed class AdapterAuthorizationCoordinator : IAsyncDisposable
         catch (Exception failure) when (failure is IOException or InvalidDataException or JsonException or
             UnauthorizedAccessException or KeyNotFoundException or OperationCanceledException)
         {
+            if (!cancellationToken.IsCancellationRequested)
+                await LogWorkerFailureAsync(entry, failure).ConfigureAwait(false);
             entry.SetPhase(cancel ? AdapterAuthorizationPhase.Cancelled : DateTimeOffset.UtcNow >= entry.Request.ExpiresAt
                 ? AdapterAuthorizationPhase.Expired : AdapterAuthorizationPhase.Failed);
             cancellationToken.ThrowIfCancellationRequested();
@@ -256,6 +261,21 @@ public sealed class AdapterAuthorizationCoordinator : IAsyncDisposable
             if (entry.Status.Phase != AdapterAuthorizationPhase.Pending)
                 await entry.StopWorkerAsync().ConfigureAwait(false);
         }
+    }
+
+    private async Task LogWorkerFailureAsync(Authorization entry, Exception failure)
+    {
+        try
+        {
+            using var log = new LocalRollingLogWriter(_diagnosticsDirectory);
+            Exception cause = failure.GetBaseException();
+            await log.WriteAsync(new(LogLevel.Warning, "worker", "WorkerSessionFailed", DateTimeOffset.UtcNow,
+                [new("instanceId", entry.Target.ToString()),
+                 new("failureCategory", SafeDiagnosticPolicy.ClassifyFailure(cause)),
+                 new("hresult", cause.HResult.ToString("X8", System.Globalization.CultureInfo.InvariantCulture)),
+                 .. entry.Session!.ReadFailureObservation()]), CancellationToken.None).ConfigureAwait(false);
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or InvalidOperationException) { }
     }
 
     private async Task ReapAsync()

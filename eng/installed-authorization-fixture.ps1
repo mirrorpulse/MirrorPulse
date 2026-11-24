@@ -57,12 +57,16 @@ function Invoke-InstalledAuthorization($Edition) {
         $evidence.authorization.phase = 'Verify packaged callback through the CLI'
         $startArguments = @('--json', '--no-start', 'instance', 'auth-start', '--install-id', $receipt.installId,
             '--callback', 'desktop-authorize', '--config', 'account=Synthetic desktop account')
+        $authorizationStart = [DateTimeOffset]::UtcNow
         $raw = & $Edition.AliasPath @startArguments 2>&1
         $exitCode = $LASTEXITCODE
         $response = $raw | Out-String | ConvertFrom-Json
         $evidence.authorization.cliStart = @{ exitCode=$exitCode; kind=$response.kind; code=$response.code; phase=$response.data.phase }
         if ($exitCode -ne 11 -or $response.kind -cne 'result' -or $response.data.phase -ne 0 -or
             $response.data.authorizationId -cnotmatch '^[0-9a-f-]{36}$') {
+            if ($response.data.deploymentId -cmatch '^[0-9a-f-]{36}$') {
+                $evidence.authorization.workerFailure = Get-EditionWorkerFailure $Edition $response.data.deploymentId $authorizationStart -Authorization
+            }
             throw 'The packaged Host did not start the authorization Worker through its control pipe.'
         }
         $raw = & $Edition.AliasPath --json --no-start instance auth-cancel $response.data.authorizationId 2>&1

@@ -24,6 +24,7 @@ internal sealed class AdapterConfigurationWorkerSession : IAsyncDisposable
     private bool _attached;
     private bool _connected;
     private bool _faulted;
+    private readonly WorkerSessionFailureObservation _failureObservation = new();
     private AdapterConfigurationCallbackState? _lastState;
     private int _activeRequest;
     private int _disposed;
@@ -141,6 +142,7 @@ internal sealed class AdapterConfigurationWorkerSession : IAsyncDisposable
             if (message == AdapterConfigurationCallbackContract.StartMessage ? _lastState is not null :
                 _lastState != AdapterConfigurationCallbackState.Pending)
                 throw new InvalidOperationException("The Adapter authorization cannot accept this request in its current state.");
+            _failureObservation.Advance(WorkerSessionStage.ReceiveFrames);
             using var deadline = Deadline(TimeSpan.FromSeconds(12), cancellationToken);
             WorkerSessionId sessionId = _instance.WorkerSessionId!.Value;
             Guid requestId = Guid.NewGuid();
@@ -186,6 +188,9 @@ internal sealed class AdapterConfigurationWorkerSession : IAsyncDisposable
         }
         finally { Volatile.Write(ref _activeRequest, 0); }
     }
+
+    internal LogField[] ReadFailureObservation() =>
+        _failureObservation.Capture(_instance.WorkerSessionId!.Value, _worker?.Process, _pipe);
 
     private CancellationTokenSource Deadline(TimeSpan maximum, CancellationToken cancellationToken)
     {

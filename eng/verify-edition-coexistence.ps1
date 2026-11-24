@@ -98,9 +98,10 @@ function Get-EditionDataRoots($Edition) {
     (Join-Path $packageData "LocalState/$($Edition.Prefix)")
 }
 
-function Get-EditionWorkerFailure($Edition, [string]$InstanceId, [DateTimeOffset]$Since) {
+function Get-EditionWorkerFailure($Edition, [string]$InstanceId, [DateTimeOffset]$Since, [switch]$Authorization) {
+    $directory = if ($Authorization) { 'authorization-workers' } else { 'workers' }
     $records = foreach ($root in Get-EditionDataRoots $Edition) {
-        $log = [IO.FileInfo]::new((Join-Path $root 'logs/workers/mirrorpulse.log'))
+        $log = [IO.FileInfo]::new((Join-Path $root "logs/$directory/mirrorpulse.log"))
         if (!$log.Exists -or $log.Length -gt 4MB -or $log.LinkTarget -or $log.Directory.LinkTarget) { continue }
         foreach ($line in Get-Content -LiteralPath $log.FullName -Tail 32) {
             try { $event = $line | ConvertFrom-Json -ErrorAction Stop } catch { continue }
