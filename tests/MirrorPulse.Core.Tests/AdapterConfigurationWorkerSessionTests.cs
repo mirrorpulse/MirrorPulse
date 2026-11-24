@@ -11,9 +11,11 @@ namespace MirrorPulse.Core.Tests;
 public sealed class AdapterConfigurationWorkerSessionTests
 {
     [TestMethod]
-    [DataRow(false, false)]
-    [DataRow(true, true)]
-    public async Task RealWorkerAuthorizesBeforeDeploymentOrWhileAnExistingDeploymentIsDisabled(bool existing, bool cancel)
+    [DataRow(false, false, "authorize")]
+    [DataRow(true, true, "authorize")]
+    [DataRow(false, false, "desktop-authorize")]
+    public async Task RealWorkerAuthorizesBeforeDeploymentOrWhileAnExistingDeploymentIsDisabled(bool existing, bool cancel,
+        string callback)
     {
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(40));
         string directory = Directory.CreateTempSubdirectory("MirrorPulse-authorization-test-").FullName;
@@ -24,19 +26,19 @@ public sealed class AdapterConfigurationWorkerSessionTests
         {
             Directory.CreateDirectory(liveWorkerState);
             await File.WriteAllTextAsync(marker, "current deployment", timeout.Token);
-            InstalledAdapter installation = NewFixture("authorize");
+            InstalledAdapter installation = NewFixture(callback);
             AdapterInstance? instance = existing
                 ? new(installation.AdapterId, installation.InstallId, InstanceId.New(), "Existing",
                     new Dictionary<string, string> { ["endpoint"] = "https://configured.example.test/" }, [],
                     liveWorkerState, liveWorkerState, false, AdapterLifecycleState.Disabled, null, DateTimeOffset.UtcNow)
                 : null;
-            var request = new AdapterConfigurationCallbackRequest(Guid.NewGuid(), "authorize", DateTimeOffset.UtcNow.AddMinutes(1));
+            var request = new AdapterConfigurationCallbackRequest(Guid.NewGuid(), callback, DateTimeOffset.UtcNow.AddMinutes(1));
             await using (var session = await AdapterConfigurationWorkerSession.OpenAsync(installation, instance,
                 new Dictionary<string, string>(), authorizationRoot, request, new WindowsCredentialManagerStore(), timeout.Token))
             {
                 AdapterConfigurationCallbackResult started = await session.ExchangeAsync(AdapterConfigurationCallbackContract.StartMessage, timeout.Token);
                 Assert.AreEqual(AdapterConfigurationCallbackState.Pending, started.State);
-                Assert.AreEqual(new Uri("https://example.test/authorize"), started.InteractionUri);
+                Assert.AreEqual(callback == "desktop-authorize" ? null : new Uri("https://example.test/authorize"), started.InteractionUri);
                 string workspace = Directory.EnumerateDirectories(authorizationRoot).Single();
                 Assert.IsTrue(File.Exists(Path.Combine(workspace, "state", ".fixture-authorization-worker-state")));
 

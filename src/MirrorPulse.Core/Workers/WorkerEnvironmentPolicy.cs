@@ -19,6 +19,7 @@ public static class WorkerEnvironmentPolicy
         }
 
         Directory.CreateDirectory(temporary);
+        temporary = PackagedWorkerPaths.ResolveGrantedDirectory(temporary);
         var result = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
         {
             ["SystemRoot"] = windows,
@@ -36,7 +37,7 @@ public static class WorkerEnvironmentPolicy
                 throw new InvalidDataException("The Worker environment contains an undeclared variable.");
             }
 
-            result[pair.Key] = Path.GetFullPath(pair.Value);
+            result[pair.Key] = PackagedWorkerPaths.ResolveGrantedDirectory(Path.GetFullPath(pair.Value));
         }
 
         return result;

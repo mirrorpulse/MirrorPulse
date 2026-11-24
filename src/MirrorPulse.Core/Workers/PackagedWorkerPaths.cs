@@ -14,6 +14,9 @@ internal static class PackagedWorkerPaths
     internal static (string Executable, string WorkingDirectory) Resolve(WorkerLaunchRequest request) =>
         Packaged.Value ? ResolvePackageFiles(request) : (request.ExecutablePath, request.WorkingDirectory);
 
+    internal static string ResolveGrantedDirectory(string path) =>
+        Packaged.Value ? ReadDirectoryPath(path) : path;
+
     internal static (string Executable, string WorkingDirectory) ResolvePackageFiles(WorkerLaunchRequest request)
     {
         string relative = Path.GetRelativePath(request.WorkingDirectory, request.ExecutablePath);
@@ -22,16 +25,21 @@ internal static class PackagedWorkerPaths
 
         // MSIX can place files written to Local AppData in the edition's private cache.
         // Give the child its actual installation path so its native host can open its own image.
-        using SafeFileHandle directory = CreateFile(request.WorkingDirectory, 0,
-            FileShare.ReadWrite | FileShare.Delete, IntPtr.Zero, FileMode.Open, FileFlagBackupSemantics, IntPtr.Zero);
-        if (directory.IsInvalid) throw new Win32Exception(Marshal.GetLastWin32Error());
         using SafeFileHandle executable = File.OpenHandle(request.ExecutablePath, FileMode.Open, FileAccess.Read, FileShare.Read);
-        string actualRoot = ReadPath(directory);
+        string actualRoot = ReadDirectoryPath(request.WorkingDirectory);
         string actualExecutable = ReadPath(executable);
         if (!string.Equals(Path.Combine(actualRoot, relative), actualExecutable, StringComparison.OrdinalIgnoreCase))
             throw new InvalidDataException("The packaged Worker executable changed its installation path.");
 
         return (actualExecutable, actualRoot);
+    }
+
+    private static string ReadDirectoryPath(string path)
+    {
+        using SafeFileHandle directory = CreateFile(path, 0,
+            FileShare.ReadWrite | FileShare.Delete, IntPtr.Zero, FileMode.Open, FileFlagBackupSemantics, IntPtr.Zero);
+        if (directory.IsInvalid) throw new Win32Exception(Marshal.GetLastWin32Error());
+        return ReadPath(directory);
     }
 
     private static bool HasPackageIdentity()
