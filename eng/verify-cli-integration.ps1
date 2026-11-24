@@ -252,8 +252,19 @@ try {
     }
 
     if ($CliHostPublishDirectory) {
-        $cliRoot = $CliHostPublishDirectory
         $hostRoot = Join-Path $CliHostPublishDirectory 'host'
+        if ($Coalescing) {
+            # Conflict choices require the executable to belong to this disposable fixture.
+            Get-ChildItem -LiteralPath $CliHostPublishDirectory -Force |
+                Where-Object { $_.Name -notin @('host', 'publish-manifest.json') } |
+                Copy-Item -Destination $cliRoot -Recurse -Force
+            $sharedCli = $publish.files | Where-Object path -CEQ 'mp.exe'
+            if ((Get-FileHash -LiteralPath (Join-Path $cliRoot 'mp.exe') -Algorithm SHA256).Hash.ToLowerInvariant() -cne $sharedCli.sha256) {
+                throw 'The isolated CLI differs from the verified shared publication.'
+            }
+        } else {
+            $cliRoot = $CliHostPublishDirectory
+        }
     } else {
         $cliProject = Join-Path $repositoryRoot 'src/MirrorPulse.Cli/MirrorPulse.Cli.csproj'
         $hostProject = Join-Path $repositoryRoot 'src/MirrorPulse.Host/MirrorPulse.Host.csproj'
