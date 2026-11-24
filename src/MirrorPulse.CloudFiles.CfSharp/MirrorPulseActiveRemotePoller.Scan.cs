@@ -12,20 +12,24 @@ public sealed partial class MirrorPulseActiveRemotePoller
         // Existing Workers use positional cursors. An insertion or removal before an offset
         // can yield a complete-looking listing with a missing live item. Independently reread
         // paged scans and proposed deletions before using absence as evidence.
+        if (previous is not null && ObservationsEqual(previous, entries)) return entries;
         if (!paged && previous?.Keys.Any(id => !entries.ContainsKey(id)) != true) return entries;
 
         var (confirmation, _) = await ReadSnapshotAsync(root, token).ConfigureAwait(false);
-        if (entries.Count != confirmation.Count || entries.Any(pair =>
-            !confirmation.TryGetValue(pair.Key, out var verified) ||
-            pair.Value.RemoteRevision != verified.RemoteRevision || pair.Value.ItemKind != verified.ItemKind ||
-            pair.Value.RelativePath != verified.RelativePath || pair.Value.Length != verified.Length ||
-            ToSnapshotMetadata(pair.Value.Metadata) != ToSnapshotMetadata(verified.Metadata)))
+        if (!ObservationsEqual(entries, confirmation))
         {
             throw new IOException("The remote directory changed during enumeration. Retry from the first page.");
         }
 
         return confirmation;
     }
+
+    private static bool ObservationsEqual(IReadOnlyDictionary<string, SnapshotEntry> first,
+        IReadOnlyDictionary<string, SnapshotEntry> second) => first.Count == second.Count && first.All(pair =>
+        second.TryGetValue(pair.Key, out var verified) &&
+        pair.Value.RemoteRevision == verified.RemoteRevision && pair.Value.ItemKind == verified.ItemKind &&
+        pair.Value.RelativePath == verified.RelativePath && pair.Value.Length == verified.Length &&
+        ToSnapshotMetadata(pair.Value.Metadata) == ToSnapshotMetadata(verified.Metadata));
 
     private async Task<(Dictionary<string, SnapshotEntry> Entries, bool Paged)> ReadSnapshotAsync(
         RootRegistration root, CancellationToken token)

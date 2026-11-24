@@ -77,9 +77,12 @@ public sealed partial class MirrorPulseActiveRemotePollerTests
         Assert.IsFalse(await poller.PollOnceAsync(instanceId));
         Assert.AreEqual(158, reads);
 
+        Assert.IsFalse(await poller.PollOnceAsync(instanceId));
+        Assert.AreEqual(237, reads, "An unchanged directory requires only one pass.");
+
         cycle = true;
         await Assert.ThrowsExactlyAsync<InvalidDataException>(() => poller.PollOnceAsync(instanceId).AsTask());
-        Assert.AreEqual(160, reads);
+        Assert.AreEqual(239, reads);
         Assert.IsEmpty(batches);
 
         cycle = false;
