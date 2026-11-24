@@ -217,18 +217,78 @@ jobs:
             artifacts/official-adapter-releases.json
           if-no-files-found: warn
 
-  build-and-test:
+  prepare-x64:
     if: github.event_name != 'workflow_dispatch' || (!inputs.s06_recovery_only && !inputs.file_transfer_acceptance_only)
     needs: official-adapter-candidate
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          name: official-adapter-release-lock
+          path: artifacts
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6
+        with:
+          global-json-file: global.json
+      - name: Build and record the complete managed test inventory
+        shell: pwsh
+        run: |
+          ./eng/restore-adapter-sdk.ps1 -RequireCachedPackage
+          dotnet restore MirrorPulse.sln --locked-mode
+          if ($LASTEXITCODE -ne 0) { throw 'Locked restore failed.' }
+          dotnet build MirrorPulse.sln --configuration Release --no-restore
+          if ($LASTEXITCODE -ne 0) { throw 'Release build failed.' }
+          ./eng/collect-managed-test-originals.ps1 -Phase Prepare -Partitioned
+          ./eng/collect-compiled-test-inventory.ps1 -Phase Discover
+      - name: Archive the common Release build
+        shell: pwsh
+        run: |
+          $projects = @(git ls-files '*.csproj')
+          if ($LASTEXITCODE -ne 0) { throw 'Could not enumerate the solution project paths.' }
+          $paths = @($projects | ForEach-Object {
+            $bin = (Split-Path -Parent $_) + '/bin/Release'
+            if (Test-Path -LiteralPath $bin) { $bin }
+          })
+          if ($paths.Count -eq 0) { throw 'Release output directories are missing.' }
+          $paths += 'artifacts/test-results/managed-originals'
+          tar.exe -cf artifacts/managed-build.tar @paths
+          if ($LASTEXITCODE -ne 0) { throw 'Archiving the Release build failed.' }
+          (Get-FileHash -LiteralPath artifacts/managed-build.tar).Hash | Set-Content -LiteralPath artifacts/managed-build.sha256
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: managed-release-build
+          path: |
+            artifacts/managed-build.tar
+            artifacts/managed-build.sha256
+          if-no-files-found: error
+          retention-days: 3
+
+  managed-tests:
+    needs: prepare-x64
+    uses: ./.github/workflows/managed-tests.yml
+
+  verify-x64:
+    needs: prepare-x64
     runs-on: windows-latest
     steps:
       - name: Check out source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
 
       - name: Download the shared official candidate
         uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         with:
           name: official-adapter-release-lock
+          path: artifacts
+
+      - name: Download the common Release build
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          name: managed-release-build
           path: artifacts
 
       - name: Set up .NET
@@ -241,6 +301,8 @@ jobs:
           pwsh ./eng/restore-adapter-sdk.ps1 -RequireCachedPackage
           if ($LASTEXITCODE -ne 0) { throw 'Pinned Adapter SDK acquisition failed.' }
           dotnet restore MirrorPulse.sln --locked-mode
+          if ($LASTEXITCODE -ne 0) { throw 'Locked restore failed.' }
+          ./eng/expand-managed-test-build.ps1
 
       - name: Verify formatting
         run: pwsh ./eng/verify-format.ps1
@@ -250,9 +312,6 @@ jobs:
 
       - name: Verify client ownership
         run: pwsh ./eng/verify-architecture.ps1
-
-      - name: Build
-        run: dotnet build MirrorPulse.sln --configuration Release --no-restore
 
       - name: Verify x64 CLI entry point
         run: pwsh ./eng/verify-cli-publish.ps1 -Runtime win-x64
@@ -266,34 +325,6 @@ jobs:
         with:
           name: cli-host-win-x64
           path: ${{ runner.temp }}/mirrorpulse-cli-host-win-x64
-          if-no-files-found: error
-
-      - name: Retain managed test assemblies before execution
-        run: pwsh ./eng/collect-managed-test-originals.ps1 -Phase Prepare
-
-      - name: Retain unfiltered compiled test case discovery
-        run: pwsh ./eng/collect-compiled-test-inventory.ps1 -Phase Discover
-
-      - name: Test
-        run: |
-          dotnet test MirrorPulse.sln --configuration Release --no-build --logger trx --results-directory artifacts/test-results/managed --blame-hang-timeout 5m --blame-hang-dump-type none
-          if ($LASTEXITCODE -ne 0) { throw 'Managed tests failed.' }
-          pwsh ./eng/verify-test-results.ps1 -Suite managed -ResultsDirectory artifacts/test-results/managed
-
-      - name: Collect original managed results and assembly bindings
-        if: always()
-        run: pwsh ./eng/collect-managed-test-originals.ps1 -Phase Collect
-
-      - name: Reconcile every compiled case with its original result
-        if: always()
-        run: pwsh ./eng/collect-compiled-test-inventory.ps1 -Phase Reconcile
-
-      - name: Upload original managed results and assemblies
-        if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
-        with:
-          name: managed-test-originals
-          path: artifacts/test-results/managed-originals/**
           if-no-files-found: error
 
       - name: Verify CLI completion gate
@@ -311,8 +342,20 @@ jobs:
       - name: Verify unsupported Windows Server rejection
         shell: pwsh
         run: |
-          New-Item -ItemType Directory -Path artifacts/evidence -Force | Out-Null
-          pwsh ./eng/verify-unsupported-platform.ps1 -PublishDirectory "$env:RUNNER_TEMP/mirrorpulse-cli-host-win-x64" -EvidencePath artifacts/evidence/rejected.json
+          New-Item -ItemType Directory -Path artifacts/x64-platform-evidence -Force | Out-Null
+          pwsh ./eng/verify-unsupported-platform.ps1 -PublishDirectory "$env:RUNNER_TEMP/mirrorpulse-cli-host-win-x64" -EvidencePath artifacts/x64-platform-evidence/rejected.json
+
+      - name: Stage the native gate receipt for manual runs
+        if: github.event_name == 'workflow_dispatch'
+        shell: pwsh
+        run: Copy-Item -LiteralPath artifacts/test-results/native/test-evidence.json -Destination artifacts/x64-platform-evidence/native.json
+
+      - name: Upload x64 platform evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: x64-platform-evidence
+          path: artifacts/x64-platform-evidence/**
+          if-no-files-found: error
 
       - name: Upload native boundary test results
         if: (success() || failure()) && github.event_name == 'workflow_dispatch'
@@ -343,6 +386,44 @@ jobs:
           path: artifacts/test-results/deferred-p079-x64/**
           if-no-files-found: warn
 
+  build-and-test:
+    if: >-
+      always() && !cancelled() &&
+      (github.event_name != 'workflow_dispatch' ||
+        ((!inputs.s06_recovery_only && !inputs.file_transfer_acceptance_only) && needs.official-adapter-candidate.result != 'skipped'))
+    needs: [official-adapter-candidate, managed-tests, verify-x64]
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - name: Require successful managed and x64 verification
+        shell: pwsh
+        env:
+          CANDIDATE_RESULT: ${{ needs.official-adapter-candidate.result }}
+          MANAGED_RESULT: ${{ needs.managed-tests.result }}
+          PLATFORM_RESULT: ${{ needs.verify-x64.result }}
+        run: |
+          if ($env:CANDIDATE_RESULT -cne 'success' -or $env:MANAGED_RESULT -cne 'success' -or $env:PLATFORM_RESULT -cne 'success') {
+            throw 'The official candidate, managed test inventory and x64 platform verification must all pass.'
+          }
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          name: official-adapter-release-lock
+          path: artifacts
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          name: managed-test-evidence
+          path: artifacts/test-results/managed
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          name: x64-platform-evidence
+          path: artifacts/x64-platform-evidence
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          name: cli-host-win-x64
+          path: ${{ runner.temp }}/mirrorpulse-cli-host-win-x64
       - name: Collect x64 verification evidence
         shell: pwsh
         run: |
@@ -351,11 +432,11 @@ jobs:
             Job = 'build-and-test'; Runtime = 'win-x64'; OutputPath = 'artifacts/evidence/build-and-test.json'
             TestManifests = @('artifacts/test-results/managed/test-evidence.json')
             PublishDirectory = "$env:RUNNER_TEMP/mirrorpulse-cli-host-win-x64"
-            RejectedPath = 'artifacts/evidence/rejected.json'
+            RejectedPath = 'artifacts/x64-platform-evidence/rejected.json'
             AdapterReleaseLockPath = 'artifacts/official-adapter-releases.json'
           }
           if ('${{ github.event_name }}' -eq 'workflow_dispatch') {
-            $parameters.TestManifests += 'artifacts/test-results/native/test-evidence.json'
+            $parameters.TestManifests += 'artifacts/x64-platform-evidence/native.json'
             $parameters.RequireNative = $true
           }
           ./eng/collect-ci-evidence.ps1 @parameters

@@ -1,0 +1,80 @@
+name: Managed tests
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Managed tests (${{ matrix.partition }})
+    runs-on: windows-latest
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        partition: [CatalogA, CatalogB, Core, Clients]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6
+        with:
+          global-json-file: global.json
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          name: managed-release-build
+          path: artifacts
+      - name: Execute the assigned cases
+        shell: pwsh
+        env:
+          PARTITION: ${{ matrix.partition }}
+        run: |
+          ./eng/expand-managed-test-build.ps1
+          ./eng/test-managed-partition.ps1 -Partition $env:PARTITION
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        if: always()
+        with:
+          name: managed-results-${{ matrix.partition }}
+          path: artifacts/test-results/managed/${{ matrix.partition }}/**
+          if-no-files-found: error
+
+  reconcile:
+    needs: test
+    if: always() && !cancelled()
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          name: managed-release-build
+          path: artifacts
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          pattern: managed-results-*
+          path: artifacts/test-results/managed
+      - name: Verify every original managed result
+        shell: pwsh
+        env:
+          PARTITIONS_RESULT: ${{ needs.test.result }}
+        run: |
+          ./eng/expand-managed-test-build.ps1
+          ./eng/collect-managed-test-originals.ps1 -Phase Collect -Partitioned
+          ./eng/collect-compiled-test-inventory.ps1 -Phase Reconcile
+          ./eng/verify-test-results.ps1 -Suite managed -ResultsDirectory artifacts/test-results/managed
+          if ($env:PARTITIONS_RESULT -cne 'success') { throw 'A managed test partition did not complete successfully.' }
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        if: always()
+        with:
+          name: managed-test-originals
+          path: artifacts/test-results/managed-originals/**
+          if-no-files-found: error
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: managed-test-evidence
+          path: artifacts/test-results/managed/test-evidence.json
+          if-no-files-found: error
