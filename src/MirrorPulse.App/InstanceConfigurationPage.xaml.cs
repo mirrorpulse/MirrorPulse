@@ -3,6 +3,7 @@ using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Navigation;
 using MirrorPulse.Control.Contracts;
+using MirrorPulse.Core;
 using MirrorPulse.Core.Contracts;
 using MirrorPulse.Core.Host;
 using XamlControl = Microsoft.UI.Xaml.Controls.Control;
@@ -29,10 +30,12 @@ public sealed partial class InstanceConfigurationPage : Page
         try
         {
             MirrorPulseControlTopology topology = await AppControl.Client.GetAdapterTopologyAsync();
-            if (e.Parameter is InstanceId instanceId)
+            if (ProductInfo.Edition.DirectAdapterId is not null)
+                _instance = topology.Instances.SingleOrDefault();
+            else if (e.Parameter is InstanceId instanceId)
                 _instance = topology.Instances.SingleOrDefault(item => item.InstanceId == instanceId.ToString())
                     ?? throw new FileNotFoundException("The selected Adapter instance was not found.");
-            string installId = _instance?.InstallId ?? InstallId.Parse(e.Parameter as string ?? string.Empty).ToString();
+            string installId = _instance?.InstallId ?? ResolveInstallationId(topology, e.Parameter);
             _installation = topology.Installations.SingleOrDefault(item => item.InstallId == installId)
                 ?? throw new FileNotFoundException("The selected Adapter installation was not found.");
             MirrorPulseControlAdapterForm form = _installation.Form
@@ -156,7 +159,7 @@ public sealed partial class InstanceConfigurationPage : Page
             if (_installation.Form?.Presentation is not null)
             {
                 await SaveSignedFormAsync();
-                Frame.Navigate(typeof(InstalledAdaptersPage));
+                ReturnToStorage();
                 return;
             }
 
@@ -247,7 +250,7 @@ public sealed partial class InstanceConfigurationPage : Page
                     password.Password = string.Empty;
                 }
             }
-            Frame.Navigate(typeof(InstalledAdaptersPage));
+            ReturnToStorage();
         }
         catch (Exception exception)
         {
@@ -257,7 +260,21 @@ public sealed partial class InstanceConfigurationPage : Page
     }
 
     private void CancelButton_Click(object sender, RoutedEventArgs e) =>
-        Frame.Navigate(typeof(InstalledAdaptersPage));
+        ReturnToStorage();
+
+    private static string ResolveInstallationId(MirrorPulseControlTopology topology, object? parameter)
+    {
+        if (ProductInfo.Edition.DirectAdapterId is not { } adapterId)
+            return InstallId.Parse(parameter as string ?? string.Empty).ToString();
+
+        return topology.Installations.Where(item => item.AdapterId == adapterId.Value && item.IsSigned)
+            .OrderByDescending(item => AdapterPackageVersion.Parse(item.Version))
+            .FirstOrDefault()?.InstallId ?? throw new FileNotFoundException("The edition's bundled Adapter is unavailable.");
+    }
+
+    private void ReturnToStorage() => Frame.Navigate(ProductInfo.Edition.DirectAdapterId is null
+        ? typeof(InstalledAdaptersPage)
+        : typeof(SyncStatusPage));
 
     private void ShowError(string message)
     {

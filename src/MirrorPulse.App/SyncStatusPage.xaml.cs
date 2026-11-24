@@ -1,5 +1,6 @@
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
+using MirrorPulse.Core;
 using MirrorPulse.Core.Host;
 
 namespace MirrorPulse.App;
@@ -10,12 +11,17 @@ public sealed partial class SyncStatusPage : Page
     public SyncStatusPage()
     {
         InitializeComponent();
+        if (ProductInfo.Edition.DirectAdapterId is not null)
+            ConfigureStorageButton.Visibility = Visibility.Visible;
         Loaded += SyncStatusPage_Loaded;
     }
 
     private async void SyncStatusPage_Loaded(object sender, RoutedEventArgs e) => await RefreshAsync();
 
     private async void RefreshButton_Click(object sender, RoutedEventArgs e) => await RefreshAsync();
+
+    private void ConfigureStorageButton_Click(object sender, RoutedEventArgs e) =>
+        Frame.Navigate(typeof(InstanceConfigurationPage));
 
     private void NotificationsButton_Click(object sender, RoutedEventArgs e) =>
         Frame.Navigate(typeof(NotificationsPage));

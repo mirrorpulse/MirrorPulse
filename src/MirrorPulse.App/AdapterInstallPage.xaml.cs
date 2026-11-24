@@ -2,6 +2,7 @@ using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Navigation;
 using Microsoft.Windows.Storage.Pickers;
+using MirrorPulse.Core;
 using MirrorPulse.Core.Host;
 
 namespace MirrorPulse.App;
@@ -50,7 +51,7 @@ public sealed partial class AdapterInstallPage : Page
     }
 
     private void CancelButton_Click(object sender, RoutedEventArgs e) =>
-        Frame.Navigate(typeof(InstalledAdaptersPage));
+        Frame.Navigate(ProductInfo.Edition.DirectAdapterId is null ? typeof(InstalledAdaptersPage) : typeof(MainPage));
 
     private async void InstallButton_Click(object sender, RoutedEventArgs e)
     {

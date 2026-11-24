@@ -15,6 +15,8 @@
             <TextBlock x:Name="PendingUploadsText" Text="Pending uploads: —" />
             <TextBlock x:Name="PendingConflictsText" Text="Pending remote conflicts: —" />
             <Button Content="Refresh" Click="RefreshButton_Click" HorizontalAlignment="Left" />
+            <Button x:Name="ConfigureStorageButton" Content="Configure storage" Click="ConfigureStorageButton_Click"
+                    HorizontalAlignment="Left" Visibility="Collapsed" />
             <Button Content="Notifications" Click="NotificationsButton_Click" HorizontalAlignment="Left" />
             <ListView x:Name="InstanceStatusList" SelectionMode="None" />
             <TextBlock x:Name="StatusMessageText" TextWrapping="Wrap" Opacity="0.75" />
