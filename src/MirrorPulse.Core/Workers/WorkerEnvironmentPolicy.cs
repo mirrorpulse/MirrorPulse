@@ -3,7 +3,10 @@ namespace MirrorPulse.Core.Workers;
 /// <summary>Builds a minimal environment without inheriting Host secrets or runtime injection variables.</summary>
 public static class WorkerEnvironmentPolicy
 {
-    public static IReadOnlyDictionary<string, string> Create(WorkerLaunchRequest request)
+    public static IReadOnlyDictionary<string, string> Create(WorkerLaunchRequest request) =>
+        Create(request, resolvePackagedPaths: false);
+
+    internal static IReadOnlyDictionary<string, string> Create(WorkerLaunchRequest request, bool resolvePackagedPaths)
     {
         ArgumentNullException.ThrowIfNull(request);
         string windows = Environment.GetFolderPath(Environment.SpecialFolder.Windows);
@@ -19,7 +22,7 @@ public static class WorkerEnvironmentPolicy
         }
 
         Directory.CreateDirectory(temporary);
-        temporary = PackagedWorkerPaths.ResolveGrantedDirectory(temporary);
+        if (resolvePackagedPaths) temporary = PackagedWorkerPaths.ReadDirectoryPath(temporary);
         var result = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
         {
             ["SystemRoot"] = windows,
@@ -37,7 +40,8 @@ public static class WorkerEnvironmentPolicy
                 throw new InvalidDataException("The Worker environment contains an undeclared variable.");
             }
 
-            result[pair.Key] = PackagedWorkerPaths.ResolveGrantedDirectory(Path.GetFullPath(pair.Value));
+            string directory = Path.GetFullPath(pair.Value);
+            result[pair.Key] = resolvePackagedPaths ? PackagedWorkerPaths.ReadDirectoryPath(directory) : directory;
         }
 
         return result;

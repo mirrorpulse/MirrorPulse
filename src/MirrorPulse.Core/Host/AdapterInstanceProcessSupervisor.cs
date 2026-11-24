@@ -433,7 +433,7 @@ public sealed class AdapterInstanceProcessSupervisor :
             observation.Advance(WorkerSessionStage.CreateJob);
             using var job = WorkerJobObject.Create();
             observation.Advance(WorkerSessionStage.StartProcess);
-            using WorkerProcessHandle worker = WorkerProcessLauncher.Start(request);
+            using WorkerProcessHandle worker = WorkerProcessLauncher.StartInstalledAdapter(request);
             bool jobAttached = false;
             try
             {

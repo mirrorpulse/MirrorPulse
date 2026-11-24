@@ -114,7 +114,7 @@ internal sealed class AdapterConfigurationWorkerSession : IAsyncDisposable
             PipeOptions = PipeOptions.Asynchronous | PipeOptions.FirstPipeInstance,
         });
         _job = WorkerJobObject.Create();
-        _worker = WorkerProcessLauncher.Start(request);
+        _worker = WorkerProcessLauncher.StartInstalledAdapter(request);
         _job.Attach(_worker.Process);
         _attached = true;
         using var deadline = Deadline(TimeSpan.FromSeconds(15), cancellationToken);

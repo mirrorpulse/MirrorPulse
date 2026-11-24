@@ -78,10 +78,18 @@ public sealed class WorkerProcessHandle : IDisposable
 /// </summary>
 public static class WorkerProcessLauncher
 {
-    public static WorkerProcessHandle Start(WorkerLaunchRequest request)
+    public static WorkerProcessHandle Start(WorkerLaunchRequest request) =>
+        Start(request, resolvePackagedPaths: false);
+
+    internal static WorkerProcessHandle StartInstalledAdapter(WorkerLaunchRequest request) =>
+        Start(request, resolvePackagedPaths: PackagedWorkerPaths.HasPackage);
+
+    private static WorkerProcessHandle Start(WorkerLaunchRequest request, bool resolvePackagedPaths)
     {
         ArgumentNullException.ThrowIfNull(request);
-        var (executable, workingDirectory) = PackagedWorkerPaths.Resolve(request);
+        var (executable, workingDirectory) = resolvePackagedPaths
+            ? PackagedWorkerPaths.ResolvePackageFiles(request)
+            : (request.ExecutablePath, request.WorkingDirectory);
         var startInfo = new ProcessStartInfo
         {
             FileName = executable,
@@ -96,7 +104,7 @@ public static class WorkerProcessLauncher
         }
 
         startInfo.Environment.Clear();
-        foreach (var pair in WorkerEnvironmentPolicy.Create(request))
+        foreach (var pair in WorkerEnvironmentPolicy.Create(request, resolvePackagedPaths))
         {
             startInfo.Environment[pair.Key] = pair.Value;
         }

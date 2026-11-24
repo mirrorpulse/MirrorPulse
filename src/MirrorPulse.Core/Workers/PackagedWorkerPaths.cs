@@ -11,11 +11,7 @@ internal static class PackagedWorkerPaths
     private const uint FileFlagBackupSemantics = 0x02000000;
     private static readonly Lazy<bool> Packaged = new(HasPackageIdentity);
 
-    internal static (string Executable, string WorkingDirectory) Resolve(WorkerLaunchRequest request) =>
-        Packaged.Value ? ResolvePackageFiles(request) : (request.ExecutablePath, request.WorkingDirectory);
-
-    internal static string ResolveGrantedDirectory(string path) =>
-        Packaged.Value ? ReadDirectoryPath(path) : path;
+    internal static bool HasPackage => Packaged.Value;
 
     internal static (string Executable, string WorkingDirectory) ResolvePackageFiles(WorkerLaunchRequest request)
     {
@@ -34,7 +30,7 @@ internal static class PackagedWorkerPaths
         return (actualExecutable, actualRoot);
     }
 
-    private static string ReadDirectoryPath(string path)
+    internal static string ReadDirectoryPath(string path)
     {
         using SafeFileHandle directory = CreateFile(path, 0,
             FileShare.ReadWrite | FileShare.Delete, IntPtr.Zero, FileMode.Open, FileFlagBackupSemantics, IntPtr.Zero);
