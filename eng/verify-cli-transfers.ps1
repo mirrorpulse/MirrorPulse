@@ -6,6 +6,7 @@ param(
     [string]$LegacySourcePackagePath,
     [switch]$VerifyDirectoryTransfer,
     [switch]$VerifyPreparedTransferReenable,
+    [switch]$VerifyRemoteSyncRecovery,
     [ValidateSet('Debug', 'Release')][string]$Configuration = 'Release',
     [Parameter(Mandatory)][string]$EvidencePath
 )
@@ -18,6 +19,7 @@ if ($LASTEXITCODE -ne 0 -or $sourceSha -cnotmatch '\A[0-9a-f]{40}\z' -or ($env:G
 . (Join-Path $PSScriptRoot 'cli-integration-failure-policy.ps1')
 . (Join-Path $PSScriptRoot 'cli-transfer-evidence-policy.ps1')
 . (Join-Path $PSScriptRoot 'cli-transfer-failure-observations.ps1')
+. (Join-Path $PSScriptRoot 'cli-transfer-poll-recovery.ps1')
 $fixture = Join-Path ([IO.Path]::GetTempPath()) ('MirrorPulse-cli-transfer-' + [guid]::NewGuid().ToString('N'))
 $sync = Join-Path $fixture 'sync'; $data = Join-Path $fixture 'data'
 $evidenceFile = [IO.Path]::GetFullPath($EvidencePath)
@@ -430,6 +432,11 @@ try {
     $beforeRestart = (Invoke-TransferCli @('--json', '--no-start', 'host', 'status')).data.processId
     $phase = 'InitialRemoteRefresh'
     Invoke-TransferCli @('--json', '--no-start', 'sync', 'refresh') | Out-Null
+    if ($VerifyRemoteSyncRecovery) {
+        $phase = 'RemoteSyncRecovery'
+        $remoteSync = Invoke-TransferPollRecovery
+        Write-TransferOriginal -Name 'poll-snapshot-recovery' -Value $remoteSync
+    }
     $phase = 'TransferCommands'
     for ($index = 0; $index -lt 2; $index++) {
         $forward = $index -eq 0; $scope = 'CrossInstance'; $direction = if ($forward) { 'Forward' } else { 'Reverse' }
@@ -597,6 +604,7 @@ try {
         $report.webDavServer = Get-Content -Raw -LiteralPath (Join-Path $fixture 'webdav-server.json') | ConvertFrom-Json
     }
     if ($null -ne $directoryCase) { $report.directory = $directoryCase }
+    if ($VerifyRemoteSyncRecovery) { $report.remoteSync = $remoteSync }
     Assert-CliTransferObservations -Evidence ([pscustomobject]$report) -BeforeCleanup -RequireSingleRoot -RequirePreparedRestart -RequireDirectory:$VerifyDirectoryTransfer
     Write-TransferOriginal -Name 'completed-execution' -Value $report
 } catch {

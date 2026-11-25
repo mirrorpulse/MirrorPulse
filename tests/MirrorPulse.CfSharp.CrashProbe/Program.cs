@@ -78,6 +78,16 @@ if (args.Length == 4 && args[0] == "--namespace-source-consumer")
     }
 }
 
+if (args.Length == 3 && args[0] == "--audit-cli-poll-restart")
+{
+    try { return await CliFixtureProbe.RunTransferPollAuditAsync(args[1], args[2]); }
+    catch (Exception exception)
+    {
+        Console.Error.WriteLine($"Polling audit failure: hresult={exception.HResult:X8}; type={exception.GetType().Name}.");
+        return 1;
+    }
+}
+
 if (args.Length == 2 && args[0] is "--audit-cli-disabled-fixture" or "--cleanup-cli-disabled-fixture" or "--read-cli-fixture" or "--audit-cli-fixture" or "--inspect-cli-fixture" or "--cleanup-cli-fixture" or "--cleanup-cli-transfer-fixture" or "--audit-cli-transfer-fixture" or "--observe-cli-transfer-failure" or "--audit-cli-coalescing-pending" or "--audit-cli-coalescing-completed" or "--audit-cli-coalescing-keep-remote" or "--audit-cli-coalescing-edit" or "--observe-cli-coalescing-edit" or "--audit-cli-create-pending" or "--audit-cli-create-keep-remote" or "--audit-cli-move-pending" or "--audit-cli-move-keep-remote" or "--observe-cli-move-coalescing-edit" or "--observe-cli-intermediate-move" or "--audit-cli-move-only-pending" or "--audit-cli-move-only-keep-remote")
 {
     try

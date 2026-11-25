@@ -4,6 +4,7 @@ param(
     [Parameter(Mandatory)][string]$ReleaseLockPath,
     [Parameter(Mandatory)][string]$LocalPackageDirectory,
     [Parameter(Mandatory)][string]$WebDavPackageDirectory,
+    [switch]$VerifyRemoteSyncRecovery,
     [Parameter(Mandatory)][string]$EvidencePath
 )
 
@@ -24,7 +25,9 @@ Invoke-CliCrossPackageVerification -SourceSha $sourceSha -RunId ([string]$env:GI
     [pscustomobject]@{ Local = $local[0].FullName; WebDav = $webdav[0].FullName }
 } -Verify {
     param($packages)
+    $remoteSync = @()
+    if ($VerifyRemoteSyncRecovery) { $remoteSync += '-VerifyRemoteSyncRecovery' }
     & pwsh -NoProfile -File (Join-Path $PSScriptRoot 'verify-cli-transfers.ps1') -Runtime $Runtime `
-        -PackagePath $packages.Local -WebDavPackagePath $packages.WebDav -EvidencePath $EvidencePath | Out-Host
+        -PackagePath $packages.Local -WebDavPackagePath $packages.WebDav -EvidencePath $EvidencePath @remoteSync | Out-Host
     if ($LASTEXITCODE -ne 0) { throw 'The real signed cross-package CLI transfer matrix failed.' }
 }

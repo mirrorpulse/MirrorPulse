@@ -13,7 +13,11 @@ on:
         type: boolean
         default: false
       file_transfer_acceptance_only:
-        description: Run the signed ARM64 Local and Local/WebDAV CLI file transfers only
+        description: Run only signed ARM64 CLI transfers across Local and Local/WebDAV deployments
+        type: boolean
+        default: false
+      verify_remote_sync_restart:
+        description: Include interrupted remote polling in the signed ARM64 CLI transfer fixtures
         type: boolean
         default: false
       s06_recovery_only:
@@ -129,22 +133,29 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Locked restore failed.' }
           ./eng/prepare-native-ci-volume.ps1
           ./eng/aggregate-official-adapters.ps1 -ReleaseLockPath artifacts/official-adapter-releases.json -AdapterIds com.mirrorpulse.adapter.local -OutputDirectory artifacts/official-local
-      - name: Verify signed Local file transfers across an actual Host restart
+      - name: Verify signed Local transfers and poll recovery across actual Host restarts
         shell: pwsh
         timeout-minutes: 10
+        env:
+          MP_VERIFY_REMOTE_SYNC_RESTART: ${{ inputs.verify_remote_sync_restart && '1' || '0' }}
         run: |
           $packages = @(Get-ChildItem -LiteralPath artifacts/official-local -Recurse -Filter '*.mpadapter' -File)
           if ($packages.Count -ne 1) { throw 'The exact frozen signed Local package is required.' }
-          pwsh -NoProfile -File ./eng/verify-cli-transfers.ps1 -Runtime win-arm64 -PackagePath $packages[0].FullName -EvidencePath artifacts/evidence/cli-transfers.json
+          $poll = @()
+          if ($env:MP_VERIFY_REMOTE_SYNC_RESTART -ceq '1') { $poll += '-VerifyRemoteSyncRecovery' }
+          pwsh -NoProfile -File ./eng/verify-cli-transfers.ps1 -Runtime win-arm64 -PackagePath $packages[0].FullName @poll -EvidencePath artifacts/evidence/cli-transfers.json
           if ($LASTEXITCODE -ne 0) { throw 'The signed Local file transfer fixture failed.' }
-      - name: Verify signed Local and WebDAV file transfers across an actual Host restart
+      - name: Verify signed Local and WebDAV transfers and poll recovery across actual Host restarts
         if: ${{ !cancelled() && steps.prepare.outcome == 'success' }}
         shell: pwsh
         timeout-minutes: 10
         env:
           GITHUB_TOKEN: ${{ github.token }}
+          MP_VERIFY_REMOTE_SYNC_RESTART: ${{ inputs.verify_remote_sync_restart && '1' || '0' }}
         run: |
-          pwsh -NoProfile -File ./eng/verify-cli-cross-package.ps1 -Runtime win-arm64 -ReleaseLockPath artifacts/official-adapter-releases.json -LocalPackageDirectory artifacts/official-local -WebDavPackageDirectory artifacts/official-transfer-webdav -EvidencePath artifacts/evidence/cli-cross-package.json
+          $poll = @()
+          if ($env:MP_VERIFY_REMOTE_SYNC_RESTART -ceq '1') { $poll += '-VerifyRemoteSyncRecovery' }
+          pwsh -NoProfile -File ./eng/verify-cli-cross-package.ps1 -Runtime win-arm64 -ReleaseLockPath artifacts/official-adapter-releases.json -LocalPackageDirectory artifacts/official-local -WebDavPackageDirectory artifacts/official-transfer-webdav @poll -EvidencePath artifacts/evidence/cli-cross-package.json
           if ($LASTEXITCODE -ne 0) { throw 'The signed Local and WebDAV file transfer fixture failed.' }
       - name: Preserve both signed fixture reports and raw failure observations
         if: always()
