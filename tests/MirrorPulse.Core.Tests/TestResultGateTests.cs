@@ -40,6 +40,10 @@ public sealed class TestResultGateTests
     [DataRow("fileTransferRecovery", "Failed", false, false, false)]
     [DataRow("fileTransferRecovery", "Passed", true, false, false)]
     [DataRow("fileTransferRecovery", "Passed", false, true, false)]
+    [DataRow("remoteSync", "Passed", false, false, true)]
+    [DataRow("remoteSync", "NotExecuted", false, false, false)]
+    [DataRow("remoteSync", "Passed", true, false, false)]
+    [DataRow("remoteSync", "Passed", false, true, false)]
     public async Task DedicatedGateRejectsSkippedOrMissingRequiredResults(string suite, string outcome, bool omitLast, bool repeatFirst, bool succeeds)
     {
         string repository = TestRepository.FindRepositoryRoot();

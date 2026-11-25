@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory)][string]$ResultsDirectory,
-    [ValidateSet("managed", "native", "official", "signed", "packaged", "namespace", "cfsharpDelete", "cfsharpRecreation", "deferredP079", "signedAtomicDirectory", "signedDirectoryMove", "signedDirectoryTransfer", "signedDirectoryCopyRecovery", "signedPreparedDirectoryCopy", "fileTransferRecovery")][string]$Suite = "managed",
+    [ValidateSet("managed", "native", "official", "signed", "packaged", "namespace", "cfsharpDelete", "cfsharpRecreation", "deferredP079", "signedAtomicDirectory", "signedDirectoryMove", "signedDirectoryTransfer", "signedDirectoryCopyRecovery", "signedPreparedDirectoryCopy", "fileTransferRecovery", "remoteSync")][string]$Suite = "managed",
     [string]$OutputPath
 )
 
@@ -55,7 +55,7 @@ if ($Suite -eq "managed") {
 } else {
     Assert-RequiredTestResults -Catalog $catalog -Suite $Suite -Results $results
     if ($skipped.Count -ne 0) { throw "The $Suite gate contains skipped tests." }
-    if ($Suite -in @('namespace', 'cfsharpDelete', 'cfsharpRecreation', 'deferredP079', 'signedAtomicDirectory', 'signedDirectoryMove', 'signedDirectoryTransfer', 'signedDirectoryCopyRecovery', 'signedPreparedDirectoryCopy', 'fileTransferRecovery') -and
+    if ($Suite -in @('namespace', 'cfsharpDelete', 'cfsharpRecreation', 'deferredP079', 'signedAtomicDirectory', 'signedDirectoryMove', 'signedDirectoryTransfer', 'signedDirectoryCopyRecovery', 'signedPreparedDirectoryCopy', 'fileTransferRecovery', 'remoteSync') -and
         $results.Count -ne (Get-RequiredTestExecutionCount -Catalog $catalog -Names @($catalog.required.$Suite))) {
         throw "The $Suite gate must select exactly the required tests."
     }

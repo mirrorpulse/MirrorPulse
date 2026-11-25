@@ -370,8 +370,14 @@ try {
     }
     Assert-CliNamespaceRoot -Phase InitialRoot -ExpectedState Active
 
-    $refresh = Invoke-MirrorPulseCli @("--json", "--developer-mode", "sync", "refresh")
+    $refresh = Invoke-MirrorPulseCli @("--json", "--developer-mode", "sync", "refresh", "--force")
     if ($refresh.kind -ne "result") { throw "The CLI refresh response is invalid." }
+    $initialInstance = @($refresh.data.instances | Where-Object instanceId -CEQ $instanceId)
+    $initialPoll = @($initialInstance.remotePolling | Where-Object rootId -CEQ $registeredRoot.rootId)
+    if ($initialPoll.Count -ne 1 -or $initialPoll[0].phase -cne 'Current' -or
+        $null -ne $initialPoll[0].reason -or $null -eq $initialPoll[0].lastSuccessfulScan) {
+        throw 'The signed Local Worker did not complete its initial remote scan for the registered root.'
+    }
 
     $mappedFixture = Join-Path $mappedRoot "nested\fixture.txt"
     $deadline = [DateTime]::UtcNow.AddSeconds(30)

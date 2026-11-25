@@ -455,6 +455,15 @@
     "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeLocalTombstoneDeleteRecoversActualSdkReceiptAcrossFreshRoles"
   ],
   "required": {
+    "remoteSync": [
+      "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeRuntimePublishesSourceBirthsThroughTheCurrentLibraryAndAuditsRepeatedPages",
+      "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeOriginalRemoteFileUpdatePreservesDirtyBytesAndConflictAcrossOwners",
+      "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeOriginalRemoteFileUpdateInvalidatesHydratedBytesBeforeCursor",
+      "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeOriginalRemoteDeleteConflictRetainsChildAndDurableConflictAcrossOwners",
+      "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeOriginalRemoteTreeDeletePreservesDirtyDescendantAndOriginalConflict",
+      "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeRemoteFileMovementSettlesTheOriginalBatchAcrossStoreOwnersWithoutRedispatch",
+      "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeExplicitRemoteTreeDeleteRecoversItsSdkResultBeforeFollowingWorkAndCursor"
+    ],
     "fileTransferRecovery": [
       "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeHostTransferAuditsBothRootsBeforeResumingOriginalFileCopy",
       "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeHostTransferDeletesOriginalRemoteSourceAfterBothRootAudits",
