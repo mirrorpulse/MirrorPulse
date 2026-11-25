@@ -15,6 +15,57 @@ function Invoke-TransferPollAudit {
     return ($observed | ConvertFrom-Json)
 }
 
+function Invoke-TransferPollDisable {
+    param([object]$Left, [object]$Right, [string]$LeftSnapshot, [string]$RightSnapshot,
+        [string]$LeftRemote, [string]$RightRemote)
+    $beforeLeft = Read-TransferPollSnapshot $LeftSnapshot
+    $beforeRight = Read-TransferPollSnapshot $RightSnapshot
+    $disabled = $false
+    try {
+        Invoke-TransferCli @('--json', '--no-start', 'instance', 'disable', '--instance-id', $Left.instanceId) | Out-Null
+        $disabled = $true
+        Invoke-TransferCli @('--json', 'host', 'restart') | Out-Null; Wait-TransferHostStopped
+        Invoke-TransferCli @('--json', 'host', 'start') | Out-Null
+        $workers = @(Wait-TransferWorkersConnected -DisabledInstanceId $Left.instanceId)
+        [IO.File]::WriteAllText($LeftRemote, 'A later independent edit made while polling was disabled.')
+        [IO.File]::WriteAllText($RightRemote, 'The enabled deployment advanced during the disabled deployment edit.')
+        $status = (Invoke-TransferCli @('--json', '--no-start', 'sync', 'refresh', '--force')).data
+        $leftStatus = $status.instances | Where-Object instanceId -ceq $Left.instanceId
+        $rightStatus = $status.instances | Where-Object instanceId -ceq $Right.instanceId
+        $leftRootStatus = $leftStatus.remotePolling | Where-Object rootId -ceq $Left.rootId
+        $rightRootStatus = $rightStatus.remotePolling | Where-Object rootId -ceq $Right.rootId
+        $duringLeft = Read-TransferPollSnapshot $LeftSnapshot
+        $duringRight = Read-TransferPollSnapshot $RightSnapshot
+        if ($leftRootStatus.phase -cne 'Offline' -or $rightRootStatus.phase -cne 'Current' -or
+            $duringLeft.sha256 -cne $beforeLeft.sha256 -or $duringRight.cursor -ceq $beforeRight.cursor) {
+            throw 'A forced refresh did not preserve the disabled snapshot while the active deployment advanced.'
+        }
+        $activity = [ordered]@{workers=$workers;leftPhase=$leftRootStatus.phase;rightPhase=$rightRootStatus.phase
+            disabledLeftCursor=$duringLeft.cursor;oldRightCursor=$beforeRight.cursor;activeRightCursor=$duringRight.cursor}
+        Write-TransferOriginal -Name 'poll-disabled-independent-refresh' -Value $activity
+
+        Invoke-TransferCli @('--json', '--no-start', 'instance', 'enable', '--instance-id', $Left.instanceId) | Out-Null
+        $disabled = $false
+        Invoke-TransferCli @('--json', 'host', 'restart') | Out-Null; Wait-TransferHostStopped
+        Invoke-TransferCli @('--json', 'host', 'start') | Out-Null
+        Wait-TransferWorkersConnected
+        Assert-TransferRootsReady
+        Invoke-TransferCli @('--json', '--no-start', 'sync', 'refresh', '--force') | Out-Null
+        $activeLeft = Read-TransferPollSnapshot $LeftSnapshot
+        $activeRight = Read-TransferPollSnapshot $RightSnapshot
+        if (-not $activeLeft.cursor -or $activeLeft.cursor -ceq $duringLeft.cursor -or $activeRight.cursor -cne $duringRight.cursor) {
+            throw 'The reenabled deployment did not catch up independently from its retained cursor.'
+        }
+        $activity.reenabledLeftCursor = $activeLeft.cursor
+        return $activity
+    } finally {
+        if ($disabled) {
+            try { Invoke-TransferCli @('--json', 'instance', 'enable', '--instance-id', $Left.instanceId) | Out-Null }
+            catch { Write-Host 'The test fixture retained its disabled deployment after the original failure.' }
+        }
+    }
+}
+
 function Invoke-TransferPollRecovery {
     $left = $script:transferRoutes | Where-Object fixtureSide -ceq 'left'
     $right = $script:transferRoutes | Where-Object fixtureSide -ceq 'right'
@@ -89,14 +140,6 @@ function Invoke-TransferPollRecovery {
         Start-Sleep -Milliseconds 200
     } while ([DateTimeOffset]::UtcNow -lt $deadline)
     if ($repaired.sha256 -cne $candidate.sha256) { throw 'The original snapshot did not converge after Host restart.' }
-    $status = (Invoke-TransferCli @('--json', '--no-start', 'status')).data
-    if ($status.pendingRemoteConflicts -ne 0 -or $status.pendingUploadConflicts -ne 0) {
-        throw 'The clean online-only updates created unexpected local or remote content conflicts.'
-    }
-    $phase = 'RemoteSyncRecovery.LeftProjection'
-    Wait-TransferHash $leftLocal (Read-TransferHash $leftRemote)
-    $phase = 'RemoteSyncRecovery.RightProjection'
-    Wait-TransferHash $rightLocal (Read-TransferHash $rightRemote)
     Invoke-TransferCli @('--json', '--no-start', 'host', 'stop') | Out-Null
     Wait-TransferHostStopped
     $replayed = Invoke-TransferPollAudit $stopped.batchId
@@ -108,7 +151,17 @@ function Invoke-TransferPollRecovery {
     Invoke-TransferCli @('--json', 'host', 'start') | Out-Null
     Wait-TransferWorkersConnected
     Assert-TransferRootsReady
+    $disabledRefresh = Invoke-TransferPollDisable -Left $left -Right $right -LeftSnapshot $leftSnapshot -RightSnapshot $rightSnapshot `
+        -LeftRemote $leftRemote -RightRemote $rightRemote
+    $status = (Invoke-TransferCli @('--json', '--no-start', 'status')).data
+    if ($status.pendingRemoteConflicts -ne 0 -or $status.pendingUploadConflicts -ne 0) {
+        throw 'The clean online-only updates created unexpected local or remote content conflicts.'
+    }
+    $phase = 'RemoteSyncRecovery.LeftProjection'
+    Wait-TransferHash $leftLocal (Read-TransferHash $leftRemote)
+    $phase = 'RemoteSyncRecovery.RightProjection'
+    Wait-TransferHash $rightLocal (Read-TransferHash $rightRemote)
     return [ordered]@{interruptedHostProcessId=$hostId;recoveringHostProcessId=$replacement
-        retained=$stopped;replayed=$replayed;leftProjectionSha256=(Read-TransferHash $leftLocal)
+        retained=$stopped;replayed=$replayed;disabledRefresh=$disabledRefresh;leftProjectionSha256=(Read-TransferHash $leftLocal)
         rightProjectionSha256=(Read-TransferHash $rightLocal)}
 }
