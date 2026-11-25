@@ -91,6 +91,21 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
             Assert.AreEqual(child, await catalog.ReadNamespaceMemberChildAsync(root.MemberId, "cold.bin", timeout.Token));
             Assert.IsNotNull(await catalog.ReadNamespaceMemberChildAsync(root.MemberId, "next.bin", timeout.Token));
 
+            string existingPath = Path.Combine(paths.SyncRootPath, "Docs", "cold.bin");
+            byte[] resident = await File.ReadAllBytesAsync(existingPath, timeout.Token);
+            Assert.HasCount(4, resident);
+            byte[] edited = resident.ToArray();
+            edited[0] ^= 0xff;
+            await execution.RunNormalUserOperationAsync(async () =>
+            {
+                await using var writer = new FileStream(existingPath, FileMode.Open, FileAccess.Write, FileShare.Read,
+                    bufferSize: 4096, FileOptions.Asynchronous);
+                await writer.WriteAsync(edited, timeout.Token);
+                await writer.FlushAsync(timeout.Token);
+            });
+            int readsAfterLocalEdit = worker.Calls.Count(call => call == "range-open");
+            Assert.IsGreaterThan(0, readsAfterLocalEdit);
+
             worker.DirectoryPage = new([
                 new("different", "v1", "directory", "cold.bin", null, null, null, false),
                 new("sibling", "v1", "file", "sibling.bin", 3, null, null, false),
@@ -100,9 +115,10 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
             Assert.AreEqual(child, await catalog.ReadNamespaceMemberChildAsync(root.MemberId, "cold.bin", timeout.Token));
             Assert.AreEqual(first, await catalog.ReadNamespaceBirthObservationAsync(child.OriginId, timeout.Token));
             Assert.IsNotNull(await catalog.ReadNamespaceMemberChildAsync(root.MemberId, "sibling.bin", timeout.Token));
-            Assert.AreEqual(0, worker.Calls.Count(call => call == "range-open"));
-            await Assert.ThrowsAsync<UnauthorizedAccessException>(() => Task.Run(() => File.Delete(Path.Combine(paths.SyncRootPath, "Docs", "cold.bin")), timeout.Token));
-            TestContext.WriteLine("RuntimeSourcePopulation: realRuntime=True; freshLibraryAfterInitialization=True; closedRootNoSource=True; sourceNormalUser=True; actualRemoteBirthBeforeCallbackReturn=True; repeatedPageFreshAudit=True; immutableFirstBinding=True; hydration=False; defaultHostStartup=False.");
+            CollectionAssert.AreEqual(edited, await File.ReadAllBytesAsync(existingPath, timeout.Token));
+            Assert.AreEqual(readsAfterLocalEdit, worker.Calls.Count(call => call == "range-open"));
+            await Assert.ThrowsAsync<UnauthorizedAccessException>(() => Task.Run(() => File.Delete(existingPath), timeout.Token));
+            TestContext.WriteLine("RuntimeSourcePopulation: realRuntime=True; freshLibraryAfterInitialization=True; closedRootNoSource=True; sourceNormalUser=True; actualRemoteBirthBeforeCallbackReturn=True; repeatedPageFreshAudit=True; immutableFirstBinding=True; nameCollisionPreservesDirtyBytes=True; defaultHostStartup=False.");
         }
         finally
         {
