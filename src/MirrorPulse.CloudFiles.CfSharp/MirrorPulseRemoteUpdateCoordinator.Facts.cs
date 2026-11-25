@@ -18,11 +18,11 @@ internal sealed partial class MirrorPulseRemoteUpdateCoordinator
             batch.Changes.Count > 65_536 || ordinal < 0 || ordinal >= batch.Changes.Count)
             throw new InvalidDataException("An existing remote update requires its bounded original instance batch entry.");
         var change = batch.Changes[ordinal];
-        if (change.Kind is not (CloudRemoteChangeKind.FileUpsert or CloudRemoteChangeKind.DirectoryUpsert) || change.ItemId is null ||
+        if (change.Kind is not (CloudRemoteChangeKind.FileUpsert or CloudRemoteChangeKind.DirectoryUpsert or CloudRemoteChangeKind.MetadataUpdate) || change.ItemId is null ||
             change.ItemId == Guid.Empty || change.PreviousRelativePath is not null || !options.PreserveUnsynchronizedLocalContent ||
             options.ConflictResolver is not null || options.MaximumEntries is < 1 or > 65_536 || options.EchoSuppressionObservationCount is < 1 or > 64 ||
             options.EchoSuppressionLifetime <= TimeSpan.Zero || options.EchoSuppressionLifetime > TimeSpan.FromHours(1))
-            throw new NotSupportedException("Existing remote updates require explicit identity, same-object upserts and durable preservation without a transient resolver.");
+            throw new NotSupportedException("Existing remote updates require explicit identity, same-object changes and durable preservation without a transient resolver.");
         return change;
     }
 

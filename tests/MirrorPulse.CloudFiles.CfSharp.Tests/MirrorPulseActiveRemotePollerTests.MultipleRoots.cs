@@ -394,6 +394,56 @@ public sealed partial class MirrorPulseActiveRemotePollerTests
     }
 
     [TestMethod]
+    public async Task ChangedTimestampWaitsForTheExistingPlaceholderAndReplaysAsMetadataOnly()
+    {
+        await using var fixture = await RootPollFixture.CreateAsync();
+        fixture.Roots = [fixture.First];
+        bool materialized = false;
+        int selections = 0;
+        ValueTask<IReadOnlySet<Guid>> ReadMaterializedAsync(IReadOnlyCollection<Guid> items, CancellationToken _)
+        {
+            Assert.HasCount(1, items);
+            selections++;
+            return ValueTask.FromResult<IReadOnlySet<Guid>>(materialized ? items.ToHashSet() : new HashSet<Guid>());
+        }
+        DateTimeOffset changedTime = new(2025, 1, 1, 10, 25, 0, TimeSpan.FromHours(2));
+        await using (var original = fixture.Poller((_, batch, _) =>
+        {
+            fixture.Applied.Add(batch);
+            return ValueTask.FromResult(new MirrorPulseRemotePollApplyOutcome(false, batch.InitialCursor));
+        }, readMaterializedItems: ReadMaterializedAsync))
+        {
+            Assert.IsFalse(await original.PollOnceAsync(fixture.Instance));
+            fixture.Source.Set(fixture.First, "v1", lastWriteTime: changedTime);
+            Assert.IsFalse(await original.PollOnceAsync(fixture.Instance));
+            Assert.IsEmpty(fixture.Applied);
+            Assert.AreNotEqual(changedTime, (await fixture.Snapshots.LoadAsync(fixture.First))!["same"].Metadata.LastWriteTime);
+            materialized = true;
+            Assert.IsFalse(await original.PollOnceAsync(fixture.Instance));
+        }
+
+        var batch = fixture.Applied.Single();
+        var entry = batch.Changes.Single();
+        Assert.AreEqual(CloudRemoteChangeKind.MetadataUpdate, entry.Kind);
+        Assert.AreEqual("v1", entry.RemoteRevision);
+        Assert.AreEqual("v1", entry.PreviousRemoteRevision);
+        Assert.IsNull(entry.Length);
+        Assert.AreEqual(changedTime.ToUniversalTime(), entry.Metadata!.LastWriteTime);
+        Assert.AreEqual(TimeSpan.Zero, entry.Metadata.LastWriteTime!.Value.Offset);
+        Assert.AreEqual(6, (await fixture.Pending.LoadAsync(fixture.First, default))!.ProjectionVersion);
+
+        int reads = fixture.Source.Calls.Count;
+        await fixture.ReopenCatalogAsync();
+        await using var reopened = fixture.Poller(readMaterializedItems: ReadMaterializedAsync);
+        Assert.IsTrue(await reopened.PollOnceAsync(fixture.Instance));
+        Assert.HasCount(reads, fixture.Source.Calls);
+        CollectionAssert.AreEqual(batch.Fingerprint.ToArray(), fixture.Applied[^1].Fingerprint.ToArray());
+        Assert.IsFalse(await reopened.PollOnceAsync(fixture.Instance), "The same instant with another offset is not a new change.");
+        Assert.HasCount(2, fixture.Applied);
+        Assert.AreEqual(2, selections);
+    }
+
+    [TestMethod]
     [DataRow("before-apply")]
     [DataRow("after-apply")]
     [DataRow("snapshot-commit")]
@@ -494,11 +544,12 @@ public sealed partial class MirrorPulseActiveRemotePollerTests
             MirrorPulseNamespaceWorkAdmission? work = null,
             Func<RootRegistration, CloudRemoteChangeBatch, CancellationToken, ValueTask<bool>>? mayReplay = null,
             IMirrorPulseRemotePollSnapshotStore? snapshots = null, IMirrorPulseRemotePollPendingStore? pending = null,
-            Func<RootRegistration, CancellationToken, ValueTask<ReadOnlyMemory<byte>?>>? readPublishedCursor = null) =>
+            Func<RootRegistration, CancellationToken, ValueTask<ReadOnlyMemory<byte>?>>? readPublishedCursor = null,
+            Func<IReadOnlyCollection<Guid>, CancellationToken, ValueTask<IReadOnlySet<Guid>>>? readMaterializedItems = null) =>
             new(Source, [AdmissionAdapter(First)], Roots, apply ?? ((_, batch, _) =>
             { Applied.Add(batch); return ValueTask.FromResult(new MirrorPulseRemotePollApplyOutcome(true, batch.FinalCursor)); }),
                 snapshotStore: snapshots ?? Snapshots, pendingStore: pending ?? Pending, currentRoots: () => Roots, namespaceWork: work,
-                mayReplay: mayReplay, readPublishedCursor: readPublishedCursor);
+                mayReplay: mayReplay, readPublishedCursor: readPublishedCursor, readMaterializedItems: readMaterializedItems);
 
         internal async Task ReopenCatalogAsync() { await Catalog.DisposeAsync(); Catalog = await MirrorPulseProductCatalog.OpenAsync(Paths); }
         public async ValueTask DisposeAsync() { await Catalog.DisposeAsync(); Directory.Delete(_directory, true); }
@@ -508,9 +559,10 @@ public sealed partial class MirrorPulseActiveRemotePollerTests
     {
         private readonly Dictionary<string, FakeDirectorySource> _sources = new(StringComparer.Ordinal);
         internal List<string> Calls { get; } = [];
-        internal void Set(RootRegistration root, string revision, string remoteId = "same", string relativePath = "file.bin")
+        internal void Set(RootRegistration root, string revision, string remoteId = "same", string relativePath = "file.bin",
+            DateTimeOffset? lastWriteTime = null)
         {
-            var source = new FakeDirectorySource(); source.Set(new FakeEntry(remoteId, revision, CloudItemKind.File, relativePath, 1));
+            var source = new FakeDirectorySource(); source.Set(new FakeEntry(remoteId, revision, CloudItemKind.File, relativePath, 1, lastWriteTime));
             _sources[root.UniquenessKey] = source;
         }
         public ValueTask<CloudRemoteDirectoryPage> ReadPageAsync(InstanceId instanceId, string path, ReadOnlyMemory<byte> cursor, int size, CancellationToken token) =>

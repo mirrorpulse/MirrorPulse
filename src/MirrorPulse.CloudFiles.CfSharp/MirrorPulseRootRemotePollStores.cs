@@ -205,7 +205,7 @@ public sealed partial class MirrorPulseCatalogRemotePollPendingStore
     private static void ValidateRoot(RootRegistration root, MirrorPulsePendingRemotePoll pending)
     {
         ArgumentNullException.ThrowIfNull(pending); Validate(pending);
-        if (pending.ProjectionVersion is not (3 or 4 or 5) || pending.RootId != root.RootId || pending.RootKey != root.UniquenessKey ||
+        if (pending.ProjectionVersion is < 3 or > MirrorPulseActiveRemotePoller.MetadataProjectionVersion || pending.RootId != root.RootId || pending.RootKey != root.UniquenessKey ||
             !pending.BatchId.StartsWith(MirrorPulseRemotePollBatchScope.Prefix(root), StringComparison.Ordinal))
             throw new InvalidDataException("The polling batch does not identify its original stable root.");
     }

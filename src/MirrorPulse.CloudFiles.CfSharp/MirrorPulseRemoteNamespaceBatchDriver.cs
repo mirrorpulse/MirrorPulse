@@ -9,9 +9,8 @@ namespace MirrorPulse.CloudFiles.CfSharp;
 internal enum MirrorPulseRemoteNamespaceBatchCheckpoint { AfterMoveStart, AfterSdkApply }
 
 /// <summary>Admits and settles one original SDK entry before any Adapter cursor can be published.</summary>
-/// <remarks>The managed path supports moves, new explicit-identity upserts and original registered deletes.
-/// Other entry kinds remain closed until their replacement and metadata lifecycles are connected. An uncertain native start
-/// requires fresh original outcome recovery and never grants blind redispatch.</remarks>
+/// <remarks>The managed path supports moves, explicit-identity upserts, metadata and original registered deletes.
+/// An uncertain native start requires fresh original outcome recovery and never grants blind redispatch.</remarks>
 [SupportedOSPlatform("windows10.0.26100")]
 internal sealed class MirrorPulseRemoteNamespaceBatchDriver(
     CloudFileSystem fileSystem, MirrorPulseCfSharpStateSession state, MirrorPulseProductCatalog catalog,
@@ -40,8 +39,9 @@ internal sealed class MirrorPulseRemoteNamespaceBatchDriver(
         if (options.ConflictResolver is not null)
             throw new NotSupportedException("Managed remote entries require durable conflicts before an explicit product decision.");
         if (batch.Changes.Count > 65_536) throw new InvalidDataException("The managed remote batch exceeds its entry bound.");
-        if (batch.Changes.Any(change => change.Kind is not (CloudRemoteChangeKind.Move or CloudRemoteChangeKind.FileUpsert or CloudRemoteChangeKind.DirectoryUpsert or CloudRemoteChangeKind.Delete)))
-            throw new NotSupportedException("This managed remote batch requires a replacement, metadata or retirement lifecycle.");
+        if (batch.Changes.Any(change => change.Kind is not (CloudRemoteChangeKind.Move or CloudRemoteChangeKind.FileUpsert or
+            CloudRemoteChangeKind.DirectoryUpsert or CloudRemoteChangeKind.Delete or CloudRemoteChangeKind.MetadataUpdate)))
+            throw new NotSupportedException("The managed remote batch contains an unsupported change kind.");
         for (int ordinal = 0; ordinal < batch.Changes.Count; ordinal++)
             if (batch.Changes[ordinal].Kind == CloudRemoteChangeKind.Delete)
                 _ = MirrorPulseRemoteRetirementBatchCoordinator.RequireChange(instance, batch, ordinal, options);
@@ -223,7 +223,7 @@ internal sealed class MirrorPulseRemoteNamespaceBatchDriver(
         if (await catalog.ReadNamespaceRemoteUpdateAsync(instance, batch.BatchId, ordinal, token).ConfigureAwait(false) is not null) return true;
         if (await catalog.ReadNamespaceRemoteBirthAsync(instance, batch.BatchId, ordinal, token).ConfigureAwait(false) is not null) return false;
         var change = batch.Changes[ordinal];
-        if (change.PreviousRemoteRevision is not null) return true;
+        if (change.PreviousRemoteRevision is not null || change.Kind == CloudRemoteChangeKind.MetadataUpdate) return true;
         await using var transaction = await state.OpenStore.BeginTransactionAsync(token).ConfigureAwait(false);
         var existing = await transaction.Items.GetByItemIdAsync(change.ItemId!.Value, token).ConfigureAwait(false);
         await transaction.RollbackAsync(token).ConfigureAwait(false);

@@ -43,6 +43,7 @@ public sealed partial class MirrorPulseActiveRemotePoller : IAsyncDisposable
     private readonly LocalRollingLogWriter? _failureLog;
     private readonly MirrorPulseRemoteIdentityResolver? _identityResolver;
     private readonly Func<RootRegistration, CancellationToken, ValueTask<ReadOnlyMemory<byte>?>>? _readPublishedCursor;
+    private readonly Func<IReadOnlyCollection<Guid>, CancellationToken, ValueTask<IReadOnlySet<Guid>>>? _readMaterializedItems;
 
     public MirrorPulseActiveRemotePoller(
         IMirrorPulseDirectoryPageSource source,
@@ -63,7 +64,8 @@ public sealed partial class MirrorPulseActiveRemotePoller : IAsyncDisposable
         MirrorPulseRemoteIdentityResolver? identityResolver = null,
         Func<InstanceId, CloudRemoteChangeBatch, MirrorPulseNamespaceWorkAdmission.WorkLease, CancellationToken,
             ValueTask<MirrorPulseRemotePollApplyOutcome>>? applyAdmitted = null,
-        Func<RootRegistration, CancellationToken, ValueTask<ReadOnlyMemory<byte>?>>? readPublishedCursor = null)
+        Func<RootRegistration, CancellationToken, ValueTask<ReadOnlyMemory<byte>?>>? readPublishedCursor = null,
+        Func<IReadOnlyCollection<Guid>, CancellationToken, ValueTask<IReadOnlySet<Guid>>>? readMaterializedItems = null)
     {
         _source = source ?? throw new ArgumentNullException(nameof(source));
         ArgumentNullException.ThrowIfNull(instances);
@@ -97,10 +99,11 @@ public sealed partial class MirrorPulseActiveRemotePoller : IAsyncDisposable
         _namespaceWork = namespaceWork;
         _mayReplay = mayReplay;
         _identityResolver = identityResolver;
-        if (readPublishedCursor is not null && (snapshotStore is not IMirrorPulseRootRemotePollBaselineStore ||
+        if ((readPublishedCursor is not null || readMaterializedItems is not null) && (snapshotStore is not IMirrorPulseRootRemotePollBaselineStore ||
             pendingStore is not IMirrorPulseRootRemotePollPendingStore))
-            throw new ArgumentException("Published cursor validation requires durable root baseline and replay stores.", nameof(readPublishedCursor));
+            throw new ArgumentException("Published cursor validation and metadata polling require durable root baseline and replay stores.", nameof(snapshotStore));
         _readPublishedCursor = readPublishedCursor;
+        _readMaterializedItems = readMaterializedItems;
         if (pendingStore is not null && snapshotStore is null)
             throw new ArgumentException("Pending batches require a durable snapshot store.", nameof(snapshotStore));
         if (diagnosticsDirectory is not null) _failureLog = new(diagnosticsDirectory);
@@ -212,7 +215,7 @@ public sealed partial class MirrorPulseActiveRemotePoller : IAsyncDisposable
             ? await rootPending.LoadAsync(root, cancellationToken).ConfigureAwait(false) : null);
         if (pending is not null)
         {
-            bool chained = pending.ProjectionVersion == 5;
+            bool chained = pending.ProjectionVersion >= 5;
             if (chained && _snapshotStore is not IMirrorPulseRootRemotePollBaselineStore)
                 throw new NotSupportedException("A chained poll requires a durable baseline cursor store.");
             var (replay, candidate) = RestoreOriginalCore(instanceId, root, pending);
@@ -285,7 +288,11 @@ public sealed partial class MirrorPulseActiveRemotePoller : IAsyncDisposable
             return false;
         }
 
-        if (SnapshotsEqual(root, previous!, current))
+        bool includeMetadata = scoped && _readMaterializedItems is not null;
+        if (includeMetadata)
+            current = await SelectMetadataAsync(root, previous, current, cancellationToken).ConfigureAwait(false);
+
+        if (SnapshotsEqual(root, previous, current) && (!includeMetadata || SupportedMetadataEqual(previous, current)))
         {
             reportStage(MirrorPulseRemotePollStage.SnapshotCommit);
             if (!cached || legacySnapshot is not null || !ObservationsEqual(previous, current))
@@ -298,7 +305,7 @@ public sealed partial class MirrorPulseActiveRemotePoller : IAsyncDisposable
         }
 
         bool useChain = scoped && _snapshotStore is IMirrorPulseRootRemotePollBaselineStore;
-        int projectionVersion = useChain ? 5 : _identityResolver is not null ? 4 : scoped ? 3 : 2;
+        int projectionVersion = includeMetadata ? MetadataProjectionVersion : useChain ? 5 : _identityResolver is not null ? 4 : scoped ? 3 : 2;
         ReadOnlyMemory<byte> initial = useChain && baseline!.Cursor.IsEmpty ? RootFingerprint(root, previous, 4) : baseline!.Cursor;
         CloudRemoteChangeBatch batch = CreateBatch(instanceId, root, previous, current, projectionVersion, initial);
         if (_pendingStore is not null)
@@ -418,7 +425,7 @@ public sealed partial class MirrorPulseActiveRemotePoller : IAsyncDisposable
             throw new InvalidDataException("A pending batch belongs to a different original root mapping.");
         var candidate = FromDurableSnapshot(pending.Candidate);
         var batch = CreateBatch(instance, root, FromDurableSnapshot(pending.Previous), candidate, pending.ProjectionVersion,
-            pending.ProjectionVersion == 5 ? ReadChainedInitialCursor(root, pending.BatchId) : ReadOnlyMemory<byte>.Empty);
+            pending.ProjectionVersion >= 5 ? ReadChainedInitialCursor(root, pending.BatchId) : ReadOnlyMemory<byte>.Empty);
         if (batch.BatchId != pending.BatchId || !batch.Fingerprint.Span.SequenceEqual(pending.Fingerprint))
             throw new InvalidDataException("The pending poll intent does not recreate its immutable batch.");
         return (batch, candidate);
@@ -431,13 +438,12 @@ public sealed partial class MirrorPulseActiveRemotePoller : IAsyncDisposable
         IReadOnlyDictionary<string, SnapshotEntry> current,
         int projectionVersion, ReadOnlyMemory<byte> chainedInitialCursor)
     {
-        if (projectionVersion is not (1 or 2 or 3 or 4 or 5))
+        if (projectionVersion is < 1 or > MetadataProjectionVersion)
             throw new InvalidDataException("The remote poll projection version is unsupported.");
         if (projectionVersion == 4) ValidateCapturedSnapshots(root, previous, current);
-        byte[] initialCursor = projectionVersion == 5 ? chainedInitialCursor.ToArray() :
+        byte[] initialCursor = projectionVersion >= 5 ? chainedInitialCursor.ToArray() :
             projectionVersion >= 3 ? RootFingerprint(root, previous, projectionVersion) : Fingerprint(previous);
-        byte[] finalCursor = projectionVersion == 5 ? SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(new[]
-            { "MirrorPulse/PollProjection/v5", Convert.ToHexString(initialCursor), Convert.ToHexString(RootFingerprint(root, current, 4)) })) :
+        byte[] finalCursor = projectionVersion >= 5 ? ChainedFingerprint(root, current, projectionVersion, initialCursor) :
             projectionVersion >= 3 ? RootFingerprint(root, current, projectionVersion) : Fingerprint(current);
         var changes = new List<CloudRemoteChange>();
         foreach ((string id, SnapshotEntry entry) in current.OrderBy(item => item.Key, StringComparer.Ordinal))
@@ -461,7 +467,11 @@ public sealed partial class MirrorPulseActiveRemotePoller : IAsyncDisposable
             // revision. Keep version 1 only to reproduce an already captured intent.
             if ((kind is CloudRemoteChangeKind.FileUpsert or CloudRemoteChangeKind.DirectoryUpsert) &&
                 prior.ItemKind == entry.ItemKind && prior.RemoteRevision == entry.RemoteRevision && prior.Length == entry.Length &&
-                (projectionVersion >= 2 || Equals(prior.Metadata, entry.Metadata))) continue;
+                (projectionVersion >= 2 || Equals(prior.Metadata, entry.Metadata)))
+            {
+                if (projectionVersion < MetadataProjectionVersion || SameSupportedTimes(prior.Metadata, entry.Metadata)) continue;
+                kind = CloudRemoteChangeKind.MetadataUpdate;
+            }
             changes.Add(ToChange(instanceId, root, entry, kind, prior.RemoteRevision,
                 kind == CloudRemoteChangeKind.Move ? prior.RelativePath : null, finalCursor, projectionVersion));
         }
@@ -511,10 +521,10 @@ public sealed partial class MirrorPulseActiveRemotePoller : IAsyncDisposable
             identity.ItemId,
             previousRevision,
             previousPath is null ? null : root.DirectoryName + "\\" + previousPath.Replace('/', '\\'),
-            entry.Length,
+            kind == CloudRemoteChangeKind.MetadataUpdate ? null : entry.Length,
             metadata,
             // The batch model publishes FinalCursor on completion. A partial prefix keeps InitialCursor.
-            cursorAfter: projectionVersion == 5 ? ReadOnlyMemory<byte>.Empty : cursor);
+            cursorAfter: projectionVersion >= 5 ? ReadOnlyMemory<byte>.Empty : cursor);
     }
 
     private static byte[] ReadChainedInitialCursor(RootRegistration root, string batchId)

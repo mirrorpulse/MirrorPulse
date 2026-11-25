@@ -234,7 +234,8 @@ public sealed partial class MirrorPulseHostApplication : IAsyncDisposable
                 mayPoll: namespaceFence.CanPollAsync, currentRoots: () => rootRouter.Registrations, namespaceWork: namespaceWork,
                 mayReplay: namespaceFence.CanReplayAsync,
                 diagnosticsDirectory: Path.Combine(paths.DataRootPath, "logs", "remote-poll"), identityResolver: identityResolver,
-                applyAdmitted: ApplyAdmittedCloudRemoteBatchAsync, readPublishedCursor: session.ReadRemotePollCursorAsync);
+                applyAdmitted: ApplyAdmittedCloudRemoteBatchAsync, readPublishedCursor: session.ReadRemotePollCursorAsync,
+                readMaterializedItems: session.ReadMaterializedRemoteItemsAsync);
 
             var application = new MirrorPulseHostApplication(
                 paths, configurationStore, configuration, hostLease, catalog, conflictCenter, systemNotifications,

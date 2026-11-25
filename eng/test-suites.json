@@ -315,6 +315,7 @@
     "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeSourcePopulationRegistersProtectedRemoteBirthBeforeDirectoryCallbackReturns",
     "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeOriginalRemoteBirthRegistersItsFirstObjectBeforeCursorAndReopensObservedDirectory",
     "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeOriginalRemoteFileUpdateRecoversItsSdkResultWithoutHydrating",
+    "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeOriginalRemoteMetadataUpdatesRetainResidentBytesAcrossOwners",
     "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeOriginalRemoteDirectoryUpdateRecoversItsSdkResultBeforeCursor",
     "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeOriginalRemoteFileUpdatePreservesDirtyBytesAndConflictAcrossOwners",
     "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeKeepRemoteFirstSealRequiresTheOriginalFileAndJournalAndReplaysWithoutWriting",
@@ -457,6 +458,7 @@
   "required": {
     "remoteSync": [
       "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeRuntimePublishesSourceBirthsThroughTheCurrentLibraryAndAuditsRepeatedPages",
+      "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeOriginalRemoteMetadataUpdatesRetainResidentBytesAcrossOwners",
       "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeOriginalRemoteFileUpdatePreservesDirtyBytesAndConflictAcrossOwners",
       "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeOriginalRemoteFileUpdateInvalidatesHydratedBytesBeforeCursor",
       "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeOriginalRemoteDeleteConflictRetainsChildAndDurableConflictAcrossOwners",
@@ -798,6 +800,7 @@
     "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeSourcePopulationRegistersProtectedRemoteBirthBeforeDirectoryCallbackReturns",
     "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeOriginalRemoteBirthRegistersItsFirstObjectBeforeCursorAndReopensObservedDirectory",
     "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeOriginalRemoteFileUpdateRecoversItsSdkResultWithoutHydrating",
+    "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeOriginalRemoteMetadataUpdatesRetainResidentBytesAcrossOwners",
     "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeOriginalRemoteDirectoryUpdateRecoversItsSdkResultBeforeCursor",
     "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeOriginalRemoteFileUpdatePreservesDirtyBytesAndConflictAcrossOwners",
     "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeKeepRemoteFirstSealRequiresTheOriginalFileAndJournalAndReplaysWithoutWriting",

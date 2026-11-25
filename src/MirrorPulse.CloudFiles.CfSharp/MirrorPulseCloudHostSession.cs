@@ -227,6 +227,9 @@ public interface IMirrorPulseCloudRuntime : IAsyncDisposable
     ValueTask<ReadOnlyMemory<byte>?> ReadRemotePollCursorAsync(RootRegistration root, CancellationToken token) =>
         ValueTask.FromException<ReadOnlyMemory<byte>?>(new NotSupportedException("This runtime does not expose root polling cursors."));
 
+    ValueTask<IReadOnlySet<Guid>> ReadMaterializedRemoteItemsAsync(IReadOnlyCollection<Guid> itemIds, CancellationToken token) =>
+        ValueTask.FromException<IReadOnlySet<Guid>>(new NotSupportedException("This runtime does not expose materialized remote items."));
+
     ValueTask<MirrorPulseRemoteBatchResult> ApplyRemoteBatchAsync(
         InstanceId instanceId,
         CloudRemoteChangeBatch batch,
@@ -2427,6 +2430,20 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
             WithCurrentLibraryAsync(stop => new MirrorPulseRemoteBatchCoordinator(fileSystem, state)
                 .ReadCursorAsync(root.InstanceId, root.RootId, stop), token);
 
+        public ValueTask<IReadOnlySet<Guid>> ReadMaterializedRemoteItemsAsync(IReadOnlyCollection<Guid> itemIds, CancellationToken token) =>
+            WithCurrentLibraryAsync<IReadOnlySet<Guid>>(async stop =>
+            {
+                var materialized = new HashSet<Guid>();
+                await using var transaction = await state.OpenStore.BeginTransactionAsync(stop).ConfigureAwait(false);
+                foreach (Guid itemId in itemIds)
+                {
+                    var item = await transaction.Items.GetByItemIdAsync(itemId, stop).ConfigureAwait(false);
+                    if (item is { IsTombstone: false, LocalFileId: not null }) materialized.Add(itemId);
+                }
+                await transaction.RollbackAsync(stop).ConfigureAwait(false);
+                return materialized;
+            }, token);
+
         public ValueTask<MirrorPulseRemoteBatchResult> ApplyRemoteBatchAsync(
             InstanceId instanceId,
             CloudRemoteChangeBatch batch,
@@ -3117,6 +3134,13 @@ public sealed class MirrorPulseCloudHostSession : IAsyncDisposable
         ArgumentNullException.ThrowIfNull(root);
         if (!_started || _runtime is null) throw new InvalidOperationException("The Cloud Files Host session has not started.");
         return _runtime.ReadRemotePollCursorAsync(root, cancellationToken);
+    }
+
+    public ValueTask<IReadOnlySet<Guid>> ReadMaterializedRemoteItemsAsync(IReadOnlyCollection<Guid> itemIds, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(itemIds);
+        if (!_started || _runtime is null) throw new InvalidOperationException("The Cloud Files Host session has not started.");
+        return _runtime.ReadMaterializedRemoteItemsAsync(itemIds, cancellationToken);
     }
 
     public ValueTask<MirrorPulseManagedRootRenameRecovery> RecoverManagedRootRenameAsync(
