@@ -8,9 +8,11 @@ namespace MirrorPulse.Core.Tests;
 public sealed partial class MirrorPulseNamespaceBirthCatalogTests
 {
     [TestMethod]
-    [DataRow(false)]
-    [DataRow(true)]
-    public async Task RemoteGenerationPollerRetainsSuccessorBirthAcrossOwnersThenUpdatesAndDeletesItsCapturedAddress(bool scoped)
+    [DataRow(false, false)]
+    [DataRow(true, false)]
+    [DataRow(false, true)]
+    [DataRow(true, true)]
+    public async Task RemoteGenerationPollerRetainsSuccessorBirthAcrossOwnersThenUpdatesAndDeletesItsCapturedAddress(bool scoped, bool legacyGeneration)
     {
         using var fixture = new Fixture();
         var source = new GenerationPollSource(); var batches = new List<CloudRemoteChangeBatch>();
@@ -21,8 +23,9 @@ public sealed partial class MirrorPulseNamespaceBirthCatalogTests
             var prepared = await PrepareCanonicalResolverSourceAsync(catalog, scoped); root = prepared.Root;
             var instance = (await catalog.ReadAdapterTopologyAsync()).Instances.Single(item => item.InstanceId == root.InstanceId);
             var pending = new MirrorPulseCatalogRemotePollPendingStore(catalog);
+            var legacySnapshots = new LegacyRootPollSnapshotStore(snapshots);
             await using (var legacy = new MirrorPulseActiveRemotePoller(source, [instance], [root], Apply,
-                snapshotStore: snapshots, pendingStore: pending))
+                snapshotStore: legacySnapshots, pendingStore: pending))
             {
                 Assert.IsFalse(await legacy.PollOnceAsync(root.InstanceId));
                 source.Revision = "v2"; Assert.IsTrue(await legacy.PollOnceAsync(root.InstanceId));
@@ -36,7 +39,7 @@ public sealed partial class MirrorPulseNamespaceBirthCatalogTests
             await using var next = new MirrorPulseActiveRemotePoller(source, [instance], [root], (_, batch, _) =>
             {
                 batches.Add(batch); throw new IOException("Interrupted after durable generation projection, before native apply.");
-            }, snapshotStore: snapshots, pendingStore: pending, identityResolver: resolver);
+            }, snapshotStore: legacyGeneration ? legacySnapshots : snapshots, pendingStore: pending, identityResolver: resolver);
             await Assert.ThrowsExactlyAsync<IOException>(() => next.PollOnceAsync(root.InstanceId).AsTask());
             original = batches.Last(); var birth = original.Changes.Single();
             successor = await resolver.ResolveAsync(root, "backend-file", "v2");
@@ -47,7 +50,7 @@ public sealed partial class MirrorPulseNamespaceBirthCatalogTests
             CollectionAssert.AreEqual(predecessor.FinalCursor.ToArray(), original.InitialCursor.ToArray());
             Assert.IsFalse(original.InitialCursor.Span.SequenceEqual(original.FinalCursor.Span), "A new generation changes the cursor even when backend metadata did not change.");
             var retained = (await pending.LoadAsync(root, default))!;
-            Assert.AreEqual(4, retained.ProjectionVersion);
+            Assert.AreEqual(legacyGeneration ? 4 : 5, retained.ProjectionVersion);
             Assert.IsNull(retained.Previous["backend-file"].PublicIdentity);
             Assert.AreEqual(successor.ItemId, retained.Candidate["backend-file"].PublicIdentity!.ItemId);
             Assert.AreEqual(history, await ReadTransferRetirementBytesAsync(fixture.Paths));
@@ -91,7 +94,8 @@ public sealed partial class MirrorPulseNamespaceBirthCatalogTests
         var source = new GenerationPollSource(); var batches = new List<CloudRemoteChangeBatch>();
         ValueTask<MirrorPulseRemotePollApplyOutcome> Apply(InstanceId _, CloudRemoteChangeBatch batch, CancellationToken __)
         { batches.Add(batch); return ValueTask.FromResult(new MirrorPulseRemotePollApplyOutcome(true, batch.FinalCursor)); }
-        await using (var legacy = new MirrorPulseActiveRemotePoller(source, [instance], [root], Apply, snapshotStore: snapshots, pendingStore: pending))
+        await using (var legacy = new MirrorPulseActiveRemotePoller(source, [instance], [root], Apply,
+            snapshotStore: new LegacyRootPollSnapshotStore(snapshots), pendingStore: pending))
         {
             Assert.IsFalse(await legacy.PollOnceAsync(root.InstanceId)); source.Revision = "v2";
             Assert.IsTrue(await legacy.PollOnceAsync(root.InstanceId));
@@ -121,12 +125,14 @@ public sealed partial class MirrorPulseNamespaceBirthCatalogTests
             var prepared = await PrepareCanonicalResolverSourceAsync(catalog, scoped); root = prepared.Root;
             var instance = (await catalog.ReadAdapterTopologyAsync()).Instances.Single(item => item.InstanceId == root.InstanceId);
             await using (var legacy = new MirrorPulseActiveRemotePoller(source, [instance], [root], (_, batch, _) =>
-            { original = batch; throw new IOException("Retain exact v3 intent."); }, snapshotStore: snapshots, pendingStore: new MirrorPulseCatalogRemotePollPendingStore(catalog)))
+            { original = batch; throw new IOException("Retain exact v3 intent."); },
+                snapshotStore: new LegacyRootPollSnapshotStore(snapshots), pendingStore: new MirrorPulseCatalogRemotePollPendingStore(catalog)))
             {
                 Assert.IsFalse(await legacy.PollOnceAsync(root.InstanceId)); source.Revision = "v2";
                 await Assert.ThrowsExactlyAsync<IOException>(() => legacy.PollOnceAsync(root.InstanceId).AsTask());
             }
             var target = await PrepareSettledTransferAsync(catalog, scoped, originalPlan: prepared.Plan);
+            Assert.AreEqual(3, (await new MirrorPulseCatalogRemotePollPendingStore(catalog).LoadAsync(root, default))!.ProjectionVersion);
             var start = await StartTransferAckAsync(catalog, target);
             var completed = await catalog.CompleteNamespaceTransferAcknowledgementAsync(start.Acknowledgement!, start.Acknowledgement!.StartedAt.AddSeconds(1));
             var selected = await new MirrorPulseRemoteIdentityResolver(catalog,
@@ -144,6 +150,23 @@ public sealed partial class MirrorPulseNamespaceBirthCatalogTests
         }, snapshotStore: snapshots, pendingStore: new MirrorPulseCatalogRemotePollPendingStore(reopened), identityResolver: new(reopened));
         Assert.IsTrue(await next.PollOnceAsync(root.InstanceId)); Assert.AreEqual(reads, source.Reads);
         Assert.AreEqual("v2", (await snapshots.LoadAsync(root))!["backend-file"].RemoteRevision);
+    }
+
+    private sealed class LegacyRootPollSnapshotStore(IMirrorPulseRootRemotePollSnapshotStore store) : IMirrorPulseRootRemotePollSnapshotStore
+    {
+        public ValueTask<IReadOnlyDictionary<string, MirrorPulseRemoteSnapshotEntry>?> LoadAsync(InstanceId instanceId, CancellationToken token = default) =>
+            store.LoadAsync(instanceId, token);
+
+        public ValueTask<IReadOnlyDictionary<string, MirrorPulseRemoteSnapshotEntry>?> LoadAsync(RootRegistration root, CancellationToken token = default) =>
+            store.LoadAsync(root, token);
+
+        public ValueTask SaveAsync(InstanceId instanceId, IReadOnlyDictionary<string, MirrorPulseRemoteSnapshotEntry> snapshot, CancellationToken token = default) =>
+            store.SaveAsync(instanceId, snapshot, token);
+
+        public ValueTask SaveAsync(RootRegistration root, IReadOnlyDictionary<string, MirrorPulseRemoteSnapshotEntry> snapshot, CancellationToken token = default) =>
+            store.SaveAsync(root, snapshot, token);
+
+        public ValueTask ClearLegacyAsync(InstanceId instance, CancellationToken token = default) => store.ClearLegacyAsync(instance, token);
     }
 
     [TestMethod]
