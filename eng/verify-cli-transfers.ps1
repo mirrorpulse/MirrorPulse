@@ -112,10 +112,11 @@ function Wait-TransferHash {
         try {
             if ((Test-Path -LiteralPath $Path -PathType Leaf) -and (Read-TransferHash $Path) -ieq $Expected) { return }
         } catch [IO.IOException] {
-            # An in-flight conditional upload can temporarily exclude this read.
+            # An in-flight conditional upload can replace the file between the
+            # existence check and hash, or temporarily exclude the read.
             # Keep the original deadline and whole-file hash requirement; other
             # I/O failures retain their original error instead of becoming waits.
-            if ($_.Exception.HResult -notin @(-2147024864, -2147024863)) { throw }
+            if ($_.Exception.HResult -notin @(-2147024894, -2147024893, -2147024864, -2147024863)) { throw }
         }
         Start-Sleep -Milliseconds 100
     } while ([DateTimeOffset]::UtcNow -lt $deadline)
