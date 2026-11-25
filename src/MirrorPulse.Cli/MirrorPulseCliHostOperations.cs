@@ -183,7 +183,7 @@ public sealed partial class MirrorPulseCliHostOperations : IMirrorPulseCliHostOp
                     human = FormatStatus((MirrorPulse.Core.Host.MirrorPulseAppStatusResponse)result);
                     break;
                 case ("sync", "refresh"):
-                    result = await _client.RefreshAsync(cancellationToken: cancellationToken)
+                    result = await _client.RefreshAsync(HasFlag(command.Arguments, "force"), cancellationToken)
                         .ConfigureAwait(false);
                     human = FormatStatus((MirrorPulse.Core.Host.MirrorPulseAppStatusResponse)result);
                     break;

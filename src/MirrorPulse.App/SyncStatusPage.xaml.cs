@@ -31,7 +31,7 @@ public sealed partial class SyncStatusPage : Page
         try
         {
             MirrorPulseAppStatusResponse status = requestPoll
-                ? await AppControl.Client.RefreshAsync()
+                ? await AppControl.Client.RefreshAsync(force: true)
                 : await AppControl.Client.GetStatusAsync();
             PendingUploadsText.Text = $"Pending uploads: {status.PendingUploads}";
             PendingConflictsText.Text =

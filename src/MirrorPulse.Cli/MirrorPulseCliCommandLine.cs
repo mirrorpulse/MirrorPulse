@@ -218,7 +218,8 @@ public static class MirrorPulseCliHelp
         Commands:
           status                         Show sync status.
           host status|start|stop|restart Manage the current-user Host.
-          sync status|refresh             Inspect or refresh synchronization.
+          sync status                     Inspect synchronization.
+          sync refresh [--force]          Request a synchronization pass or retry now.
           adapter list|install|update|remove|uninstall
                                          Manage installed Adapters.
           instance list|create|configure|enable|disable|select-version

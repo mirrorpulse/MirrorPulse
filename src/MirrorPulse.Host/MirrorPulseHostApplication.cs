@@ -1145,10 +1145,19 @@ public sealed partial class MirrorPulseHostApplication : IAsyncDisposable
     {
         MirrorPulseAdapterTopology topology = await _catalog.ReadAdapterTopologyAsync(cancellationToken)
             .ConfigureAwait(false);
-        await Task.WhenAll(topology.Instances.Where(item => item.Enabled).Select(instance =>
-            _remotePoller.RefreshAsync(instance.InstanceId, arguments.Force, cancellationToken).AsTask())).ConfigureAwait(false);
+        await Task.WhenAll(topology.Instances.Where(item => item.Enabled).Select(RefreshInstanceAsync)).ConfigureAwait(false);
 
         return await ReadStatusAsync(cancellationToken).ConfigureAwait(false);
+
+        async Task RefreshInstanceAsync(AdapterInstance instance)
+        {
+            try { await _remotePoller.RefreshAsync(instance.InstanceId, arguments.Force, cancellationToken).ConfigureAwait(false); }
+            catch (Exception error) when (error is IOException or InvalidDataException or UnauthorizedAccessException or TimeoutException)
+            {
+                // The attempted root stores its safe reason and retry time. Return the status
+                // of every deployment, including those that succeeded independently.
+            }
+        }
     }
 
     private async Task<MirrorPulseAppStatusResponse> CreateInstanceAsync(

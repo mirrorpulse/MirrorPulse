@@ -42,7 +42,7 @@ The CLI accepts `--timeout SEC`. Host requests use their built-in deadline.
 
 | Command | Purpose |
 | --- | --- |
-| `mp status`, `mp sync status`, `mp sync refresh` | Inspect work or request a synchronization pass. |
+| `mp status`, `mp sync status`, `mp sync refresh [--force]` | Inspect work or request a synchronization pass. Use `--force` to retry immediately during backoff. |
 | `mp host status\|start\|stop\|restart` | Inspect or control the current user's Host. |
 | `mp adapter list` | List packages, versions, and instances. |
 | `mp adapter install PACKAGE`, `mp adapter update PACKAGE` | Install a signed file or add a newer version. |
