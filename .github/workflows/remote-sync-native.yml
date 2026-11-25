@@ -2,6 +2,11 @@ name: Remote sync native acceptance
 
 on:
   workflow_dispatch:
+    inputs:
+      diagnose_read_only_hydration:
+        description: Isolate CfSharp read-only hydration and its journal on the disposable ARM64 runner
+        type: boolean
+        default: false
   push:
     branches:
       - develop
@@ -46,9 +51,16 @@ jobs:
         run: pwsh ./eng/prepare-native-ci-volume.ps1
 
       - name: Verify protected population and remote batch effects
+        if: github.event_name != 'workflow_dispatch' || !inputs.diagnose_read_only_hydration
         env:
           MIRRORPULSE_NAMESPACE_TEST_ARCHITECTURE: Arm64
         run: pwsh ./eng/verify-native.ps1 -RemoteSync
+
+      - name: Verify read-only hydration against the official journal
+        if: github.event_name == 'workflow_dispatch' && inputs.diagnose_read_only_hydration
+        env:
+          MIRRORPULSE_NAMESPACE_TEST_ARCHITECTURE: Arm64
+        run: pwsh ./eng/verify-native.ps1 -ReadOnlyHydration
 
       - name: Preserve original test results and executing inputs
         if: always()

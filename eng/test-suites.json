@@ -250,6 +250,7 @@
     "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseJournalUploadSourceTests.NativePersistedUploadConflictStopsAutomaticJournalDispatchAcrossRestart",
     "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseJournalUploadSourceTests.NativeUnacknowledgedJournalSurvivesRestartAndDisabledInstance",
     "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseLocalBatchMapperTests.NativeJournalBatchRetainsOperationIdentityWithoutContentPayload",
+    "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseReadOnlyHydrationTests.ReadOnlyHydrationDoesNotPublishAContentUpdate",
     "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseRemoteBatchCoordinatorTests.NativeBatchCursorSurvivesCrashGapAndRejectsFingerprintReuse",
     "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseRemoteEchoIntegrationTests.NativeRemoteMetadataApplicationDoesNotEnterLocalUploadJournal",
     "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseRemoteEchoIntegrationTests.NativeRemoteMetadataApplicationPreservesImmediateLocalAttributeWrite",
@@ -456,6 +457,9 @@
     "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeLocalTombstoneDeleteRecoversActualSdkReceiptAcrossFreshRoles"
   ],
   "required": {
+    "readOnlyHydration": [
+      "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseReadOnlyHydrationTests.ReadOnlyHydrationDoesNotPublishAContentUpdate"
+    ],
     "remoteSync": [
       "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeRuntimePublishesSourceBirthsThroughTheCurrentLibraryAndAuditsRepeatedPages",
       "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeOriginalRemoteMetadataUpdatesRetainResidentBytesAcrossOwners",

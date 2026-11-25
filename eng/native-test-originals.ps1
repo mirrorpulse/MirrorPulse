@@ -54,7 +54,7 @@ function Start-NativeTestOriginals {
     param(
         [Parameter(Mandatory)][string]$Workspace,
         [Parameter(Mandatory)][ValidatePattern('^[0-9a-f]{40}$')][string]$SourceSha,
-        [Parameter(Mandatory)][ValidateSet('native', 'namespace', 'namespace-nonadmin', 'remoteSync')][string]$Suite,
+        [Parameter(Mandatory)][ValidateSet('native', 'namespace', 'namespace-nonadmin', 'remoteSync', 'readOnlyHydration')][string]$Suite,
         [Parameter(Mandatory)][string]$TestAssembly,
         [Parameter(Mandatory)][string]$ResultsDirectory,
         [Parameter(Mandatory)][string]$OutputDirectory,
@@ -117,7 +117,7 @@ function Complete-NativeTestOriginals {
     $assembly = Get-NativeOriginalPath $prepared.testAssembly $Workspace
     $directory = [IO.Path]::GetDirectoryName($assembly)
     $names = @(Get-NativeRuntimeInputNames)
-    if ([IO.Path]::GetFileName($assembly) -cne $names[0] -or $prepared.suite -cnotin @('native', 'namespace', 'namespace-nonadmin', 'remoteSync') -or
+    if ([IO.Path]::GetFileName($assembly) -cne $names[0] -or $prepared.suite -cnotin @('native', 'namespace', 'namespace-nonadmin', 'remoteSync', 'readOnlyHydration') -or
         $prepared.collector.path -ine $script:NativeOriginalsCollectorPath -or
         $prepared.collector.archivePath -cne 'policy/native-test-originals.ps1' -or
         $prepared.testExecutionRequestedByCollector -ne $false) { throw 'Native preparation inputs or collector were substituted.' }

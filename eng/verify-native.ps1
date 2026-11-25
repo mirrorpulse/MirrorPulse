@@ -1,5 +1,5 @@
 [CmdletBinding()]
-param([switch]$RemoteSync)
+param([switch]$RemoteSync, [switch]$ReadOnlyHydration)
 
 $ErrorActionPreference = "Stop"
 if (-not $IsWindows) {
@@ -18,19 +18,21 @@ $previous = $env:MIRRORPULSE_NATIVE_TEST
 $evidenceDirectory = Join-Path $PSScriptRoot "../artifacts/test-results/native"
 $verificationSuite = 'native'
 $filter = '(FullyQualifiedName~Native|FullyQualifiedName~RetainedHandleRejectsExistingAndNewlyObservedAliasesWithoutAclWrites)&TestCategory!=DeferredP079&TestCategory!=SignedAtomicDirectory&TestCategory!=SignedDirectoryTransfer&TestCategory!=SignedDirectoryTransferEarlyCopy'
-if ($RemoteSync) {
-    $verificationSuite = 'remoteSync'
+if ($RemoteSync -and $ReadOnlyHydration) { throw 'Select one focused native suite.' }
+if ($RemoteSync -or $ReadOnlyHydration) {
+    $verificationSuite = if ($RemoteSync) { 'remoteSync' } else { 'readOnlyHydration' }
     $catalog = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'test-suites.json') -Raw | ConvertFrom-Json
-    $methods = @($catalog.required.remoteSync)
-    if ($methods.Count -eq 0 -or @($methods | Where-Object { $_ -cnotin $catalog.required.native }).Count) {
-        throw 'Remote sync requires declared native fixtures.'
+    $methods = @($catalog.required.$verificationSuite)
+    $declared = if ($RemoteSync) { $catalog.required.native } else { $catalog.allowSkipped }
+    if ($methods.Count -eq 0 -or @($methods | Where-Object { $_ -cnotin $declared }).Count) {
+        throw 'Focused verification requires declared native fixtures.'
     }
     $filter = ($methods | ForEach-Object { 'FullyQualifiedName=' + $_ }) -join '|'
     $evidenceDirectory = Join-Path $workspace 'artifacts/test-results/remote-sync'
 }
 $identifier = [guid]::NewGuid().ToString('N')
 $resultsDirectory = Join-Path $evidenceDirectory $identifier
-$originalsDirectory = if ($RemoteSync) { Join-Path $evidenceDirectory ('originals-' + $identifier) }
+$originalsDirectory = if ($RemoteSync -or $ReadOnlyHydration) { Join-Path $evidenceDirectory ('originals-' + $identifier) }
     else { Join-Path $workspace ('artifacts/test-results/native-originals/' + $identifier) }
 try {
     $env:MIRRORPULSE_NATIVE_TEST = "1"
