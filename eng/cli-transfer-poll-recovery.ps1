@@ -26,8 +26,11 @@ function Invoke-TransferPollRecovery {
     $rightRemote = Join-Path $fixture 'source/right/reverse.bin'
     Get-ChildItem -LiteralPath (Split-Path -Parent $leftLocal) | Out-Null
     Get-ChildItem -LiteralPath (Split-Path -Parent $rightLocal) | Out-Null
-    Wait-TransferHash $leftLocal (Read-TransferHash $leftRemote)
-    Wait-TransferHash $rightLocal (Read-TransferHash $rightRemote)
+    # Establish protected online-only placeholders before the snapshot test.
+    # File content must first be read after the original remote changes settle.
+    if (-not (Test-Path -LiteralPath $leftLocal -PathType Leaf) -or -not (Test-Path -LiteralPath $rightLocal -PathType Leaf)) {
+        throw 'The initial enumeration did not project both signed source files.'
+    }
 
     $leftBefore = Read-TransferPollSnapshot $leftSnapshot
     $rightBefore = Read-TransferPollSnapshot $rightSnapshot
@@ -86,7 +89,13 @@ function Invoke-TransferPollRecovery {
         Start-Sleep -Milliseconds 200
     } while ([DateTimeOffset]::UtcNow -lt $deadline)
     if ($repaired.sha256 -cne $candidate.sha256) { throw 'The original snapshot did not converge after Host restart.' }
+    $status = (Invoke-TransferCli @('--json', '--no-start', 'status')).data
+    if ($status.pendingRemoteConflicts -ne 0 -or $status.pendingUploadConflicts -ne 0) {
+        throw 'The clean online-only updates created unexpected local or remote content conflicts.'
+    }
+    $phase = 'RemoteSyncRecovery.LeftProjection'
     Wait-TransferHash $leftLocal (Read-TransferHash $leftRemote)
+    $phase = 'RemoteSyncRecovery.RightProjection'
     Wait-TransferHash $rightLocal (Read-TransferHash $rightRemote)
     Invoke-TransferCli @('--json', '--no-start', 'host', 'stop') | Out-Null
     Wait-TransferHostStopped
