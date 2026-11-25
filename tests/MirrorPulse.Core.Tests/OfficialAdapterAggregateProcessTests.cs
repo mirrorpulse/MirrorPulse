@@ -205,6 +205,34 @@ public sealed class OfficialAdapterAggregateProcessTests
                 new(instance.InstanceId, "uploaded.txt", revision, stale, upload.LongLength,
                     Guid.NewGuid(), RootKey: registration.UniquenessKey), timeout.Token));
             CollectionAssert.AreEqual(changed, await File.ReadAllBytesAsync(uploadedPath, timeout.Token));
+
+            string pageDirectory = Path.Combine(sourceDirectory, "paged");
+            Directory.CreateDirectory(pageDirectory);
+            using var pagingTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(45));
+            for (int index = 0; index < 130; index++)
+                await File.WriteAllTextAsync(Path.Combine(pageDirectory, $"file-{index:D3}.txt"), string.Empty, pagingTimeout.Token);
+
+            bool removeBetweenPages = false;
+            var pagingSource = new ObservedDirectoryPageSource(new MirrorPulseAdapterDirectoryPageSource(supervisor), (path, cursor) =>
+            {
+                if (!removeBetweenPages || path != "paged" || !cursor.IsEmpty) return;
+                removeBetweenPages = false;
+                File.Delete(Path.Combine(pageDirectory, "file-000.txt"));
+            });
+            var applied = new List<CloudRemoteChangeBatch>();
+            await using var poller = new MirrorPulseActiveRemotePoller(pagingSource, [instance], [registration], (_, batch, _) =>
+            {
+                applied.Add(batch);
+                return ValueTask.FromResult(new MirrorPulseRemotePollApplyOutcome(true, batch.FinalCursor));
+            }, pageSize: 32);
+            Assert.IsFalse(await poller.PollOnceAsync(instance.InstanceId, pagingTimeout.Token));
+            removeBetweenPages = true;
+            await Assert.ThrowsExactlyAsync<IOException>(() => poller.PollOnceAsync(instance.InstanceId, pagingTimeout.Token).AsTask());
+            Assert.IsEmpty(applied);
+            Assert.IsTrue(await poller.PollOnceAsync(instance.InstanceId, pagingTimeout.Token));
+            var deletion = applied.Single().Changes.Single(change => change.Kind == CloudRemoteChangeKind.Delete);
+            Assert.AreEqual(registration.DirectoryName + "\\paged\\file-000.txt", deletion.RelativePath);
+            Assert.IsTrue(File.Exists(Path.Combine(pageDirectory, "file-032.txt")));
         }
         finally
         {
@@ -212,6 +240,22 @@ public sealed class OfficialAdapterAggregateProcessTests
             {
                 Directory.Delete(root, recursive: true);
             }
+        }
+    }
+
+    private sealed class ObservedDirectoryPageSource(IMirrorPulseDirectoryPageSource source, Action<string, ReadOnlyMemory<byte>> afterRead)
+        : IMirrorPulseDirectoryPageSource
+    {
+        public ValueTask<CloudRemoteDirectoryPage> ReadPageAsync(InstanceId instance, string path,
+            ReadOnlyMemory<byte> cursor, int pageSize, CancellationToken token) =>
+            source.ReadPageAsync(instance, path, cursor, pageSize, token);
+
+        public async ValueTask<CloudRemoteDirectoryPage> ReadPageAsync(InstanceId instance, string root, string path,
+            ReadOnlyMemory<byte> cursor, int pageSize, CancellationToken token)
+        {
+            var page = await source.ReadPageAsync(instance, root, path, cursor, pageSize, token);
+            afterRead(path, cursor);
+            return page;
         }
     }
 }

@@ -125,6 +125,30 @@ public sealed class SignedWebDavWorkerProcessTests
                 Assert.AreEqual(2, server.SuccessfulPuts, "Replaying an uncertain operation must not perform a second PUT.");
             }
             Assert.AreEqual("\"v3\"", await supervisor.StatAsync(new(instance.InstanceId, "note.txt", rootKey), timeout.Token));
+
+            var applied = new List<CloudRemoteChangeBatch>();
+            RootRegistration registration = topology.Roots.Single(root => root.InstanceId == instance.InstanceId);
+            await using var poller = new MirrorPulseActiveRemotePoller(new MirrorPulseAdapterDirectoryPageSource(supervisor),
+                [instance], [registration], (_, batch, _) =>
+                {
+                    applied.Add(batch);
+                    return ValueTask.FromResult(new MirrorPulseRemotePollApplyOutcome(true, batch.FinalCursor));
+                }, interval: TimeSpan.FromMinutes(1));
+            Assert.IsFalse(await poller.PollOnceAsync(instance.InstanceId, timeout.Token));
+            server.ListingUnavailable = true;
+            await Assert.ThrowsAsync<IOException>(() => poller.PollOnceAsync(instance.InstanceId, timeout.Token).AsTask());
+            Assert.AreEqual("Retrying", poller.ReadRootStatus(registration).Phase);
+            Assert.IsNotNull(poller.ReadRootStatus(registration).NextAttemptAt);
+            Assert.IsEmpty(applied);
+
+            server.ChangeContents(Encoding.UTF8.GetBytes("newer remote bytes during the outage"));
+            server.ListingUnavailable = false;
+            Assert.IsFalse(await poller.RefreshAsync(instance.InstanceId, force: false, timeout.Token));
+            Assert.IsTrue(await poller.RefreshAsync(instance.InstanceId, force: true, timeout.Token));
+            Assert.AreEqual("Current", poller.ReadRootStatus(registration).Phase);
+            var resumed = applied.Single().Changes.Single();
+            Assert.AreEqual("\"v3\"", resumed.PreviousRemoteRevision);
+            Assert.AreEqual("\"v4\"", resumed.RemoteRevision);
         }
         finally
         {
@@ -162,6 +186,14 @@ public sealed class SignedWebDavWorkerProcessTests
 
         public bool UseInconclusivePutReply { get; set; }
 
+        public bool ListingUnavailable { get; set; }
+
+        public void ChangeContents(byte[] bytes)
+        {
+            _content = bytes.ToArray();
+            _revision++;
+        }
+
         private async Task RunAsync()
         {
             try
@@ -188,6 +220,11 @@ public sealed class SignedWebDavWorkerProcessTests
             {
                 if (request.HttpMethod == "PROPFIND" && request.Url?.AbsolutePath == "/dav/")
                 {
+                    if (ListingUnavailable)
+                    {
+                        response.StatusCode = 503;
+                        return;
+                    }
                     string xml = $"""
                         <?xml version="1.0" encoding="utf-8"?>
                         <d:multistatus xmlns:d="DAV:">
