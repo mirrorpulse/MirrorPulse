@@ -115,7 +115,7 @@ public sealed class MirrorPulseNormalUserWorkerTransportTests
         IMirrorPulseWorkerMutationTransport
     {
         public ConcurrentQueue<string> Calls { get; } = new();
-        public MirrorPulseWorkerDirectoryPage? DirectoryPage { get; init; }
+        public MirrorPulseWorkerDirectoryPage? DirectoryPage { get; set; }
         public bool CancelDuringRead { get; set; }
         public bool PauseRead { get; init; }
         public bool FailStat { get; set; }

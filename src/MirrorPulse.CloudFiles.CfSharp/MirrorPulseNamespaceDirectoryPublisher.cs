@@ -83,6 +83,7 @@ internal sealed class MirrorPulseNamespaceDirectoryPublisher(Func<CloudFileSyste
                     if (!names.Add(spec.Name)) throw new InvalidDataException("Source pages contain duplicate child names.");
                 }
                 var creator = new MirrorPulseNamespaceRemoteCreationCoordinator(fileSystem, catalog, router, execution, actor);
+                bool occupied = false;
                 foreach (var spec in page.Children)
                 {
                     var existing = await catalog.ReadNamespaceMemberChildAsync(member.MemberId, spec.Name, token).ConfigureAwait(false);
@@ -91,16 +92,22 @@ internal sealed class MirrorPulseNamespaceDirectoryPublisher(Func<CloudFileSyste
                         _ = await creator.CreateUnderActorAsync(Guid.NewGuid(), member.MemberId, spec, token).ConfigureAwait(false);
                         continue;
                     }
-                    CloudItem child = spec.Kind == CloudItemKind.Directory ? parent.GetDirectory(spec.Name) : parent.GetFile(spec.Name);
+                    CloudItem child = existing.IsDirectory ? parent.GetDirectory(spec.Name) : parent.GetFile(spec.Name);
                     var childCurrent = await catalog.ReadNamespaceMemberProtectionSnapshotAsync(existing.MemberId, token).ConfigureAwait(false)
                         ?? throw new InvalidOperationException("The source child requires current protected membership.");
                     await MirrorPulseNamespaceMemberRegistrar.InspectCurrentAsync(catalog, childCurrent, current, child, parent,
                         router, actor, token).ConfigureAwait(false);
                     var childSnapshot = await child.InspectAsync(token).ConfigureAwait(false);
-                    if (childSnapshot.Kind != spec.Kind || childSnapshot.PlaceholderIdentity.IsEmpty ||
-                        !childSnapshot.PlaceholderIdentity.Span.SequenceEqual(spec.Identity.Encode()))
-                        throw new InvalidOperationException("An occupied source child requires remote change reconciliation before population.");
+                    // An established placeholder may still be on the prior revision. Its verified
+                    // binding remains visible while the retained polling batch owns the update.
+                    if (childSnapshot.Kind != spec.Kind ||
+                        !CloudPlaceholderIdentity.TryDecode(childSnapshot.PlaceholderIdentity.Span, out var actual) ||
+                        actual!.ItemId != spec.Identity.ItemId || actual.RemoteId != spec.Identity.RemoteId)
+                        occupied = true;
                 }
+                // Publish other independently verified entries, while leaving the occupied slot
+                // and any local journal or accepted identity untouched for reconciliation.
+                if (occupied) throw new InvalidOperationException("An occupied source child requires remote change reconciliation before population.");
             }).ConfigureAwait(false);
             // Public creation already owns the official projection. Preserve the cursor, but
             // let the library complete the callback without a second native publication.
