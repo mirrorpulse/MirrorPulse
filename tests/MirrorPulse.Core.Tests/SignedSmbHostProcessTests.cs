@@ -105,24 +105,31 @@ public sealed class SignedSmbHostProcessTests
                 instance.InstanceId, "note.txt", rootKey), timeout.Token))!;
             Assert.AreEqual(note.Identity.RemoteRevision, revision);
             byte[] replacement = Encoding.UTF8.GetBytes("updated SMB content");
+            string acceptedRevision;
             await using (var content = new MemoryStream(replacement, writable: false))
             {
-                string updated = await supervisor.UploadAsync(new MirrorPulseWorkerUploadRequest(
+                acceptedRevision = await supervisor.UploadAsync(new MirrorPulseWorkerUploadRequest(
                     instance.InstanceId, "note.txt", revision, content, replacement.Length, RootKey: rootKey), timeout.Token);
-                Assert.IsFalse(string.IsNullOrWhiteSpace(updated));
+                Assert.IsFalse(string.IsNullOrWhiteSpace(acceptedRevision));
             }
 
             CollectionAssert.AreEqual(replacement, await File.ReadAllBytesAsync(
                 Path.Combine(source, "note.txt"), timeout.Token));
-            await using (var stale = new MemoryStream([8, 8, 8], writable: false))
-            {
-                await Assert.ThrowsExactlyAsync<MirrorPulseWorkerMutationConflictException>(async () => await supervisor.UploadAsync(
-                    new MirrorPulseWorkerUploadRequest(instance.InstanceId, "note.txt", revision,
-                        stale, 3, RootKey: rootKey), timeout.Token));
-            }
 
-            CollectionAssert.AreEqual(replacement, await File.ReadAllBytesAsync(
-                Path.Combine(source, "note.txt"), timeout.Token));
+            string notePath = Path.Combine(source, "note.txt");
+            DateTime writeTime = File.GetLastWriteTimeUtc(notePath);
+            byte[] changed = replacement.ToArray();
+            changed[0] ^= 0xff;
+            await File.WriteAllBytesAsync(notePath, changed, timeout.Token);
+            File.SetLastWriteTimeUtc(notePath, writeTime);
+            Assert.AreEqual(writeTime, File.GetLastWriteTimeUtc(notePath));
+            Assert.AreEqual(replacement.LongLength, new FileInfo(notePath).Length);
+            Assert.AreNotEqual(acceptedRevision, await supervisor.StatAsync(new(instance.InstanceId, "note.txt", rootKey), timeout.Token));
+            await using var staleSameTimestamp = new MemoryStream(replacement, writable: false);
+            await Assert.ThrowsExactlyAsync<MirrorPulseWorkerMutationConflictException>(async () => await supervisor.UploadAsync(
+                new(instance.InstanceId, "note.txt", acceptedRevision, staleSameTimestamp, replacement.LongLength,
+                    Guid.NewGuid(), RootKey: rootKey), timeout.Token));
+            CollectionAssert.AreEqual(changed, await File.ReadAllBytesAsync(notePath, timeout.Token));
         }
         finally
         {

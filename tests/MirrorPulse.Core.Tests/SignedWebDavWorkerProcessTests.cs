@@ -10,6 +10,7 @@ using MirrorPulse.Core.Contracts;
 using MirrorPulse.Core.Host;
 using MirrorPulse.Core.Security;
 using MirrorPulse.Core.State;
+using MirrorPulse.Core.Sync;
 
 namespace MirrorPulse.Core.Tests;
 
@@ -110,6 +111,20 @@ public sealed class SignedWebDavWorkerProcessTests
 
             CollectionAssert.AreEqual(replacement, server.Content);
             Assert.AreEqual(1, server.SuccessfulPuts);
+
+            // The server commits the bytes but does not return an authoritative PUT receipt.
+            server.UseInconclusivePutReply = true;
+            byte[] uncertain = Encoding.UTF8.GetBytes("content with an inconclusive receipt");
+            Guid operation = Guid.NewGuid();
+            for (int attempt = 0; attempt < 2; attempt++)
+            {
+                await using var content = new MemoryStream(uncertain, writable: false);
+                await Assert.ThrowsExactlyAsync<MirrorPulseMutationAmbiguousException>(async () => await supervisor.UploadAsync(
+                    new(instance.InstanceId, "note.txt", "\"v2\"", content, uncertain.LongLength, operation, RootKey: rootKey), timeout.Token));
+                CollectionAssert.AreEqual(uncertain, server.Content);
+                Assert.AreEqual(2, server.SuccessfulPuts, "Replaying an uncertain operation must not perform a second PUT.");
+            }
+            Assert.AreEqual("\"v3\"", await supervisor.StatAsync(new(instance.InstanceId, "note.txt", rootKey), timeout.Token));
         }
         finally
         {
@@ -144,6 +159,8 @@ public sealed class SignedWebDavWorkerProcessTests
         public byte[] Content => _content.ToArray();
 
         public int SuccessfulPuts { get; private set; }
+
+        public bool UseInconclusivePutReply { get; set; }
 
         private async Task RunAsync()
         {
@@ -237,7 +254,7 @@ public sealed class SignedWebDavWorkerProcessTests
                         _content = content.ToArray();
                         _revision++;
                         SuccessfulPuts++;
-                        response.StatusCode = 204;
+                        response.StatusCode = UseInconclusivePutReply ? 207 : 204;
                     }
                 }
                 else

@@ -189,6 +189,22 @@ public sealed class OfficialAdapterAggregateProcessTests
                 Path.Combine(sourceDirectory, "uploaded.txt"), timeout.Token));
             Assert.AreEqual(revision, await supervisor.StatAsync(new MirrorPulseWorkerStatRequest(
                 instance.InstanceId, "uploaded.txt", registration.UniquenessKey), timeout.Token));
+
+            string uploadedPath = Path.Combine(sourceDirectory, "uploaded.txt");
+            DateTime writeTime = File.GetLastWriteTimeUtc(uploadedPath);
+            byte[] changed = upload.ToArray();
+            changed[0] ^= 0xff;
+            await File.WriteAllBytesAsync(uploadedPath, changed, timeout.Token);
+            File.SetLastWriteTimeUtc(uploadedPath, writeTime);
+            Assert.AreEqual(writeTime, File.GetLastWriteTimeUtc(uploadedPath));
+            Assert.AreEqual(upload.LongLength, new FileInfo(uploadedPath).Length);
+            Assert.AreNotEqual(revision, await supervisor.StatAsync(
+                new(instance.InstanceId, "uploaded.txt", registration.UniquenessKey), timeout.Token));
+            await using var stale = new MemoryStream(upload, writable: false);
+            await Assert.ThrowsExactlyAsync<MirrorPulseWorkerMutationConflictException>(async () => await supervisor.UploadAsync(
+                new(instance.InstanceId, "uploaded.txt", revision, stale, upload.LongLength,
+                    Guid.NewGuid(), RootKey: registration.UniquenessKey), timeout.Token));
+            CollectionAssert.AreEqual(changed, await File.ReadAllBytesAsync(uploadedPath, timeout.Token));
         }
         finally
         {
