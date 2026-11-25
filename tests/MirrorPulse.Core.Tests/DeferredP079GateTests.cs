@@ -111,6 +111,14 @@ public sealed class DeferredP079GateTests
                @($catalog.required.deferredP079|Where-Object {$_ -ceq $metadataWrite}).Count -ne 0){throw 'The P082 attribute control belongs only to the required native gate.'}
             $catalog.required.native=@($catalog.required.native|Where-Object {$_ -cne $metadataWrite})
             $keepRemotePrefix='MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.'
+            # S07 metadata recovery belongs to native and remoteSync, outside the historical S06 budget.
+            $metadataRecovery=$keepRemotePrefix+'NativeOriginalRemoteMetadataUpdatesRetainResidentBytesAcrossOwners'
+            foreach($suite in @('native','remoteSync')){
+                if(@($catalog.required.$suite|Where-Object {$_ -ceq $metadataRecovery}).Count -ne 1){
+                    throw "The S07 metadata recovery must remain in the $suite gate."
+                }
+            }
+            $catalog.required.native=@($catalog.required.native|Where-Object {$_ -cne $metadataRecovery})
             # Keep this original transfer/deferred-scope budget unchanged. The new
             # received-Delete cohort has its own exact selection/row/deadline gate.
             $receivedDelete=@(
