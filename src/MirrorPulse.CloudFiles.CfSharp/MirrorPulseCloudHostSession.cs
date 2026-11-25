@@ -224,6 +224,9 @@ public interface IMirrorPulseCloudRuntime : IAsyncDisposable
         ValueTask.FromException<MirrorPulseCloudStatusSnapshot>(
             new NotSupportedException("This Cloud Files runtime does not expose status."));
 
+    ValueTask<ReadOnlyMemory<byte>?> ReadRemotePollCursorAsync(RootRegistration root, CancellationToken token) =>
+        ValueTask.FromException<ReadOnlyMemory<byte>?>(new NotSupportedException("This runtime does not expose root polling cursors."));
+
     ValueTask<MirrorPulseRemoteBatchResult> ApplyRemoteBatchAsync(
         InstanceId instanceId,
         CloudRemoteChangeBatch batch,
@@ -2420,6 +2423,10 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
             => WithCurrentLibraryAsync(async token => await MirrorPulseCloudStatusReader.ReadAsync(
                 state.OpenStore, instanceIds, router?.Registrations ?? [], token).ConfigureAwait(false), cancellationToken);
 
+        public ValueTask<ReadOnlyMemory<byte>?> ReadRemotePollCursorAsync(RootRegistration root, CancellationToken token) =>
+            WithCurrentLibraryAsync(stop => new MirrorPulseRemoteBatchCoordinator(fileSystem, state)
+                .ReadCursorAsync(root.InstanceId, root.RootId, stop), token);
+
         public ValueTask<MirrorPulseRemoteBatchResult> ApplyRemoteBatchAsync(
             InstanceId instanceId,
             CloudRemoteChangeBatch batch,
@@ -3103,6 +3110,13 @@ public sealed class MirrorPulseCloudHostSession : IAsyncDisposable
         }
 
         return _runtime.ReadStatusAsync(instanceIds, cancellationToken);
+    }
+
+    public ValueTask<ReadOnlyMemory<byte>?> ReadRemotePollCursorAsync(RootRegistration root, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(root);
+        if (!_started || _runtime is null) throw new InvalidOperationException("The Cloud Files Host session has not started.");
+        return _runtime.ReadRemotePollCursorAsync(root, cancellationToken);
     }
 
     public ValueTask<MirrorPulseManagedRootRenameRecovery> RecoverManagedRootRenameAsync(

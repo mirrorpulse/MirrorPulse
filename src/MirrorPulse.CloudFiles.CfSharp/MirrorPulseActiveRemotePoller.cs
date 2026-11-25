@@ -42,6 +42,7 @@ public sealed partial class MirrorPulseActiveRemotePoller : IAsyncDisposable
     private Task? _loop;
     private readonly LocalRollingLogWriter? _failureLog;
     private readonly MirrorPulseRemoteIdentityResolver? _identityResolver;
+    private readonly Func<RootRegistration, CancellationToken, ValueTask<ReadOnlyMemory<byte>?>>? _readPublishedCursor;
 
     public MirrorPulseActiveRemotePoller(
         IMirrorPulseDirectoryPageSource source,
@@ -61,7 +62,8 @@ public sealed partial class MirrorPulseActiveRemotePoller : IAsyncDisposable
         string? diagnosticsDirectory = null,
         MirrorPulseRemoteIdentityResolver? identityResolver = null,
         Func<InstanceId, CloudRemoteChangeBatch, MirrorPulseNamespaceWorkAdmission.WorkLease, CancellationToken,
-            ValueTask<MirrorPulseRemotePollApplyOutcome>>? applyAdmitted = null)
+            ValueTask<MirrorPulseRemotePollApplyOutcome>>? applyAdmitted = null,
+        Func<RootRegistration, CancellationToken, ValueTask<ReadOnlyMemory<byte>?>>? readPublishedCursor = null)
     {
         _source = source ?? throw new ArgumentNullException(nameof(source));
         ArgumentNullException.ThrowIfNull(instances);
@@ -95,6 +97,10 @@ public sealed partial class MirrorPulseActiveRemotePoller : IAsyncDisposable
         _namespaceWork = namespaceWork;
         _mayReplay = mayReplay;
         _identityResolver = identityResolver;
+        if (readPublishedCursor is not null && (snapshotStore is not IMirrorPulseRootRemotePollBaselineStore ||
+            pendingStore is not IMirrorPulseRootRemotePollPendingStore))
+            throw new ArgumentException("Published cursor validation requires durable root baseline and replay stores.", nameof(readPublishedCursor));
+        _readPublishedCursor = readPublishedCursor;
         if (pendingStore is not null && snapshotStore is null)
             throw new ArgumentException("Pending batches require a durable snapshot store.", nameof(snapshotStore));
         if (diagnosticsDirectory is not null) _failureLog = new(diagnosticsDirectory);
@@ -229,10 +235,15 @@ public sealed partial class MirrorPulseActiveRemotePoller : IAsyncDisposable
 
         reportStage(MirrorPulseRemotePollStage.SnapshotRead);
         bool cached = _snapshots.TryGetValue(key, out SnapshotBaseline? baseline);
+        ReadOnlyMemory<byte>? publishedCursor = null;
         if (!cached)
         {
-            var persistedBaseline = scoped && _snapshotStore is IMirrorPulseRootRemotePollBaselineStore baselines
-                ? await baselines.LoadBaselineAsync(root, cancellationToken).ConfigureAwait(false) : null;
+            if (_readPublishedCursor is not null)
+            {
+                publishedCursor = await _readPublishedCursor(root, cancellationToken).ConfigureAwait(false);
+                if (publishedCursor is { Length: not 32 }) throw new MirrorPulsePollCursorMismatchException();
+            }
+            var persistedBaseline = await LoadRootBaselineAsync(root, scoped, cancellationToken).ConfigureAwait(false);
             IReadOnlyDictionary<string, MirrorPulseRemoteSnapshotEntry>? persisted =
                 persistedBaseline?.Entries ?? (_snapshotStore switch
                 {
@@ -245,6 +256,7 @@ public sealed partial class MirrorPulseActiveRemotePoller : IAsyncDisposable
             if (persisted is not null)
             {
                 baseline = new(FromDurableSnapshot(persisted), persistedBaseline?.Cursor ?? ReadOnlyMemory<byte>.Empty);
+                if (_readPublishedCursor is not null) ValidatePublishedCursor(root, baseline, publishedCursor);
                 _snapshots[key] = baseline;
             }
         }
@@ -266,7 +278,8 @@ public sealed partial class MirrorPulseActiveRemotePoller : IAsyncDisposable
         if (previous is null)
         {
             reportStage(MirrorPulseRemotePollStage.SnapshotCommit);
-            var first = new SnapshotBaseline(current, ReadOnlyMemory<byte>.Empty);
+            // A disk rebuild starts with the already published cursor and compares no missing history.
+            var first = new SnapshotBaseline(current, publishedCursor ?? ReadOnlyMemory<byte>.Empty);
             await SaveSnapshotAsync(root, first, scoped, cancellationToken).ConfigureAwait(false);
             _snapshots[key] = first;
             return false;
@@ -298,6 +311,30 @@ public sealed partial class MirrorPulseActiveRemotePoller : IAsyncDisposable
             else await _pendingStore.SaveAsync(instanceId, captured, cancellationToken).ConfigureAwait(false);
         }
         return await ApplyAndCommitAsync(root, batch, current, scoped, legacy: false, useChain, admission, reportStage, cancellationToken).ConfigureAwait(false);
+    }
+
+    private async ValueTask<MirrorPulseRemotePollBaseline?> LoadRootBaselineAsync(RootRegistration root,
+        bool scoped, CancellationToken token)
+    {
+        if (!scoped || _snapshotStore is not IMirrorPulseRootRemotePollBaselineStore store) return null;
+        try { return await store.LoadBaselineAsync(root, token).ConfigureAwait(false); }
+        catch (MirrorPulsePollBaselineCorruptException) when (_readPublishedCursor is not null &&
+            store is MirrorPulseFileRemotePollSnapshotStore)
+        {
+            await ((MirrorPulseFileRemotePollSnapshotStore)store).PreserveCorruptBaselineAsync(root, token).ConfigureAwait(false);
+            return null;
+        }
+    }
+
+    private static void ValidatePublishedCursor(RootRegistration root, SnapshotBaseline baseline, ReadOnlyMemory<byte>? published)
+    {
+        if (published is null)
+        {
+            if (!baseline.Cursor.IsEmpty) throw new MirrorPulsePollCursorMismatchException();
+            return;
+        }
+        ReadOnlyMemory<byte> expected = baseline.Cursor.IsEmpty ? RootFingerprint(root, baseline.Entries, 4) : baseline.Cursor;
+        if (!expected.Span.SequenceEqual(published.Value.Span)) throw new MirrorPulsePollCursorMismatchException();
     }
 
     private async ValueTask<bool> ApplyAndCommitAsync(RootRegistration root, CloudRemoteChangeBatch batch,

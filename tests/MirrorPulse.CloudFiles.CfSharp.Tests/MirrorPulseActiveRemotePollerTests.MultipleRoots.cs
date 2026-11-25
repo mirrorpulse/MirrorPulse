@@ -322,6 +322,78 @@ public sealed partial class MirrorPulseActiveRemotePollerTests
     }
 
     [TestMethod]
+    [DataRow(true)]
+    [DataRow(false)]
+    public async Task LostBaselineRebuildsFromAFullListingWithoutInventingDeletes(bool hasDamagedCopies)
+    {
+        await using var fixture = await RootPollFixture.CreateAsync();
+        fixture.Roots = [fixture.First];
+        await using (var original = fixture.Poller())
+        {
+            Assert.IsFalse(await original.PollOnceAsync(fixture.Instance));
+            fixture.Source.Set(fixture.First, "v2");
+            Assert.IsTrue(await original.PollOnceAsync(fixture.Instance));
+        }
+
+        var committedCursor = fixture.Applied.Single().FinalCursor;
+        string primary = Path.Combine(fixture.Paths.DataRootPath, "remote-poll", fixture.Instance.ToString(), fixture.First.RootId + ".json");
+        string replica = primary + ".recovery";
+        if (hasDamagedCopies)
+        {
+            await File.WriteAllTextAsync(primary, "damaged original");
+            await File.WriteAllTextAsync(replica, "damaged copy");
+        }
+        else
+        {
+            File.Delete(primary);
+            File.Delete(replica);
+        }
+
+        fixture.Source.Set(fixture.First, "r1", "other", "other.txt");
+        await fixture.ReopenCatalogAsync();
+        await using var reopened = fixture.Poller(readPublishedCursor: (_, _) => ValueTask.FromResult<ReadOnlyMemory<byte>?>(committedCursor));
+        Assert.IsFalse(await reopened.PollOnceAsync(fixture.Instance));
+        Assert.HasCount(1, fixture.Applied);
+        var rebuilt = (await fixture.Snapshots.LoadBaselineAsync(fixture.First))!;
+        Assert.AreEqual("other", rebuilt.Entries.Single().Key);
+        CollectionAssert.AreEqual(committedCursor.ToArray(), rebuilt.Cursor.ToArray());
+        Assert.HasCount(hasDamagedCopies ? 2 : 0, Directory.GetFiles(Path.GetDirectoryName(primary)!, "*.corrupt-*"));
+
+        fixture.Source.Set(fixture.First, "r2", "other", "other.txt");
+        Assert.IsTrue(await reopened.PollOnceAsync(fixture.Instance));
+        var next = fixture.Applied[^1];
+        Assert.AreEqual(CloudRemoteChangeKind.FileUpsert, next.Changes.Single().Kind);
+        Assert.AreEqual("r1", next.Changes.Single().PreviousRemoteRevision);
+        CollectionAssert.AreEqual(committedCursor.ToArray(), next.InitialCursor.ToArray());
+    }
+
+    [TestMethod]
+    [DataRow(0)]
+    [DataRow(16)]
+    [DataRow(32)]
+    public async Task PublishedCursorMismatchStopsBeforeEnumerationAndPreservesBothRecords(int length)
+    {
+        await using var fixture = await RootPollFixture.CreateAsync();
+        fixture.Roots = [fixture.First];
+        await using (var original = fixture.Poller())
+        {
+            Assert.IsFalse(await original.PollOnceAsync(fixture.Instance));
+            fixture.Source.Set(fixture.First, "v2");
+            Assert.IsTrue(await original.PollOnceAsync(fixture.Instance));
+        }
+
+        int reads = fixture.Source.Calls.Count;
+        ReadOnlyMemory<byte>? mismatched = length == 0 ? (ReadOnlyMemory<byte>?)null : new byte[length];
+        await using var reopened = fixture.Poller(readPublishedCursor: (_, _) => ValueTask.FromResult(mismatched));
+        await Assert.ThrowsExactlyAsync<MirrorPulsePollCursorMismatchException>(() => reopened.PollOnceAsync(fixture.Instance).AsTask());
+        Assert.HasCount(reads, fixture.Source.Calls);
+        Assert.HasCount(1, fixture.Applied);
+        Assert.AreEqual("PollCursorMismatch", reopened.ReadRootStatus(fixture.First).Reason);
+        CollectionAssert.AreEqual(fixture.Applied.Single().FinalCursor.ToArray(),
+            (await fixture.Snapshots.LoadBaselineAsync(fixture.First))!.Cursor.ToArray());
+    }
+
+    [TestMethod]
     [DataRow("before-apply")]
     [DataRow("after-apply")]
     [DataRow("snapshot-commit")]
@@ -421,10 +493,12 @@ public sealed partial class MirrorPulseActiveRemotePollerTests
         internal MirrorPulseActiveRemotePoller Poller(Func<InstanceId, CloudRemoteChangeBatch, CancellationToken, ValueTask<MirrorPulseRemotePollApplyOutcome>>? apply = null,
             MirrorPulseNamespaceWorkAdmission? work = null,
             Func<RootRegistration, CloudRemoteChangeBatch, CancellationToken, ValueTask<bool>>? mayReplay = null,
-            IMirrorPulseRemotePollSnapshotStore? snapshots = null, IMirrorPulseRemotePollPendingStore? pending = null) =>
+            IMirrorPulseRemotePollSnapshotStore? snapshots = null, IMirrorPulseRemotePollPendingStore? pending = null,
+            Func<RootRegistration, CancellationToken, ValueTask<ReadOnlyMemory<byte>?>>? readPublishedCursor = null) =>
             new(Source, [AdmissionAdapter(First)], Roots, apply ?? ((_, batch, _) =>
             { Applied.Add(batch); return ValueTask.FromResult(new MirrorPulseRemotePollApplyOutcome(true, batch.FinalCursor)); }),
-                snapshotStore: snapshots ?? Snapshots, pendingStore: pending ?? Pending, currentRoots: () => Roots, namespaceWork: work, mayReplay: mayReplay);
+                snapshotStore: snapshots ?? Snapshots, pendingStore: pending ?? Pending, currentRoots: () => Roots, namespaceWork: work,
+                mayReplay: mayReplay, readPublishedCursor: readPublishedCursor);
 
         internal async Task ReopenCatalogAsync() { await Catalog.DisposeAsync(); Catalog = await MirrorPulseProductCatalog.OpenAsync(Paths); }
         public async ValueTask DisposeAsync() { await Catalog.DisposeAsync(); Directory.Delete(_directory, true); }

@@ -70,9 +70,12 @@ public sealed partial class MirrorPulseFileRemotePollSnapshotStore
 
     private static async ValueTask<RootSnapshot?> ReadRootSnapshotAsync(RootRegistration root, string path, CancellationToken token)
     {
-        if (!File.Exists(path)) return null;
-        if (new FileInfo(path).Length > MaximumSnapshotBytes) throw new MirrorPulsePollBaselineCorruptException();
-        await using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 64 * 1024, FileOptions.Asynchronous);
+        FileStream input;
+        try { input = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 64 * 1024, FileOptions.Asynchronous); }
+        catch (FileNotFoundException) { return null; }
+        catch (DirectoryNotFoundException) { return null; }
+        await using var stream = input;
+        if (stream.Length > MaximumSnapshotBytes) throw new MirrorPulsePollBaselineCorruptException();
         RootSnapshot snapshot;
         try
         {
@@ -93,6 +96,27 @@ public sealed partial class MirrorPulseFileRemotePollSnapshotStore
         try { Validate(snapshot.Entries); }
         catch (InvalidDataException error) { throw new MirrorPulsePollBaselineCorruptException(error); }
         return snapshot;
+    }
+
+    internal async ValueTask PreserveCorruptBaselineAsync(RootRegistration root, CancellationToken token)
+    {
+        string primary = RootPath(root);
+        var copies = new[] { primary, primary + ".recovery" };
+        var damaged = new List<string>(copies.Length);
+        foreach (string path in copies)
+        {
+            try
+            {
+                if (await ReadRootSnapshotAsync(root, path, token).ConfigureAwait(false) is not null)
+                    throw new InvalidDataException("A stored baseline still requires its original snapshot mapping.");
+            }
+            catch (MirrorPulsePollBaselineCorruptException) { damaged.Add(path); }
+        }
+        foreach (string path in damaged)
+        {
+            token.ThrowIfCancellationRequested();
+            File.Move(path, path + ".corrupt-" + Guid.NewGuid().ToString("N"));
+        }
     }
 
     public ValueTask SaveAsync(RootRegistration root, IReadOnlyDictionary<string, MirrorPulseRemoteSnapshotEntry> snapshot, CancellationToken token = default) =>
@@ -143,6 +167,9 @@ public sealed partial class MirrorPulseFileRemotePollSnapshotStore
 
 internal sealed class MirrorPulsePollBaselineCorruptException(Exception? inner = null)
     : IOException("The retained remote polling baseline could not be validated.", inner);
+
+internal sealed class MirrorPulsePollCursorMismatchException()
+    : IOException("The root polling baseline and its published cursor disagree.");
 
 public sealed partial class MirrorPulseCatalogRemotePollPendingStore
 {

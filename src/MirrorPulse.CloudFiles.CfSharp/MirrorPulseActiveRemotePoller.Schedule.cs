@@ -58,6 +58,7 @@ public sealed partial class MirrorPulseActiveRemotePoller
     private static string PollFailureReason(Exception failure) => failure switch
     {
         MirrorPulsePollBaselineCorruptException => "PollBaselineCorrupt",
+        MirrorPulsePollCursorMismatchException => "PollCursorMismatch",
         AdapterWorkerOperationException
         {
             FailureCode: "RootOffline" or "CredentialRejected" or "AccessDenied" or
