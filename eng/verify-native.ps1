@@ -16,10 +16,10 @@ if ($LASTEXITCODE -ne 0 -or $sourceSha -cnotmatch '^[0-9a-f]{40}$' -or ($env:GIT
 $testAssembly = Join-Path $workspace 'tests/MirrorPulse.CloudFiles.CfSharp.Tests/bin/Release/net10.0-windows10.0.26100.0/MirrorPulse.CloudFiles.CfSharp.Tests.dll'
 $previous = $env:MIRRORPULSE_NATIVE_TEST
 $evidenceDirectory = Join-Path $PSScriptRoot "../artifacts/test-results/native"
-$suite = 'native'
+$verificationSuite = 'native'
 $filter = '(FullyQualifiedName~Native|FullyQualifiedName~RetainedHandleRejectsExistingAndNewlyObservedAliasesWithoutAclWrites)&TestCategory!=DeferredP079&TestCategory!=SignedAtomicDirectory&TestCategory!=SignedDirectoryTransfer&TestCategory!=SignedDirectoryTransferEarlyCopy'
 if ($RemoteSync) {
-    $suite = 'remoteSync'
+    $verificationSuite = 'remoteSync'
     $catalog = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'test-suites.json') -Raw | ConvertFrom-Json
     $methods = @($catalog.required.remoteSync)
     if ($methods.Count -eq 0 -or @($methods | Where-Object { $_ -cnotin $catalog.required.native }).Count) {
@@ -34,14 +34,14 @@ $originalsDirectory = if ($RemoteSync) { Join-Path $evidenceDirectory ('original
     else { Join-Path $workspace ('artifacts/test-results/native-originals/' + $identifier) }
 try {
     $env:MIRRORPULSE_NATIVE_TEST = "1"
-    Invoke-NativeTestWithOriginals -Workspace $workspace -SourceSha $sourceSha -Suite native -TestAssembly $testAssembly `
+    Invoke-NativeTestWithOriginals -Workspace $workspace -SourceSha $sourceSha -Suite $verificationSuite -TestAssembly $testAssembly `
         -ResultsDirectory $resultsDirectory -OutputDirectory $originalsDirectory -ExpectedTestAssemblySha256 (Get-FileHash -LiteralPath $testAssembly).Hash -Action {
         & dotnet test $testProject --configuration Release --no-build --filter $filter `
             --logger trx --results-directory $resultsDirectory
         if ($LASTEXITCODE -ne 0) {
             throw "Native Cloud Files verification failed with exit code $LASTEXITCODE."
         }
-        & (Join-Path $PSScriptRoot "verify-test-results.ps1") -Suite $suite -ResultsDirectory $resultsDirectory `
+        & (Join-Path $PSScriptRoot "verify-test-results.ps1") -Suite $verificationSuite -ResultsDirectory $resultsDirectory `
             -OutputPath (Join-Path $evidenceDirectory "test-evidence.json")
     }
 }

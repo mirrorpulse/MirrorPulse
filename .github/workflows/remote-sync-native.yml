@@ -7,9 +7,12 @@ on:
       - develop
     paths:
       - .github/workflows/remote-sync-native.yml
+      - eng/verify-native.ps1
       - src/MirrorPulse.CloudFiles.CfSharp/MirrorPulseActiveRemotePoller*.cs
       - src/MirrorPulse.CloudFiles.CfSharp/MirrorPulseNamespaceDirectoryPublisher.cs
+      - src/MirrorPulse.CloudFiles.CfSharp/MirrorPulseRemoteUpdateCoordinator*.cs
       - tests/MirrorPulse.CloudFiles.CfSharp.Tests/MirrorPulseWindowsNamespacePermissionLeaseTests.RuntimePopulation.cs
+      - tests/MirrorPulse.CloudFiles.CfSharp.Tests/MirrorPulseWindowsNamespacePermissionLeaseTests.RemoteUpdates.cs
 
 permissions:
   contents: read
